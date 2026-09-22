@@ -10,6 +10,6 @@ The message separates actions into three sections:
 
 Edit `test-plans/current.json` before starting a new test session. Each party's complete checklist must fit one 1,024-character embed field; invalid plans produce a scoped startup diagnostic instead of a truncated checklist. The plan includes the startup timestamp and current effect-enable state, and uses an explicit no-mentions policy.
 
-`docker-compose.devbot.yml` mounts this directory read-only, so an edited plan is read on the next startup without rebuilding application code. The image also contains a default copy for deployments without the development mount. Set `TEST_PLAN_CHANNEL_ID` to choose a specific channel if `#chat` is ambiguous, and `TEST_PLAN_FILE` to select another plan file.
+`docker-compose.build.yml` mounts this directory read-only for local source-based sessions, so an edited plan is read on the next startup without rebuilding application code. Published images carry a default copy and do not require a host checkout or plan directory. Combine the build override with `docker-compose.devbot.yml` when using the isolated development database. Set `TEST_PLAN_CHANNEL_ID` to choose a specific channel if `#chat` is ambiguous, and `TEST_PLAN_FILE` to select another plan file.
 
 A once-only ready listener and per-startup message nonce prevent repeated announcements within one process. A new process posts a new session plan. Operational one-shot clients do not install live event modules, so inspection/registration tools do not announce extra sessions.

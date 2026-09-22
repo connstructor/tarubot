@@ -13,6 +13,7 @@ Strict JSON files use this companion documentation rather than nonstandard JSON 
 - `test:unit`, `test:contract`, and `test:integration` separate pure/module behavior, external boundaries, and real PostgreSQL persistence. `test:docker` supplies a disposable complete environment.
 - `commands:register` discovers command definitions and explicitly overwrites the selected development/production inventory.
 - `nodestone:check` compares the Nodestone submodule checkout and selector lockfile snapshot with their upstream HEADs. `nodestone:update` advances them, records exact revisions/source fingerprints, and checks the build/contracts; `--deploy` rebuilds and restarts the sidecar.
+- `ci:version` validates the SemVer increment, changelog entry, and any release tag before publication. `test:fixture` generates invented migration input for public CI under `.cache/ci/legacy.sql`; `LEGACY_FIXTURE_PATH` selects it for integration or Docker tests.
 - Migration/import/snapshot/acquisition/preview/activation/retry scripts execute compiled one-shot tooling. Their file headers explain their maintenance boundaries.
 - Runtime dependencies support active bot operations. Build-only Nodestone source/selectors and TypeScript tooling are development dependencies; the sidecar worker is compiled into its image.
 

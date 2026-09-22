@@ -11,11 +11,14 @@
 Use the development overlay consistently for this running instance:
 
 ```sh
+docker compose -f docker-compose.yml -f docker-compose.devbot.yml pull
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml up -d --wait tarubot nodestone
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml logs -f tarubot
 ```
 
 The Compose service is named `tarubot`; its actual Discord identity comes from the configured application/token and is checked on startup.
+
+These commands use published GHCR images. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
 
 ## Completed on 2026-09-22
 

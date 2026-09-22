@@ -10,11 +10,12 @@ export function versionReply(report: VersionReport): InteractionEditReplyOptions
       {
         title: `TaruBot v${report.version}`,
         url: report.url,
-        description:
+        description: `${
           report.warning ??
           (report.commits.length
             ? `Latest ${report.commits.length} commits on [${report.repository}](${report.url}) · \`${report.branch}\``
-            : "No commits are available from the GitHub repository."),
+            : "No commits are available from the GitHub repository.")
+        }\n\n[Source code](${report.url}) · [${report.license}](${report.url}/blob/${report.branch}/LICENSE)`,
         fields: report.commits.map((commit) => {
           // Truncate before escaping; 100 Unicode code points remain below the 256-unit name limit.
           const title = [...commit.title];

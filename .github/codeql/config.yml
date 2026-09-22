@@ -1,0 +1,9 @@
+# Analyze maintained source and workflows; upstream/generated dependencies have separate provenance.
+name: TaruBot code scanning
+queries:
+  - uses: security-extended
+paths-ignore:
+  - vendor/**
+  - node_modules/**
+  - dist/**
+  - .cache/**

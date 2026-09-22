@@ -3,6 +3,7 @@ import manifest from "../../package.json" with { type: "json" };
 
 export const project = {
   version: manifest.version,
+  license: manifest.license,
   repository: manifest.repository.url.replace("https://github.com/", "").replace(/\.git$/, ""),
   url: manifest.repository.url.replace(/\.git$/, ""),
   branch: "main",

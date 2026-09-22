@@ -1,22 +1,22 @@
 {
-  "title": "Session: version and verified GitHub history",
-  "objective": "Check /version for all guild members: installed version 2.7.1, bounded recent GitHub history, linked commit IDs and titles, and green checkmarks only for verified signatures.",
+  "title": "Session: CI/CD and published container deployment",
+  "objective": "Validate version 2.8.3 through PR tests and CodeQL checks, then confirm post-merge GHCR deployment with the existing database and Discord configuration.",
   "user": [
-    "Run DevBot's `/version`. Confirm the heading shows v2.7.1 and up to five recent commits from connstructor/tarubot.",
-    "Run `/version commits:1` and `/version commits:10`. Check the result count and that every displayed commit ID opens its GitHub commit.",
-    "Compare the green checkmarks with GitHub's Verified status. A signed but unverified commit must not receive a green checkmark.",
-    "Have an ordinary non-officer guild member run `/version` to confirm access. Replies remain public in this development guild.",
-    "Send me the output or a screenshot. GitHub history may be cached for up to five minutes and reflects published commits on main."
+    "Review the CI/CD PR after CI and required CodeQL security/code-quality checks pass. Merging to main triggers image publication.",
+    "After first publication, make both GHCR packages public or authenticate deployment hosts for package read access.",
+    "Pull the published images with the DevBot Compose overlay and recreate the services. Keep the isolated tarubot_dev database.",
+    "Run `/version`, `/config validate`, and `/sync status`. Confirm version 2.8.3, source/license links, available resources, and no unexpected blocked work.",
+    "Report the results. The lobby/officer-channel security implementation is the next feature; this release adds delivery automation."
   ],
   "assistant": [
-    "Verify command registration, compiled version identity, commit-count bounds, GitHub links, and signature-badge mapping.",
-    "Check controlled outage, rate-limit, malformed-response, and unsigned/unverified fixtures; the local version must stay visible.",
-    "Record deployment and test results, commit the verified implementation, and summarize remaining requirement-delivery work."
+    "Verify full tests with both the supplied local dump and generated synthetic CI input; validate workflow and Compose definitions.",
+    "Open the feature PR and inspect all required CI checks; verify published tags and platforms after merge.",
+    "Record results, preserve the source-build development path, and resume the agreed lobby/security work."
   ],
   "bot": [
-    "Show its installed SemVer from the compiled package manifest.",
-    "Fetch recent commits from GitHub with bounded, cached requests; show titles and linked short commit IDs.",
-    "Add ✅ next to an ID only when GitHub reports a valid verified signature.",
-    "Keep version information available with a useful message if GitHub history is unavailable."
+    "Run compiled application code from the selected container image and report its installed SemVer.",
+    "Retain links, grants, nicknames, ledger history, and queued work in PostgreSQL across container replacement.",
+    "Reconcile current roles and resume durable work after startup; expose capability and delivery status.",
+    "Post this responsibility-separated session plan in the configured development channel."
   ]
 }

@@ -142,6 +142,7 @@ test("removing the final module permits an empty feature directory after clean c
 test("compiled output discovers the same module inventory as source", async () => {
   const source = await loadCommands();
   // A subprocess imports compiled JS, avoiding mixed source/output class identities.
+  // Its cold startup needs bounded headroom when image tests run under CPU emulation.
   const child = Bun.spawn(
     [
       process.execPath,
@@ -159,4 +160,4 @@ test("compiled output discovers the same module inventory as source", async () =
     events: 11,
     components: ["guest"],
   });
-});
+}, 30000);

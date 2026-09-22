@@ -21,7 +21,7 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
-The latest full behavioral regression passed **82 tests**: 41 unit, 16 contract, and 25 PostgreSQL integration tests (**351 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 40 paths across 19 root commands; runtime discovery includes 11 event modules. Current delivery work is tracked in [OPEN_ITEMS.md](OPEN_ITEMS.md).
+The latest full behavioral regression passed **85 tests**: 44 unit, 16 contract, and 25 PostgreSQL integration tests (**366 assertions** per full container run on 2026-09-22). The complete suite passed with both the supplied dump and the new synthetic CI fixture. Strict type checking, lint, formatting, the compiled build, actionlint workflow validation, and registry/local-build Compose validation also passed. The command inventory contains 40 paths across 19 root commands; runtime discovery includes 11 event modules. Current delivery work is tracked in [OPEN_ITEMS.md](OPEN_ITEMS.md).
 
 Coverage includes repeat setup, server-manager boundaries, rank-derived officer access, explicit revocation precedence, indirect-delegation prevention, custom leader titles, complete responsibility-separated session messages, and scoped public replies. Layout regressions cover consecutive blocks, full-hierarchy readback rejecting interleaving, partial configurations, unrelated-role ordering, Discord's tied raw positions, effect activation, mutual exclusion with setup, configuration revision fencing, self-generated role-event convergence, and refresh child-job accounting. Role-selection tests cover canonical names across prefixes, explicit configured IDs, ambiguous/deleted bindings, and SDK-backed reuse/renaming without recreating roles or changing permissions.
 
@@ -37,7 +37,7 @@ Live role readback also verified the corrected consecutive block, reuse of the o
 
 Run `bun run test:docker` for the complete fixture/database suite. `bun run typecheck`, `bun run lint`, and `bun run format:check` cover first-party source, tooling, and tests. The image build independently repeats type checking and unit/contract tests after a clean frozen-lockfile installation.
 
-The supplied dump is a migration acceptance fixture, supplied to test containers separately from the images. Production activation uses a complete real Discord snapshot. Synthetic snapshots in persistence tests are exclusively test fixtures.
+The supplied dump is a migration acceptance fixture, supplied to test containers separately from the images. Public CI generates an invented equivalent-shape input through `test:fixture`; it does not receive the private dump. Production activation uses a complete real Discord snapshot. Synthetic SQL and snapshots are exclusively test fixtures. See [CI_CD.md](CI_CD.md) for the PR checks and post-merge publication flow.
 
 ## Acceptance traceability
 

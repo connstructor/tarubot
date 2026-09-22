@@ -1,6 +1,31 @@
 # Version history
 
-The current application version is **2.7.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.3 — Release publication review fixes
+
+- Isolate publication and reusable verification by commit SHA so new merges cannot cancel an older version's image builds.
+- Serialize only the mutable latest-tag promotion, retaining its current-main guard.
+- Reject build metadata and oversized release versions instead of silently changing or colliding Docker tags.
+
+## 2.8.2 — CodeQL and project licensing
+
+- Analyze JavaScript/TypeScript and GitHub Actions workflows with CodeQL, including the repository's required security/code-quality results.
+- License first-party TaruBot code under AGPL-3.0-only; include the license in runtime images and OCI metadata.
+- Add source-code and license links to `/version` output.
+
+## 2.8.1 — Cross-platform test startup budgets
+
+- Give subprocess and parser-worker tests bounded startup headroom under ARM64 emulation.
+- Preserve all module, parser, transport-spacing, and cancellation assertions while avoiding the default five-second test deadline for cold worker startup.
+
+## 2.8.0 — Pull-request CI and published containers
+
+- Validate PRs with version/changelog checks, source checks, the full PostgreSQL-backed test suite, and both multi-platform container builds.
+- Generate an invented CI migration fixture while retaining the separate supplied-dump acceptance path.
+- Build and publish TaruBot and Nodestone images to GHCR after `main` changes pass verification, using latest, SemVer, and full-commit tags.
+- Default Compose to registry images; retain an explicit local source-build override and development database overlay.
+- Adopt the feature-branch, PR, passing-CI, merge-to-main workflow.
 
 ## 2.7.1 — Versioning policy and delivery readiness
 
@@ -32,6 +57,10 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.6.0 | Nodestone submodule-backed builds, source fingerprints, and clean-clone verification |
 | 2.7.0 | Installed-version and verified GitHub commit-history command |
 | 2.7.1 | Mandatory version increments and delivery-readiness tracking |
+| 2.8.0 | Pull-request validation and GHCR container delivery |
+| 2.8.1 | Bounded subprocess/worker test budgets for emulated image builds |
+| 2.8.2 | CodeQL merge-gate integration and AGPL-3.0 licensing |
+| 2.8.3 | Non-cancelling release publication and exact registry version tags |
 
 ## Increment policy
 

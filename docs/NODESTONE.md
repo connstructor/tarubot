@@ -28,7 +28,7 @@ bun run nodestone:update --deploy
 
 The running sidecar checks upstream at startup and hourly by default. `/health` includes a cached `upstream` status (`checking`, `current`, `update_available`, or `unavailable`) and deployed/latest commits for each repository. Changes are reported in structured logs. Health probes themselves make no upstream requests, and GitHub availability does not disable otherwise working parsing.
 
-The monitor **detects** updates; the update-and-deploy command **installs** them. Schedule that command from the project directory in your deployment environment for automatic roll-forward. The updater refuses to overwrite a dirty submodule. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit the updated **submodule pointer**, lockfile, and build metadata together after verification.
+The monitor **detects** updates; the update command advances source for a verified PR. Merge the passing PR and pull its published images on registry-based deployments. The `--deploy` variant performs an explicit source build through `docker-compose.build.yml` for local development. The updater refuses to overwrite a dirty submodule. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit the updated **submodule pointer**, lockfile, and build metadata together after verification.
 
 `sidecar/transforms.ts` contains checked, narrow source-compatibility changes. Each targeted replacement must match exactly once, so an upstream change fails the build for review:
 

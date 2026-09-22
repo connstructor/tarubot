@@ -1,6 +1,7 @@
 {
   "name": "tarubot",
-  "version": "2.7.1",
+  "version": "2.8.3",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/connstructor/tarubot.git"
@@ -32,6 +33,8 @@
     "activate": "bun dist/scripts/activate.js",
     "jobs:retry": "bun dist/scripts/retry.js",
     "test:docker": "bun scripts/test-docker.ts",
+    "test:fixture": "bun tests/fixtures/legacy.ts",
+    "ci:version": "bun scripts/ci-version.ts",
     "nodestone:check": "bun scripts/nodestone-update.ts --check",
     "nodestone:update": "bun scripts/nodestone-update.ts --update"
   },

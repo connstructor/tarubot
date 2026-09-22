@@ -4,6 +4,8 @@
 
 `.env.example` lists application settings. Bun and TypeScript are exactly pinned. Standard service ports are private; `docker-compose.tools.yml` explicitly publishes loopback-only dependency ports for local tooling.
 
+Normal deployments use published GHCR images. Pull updates with `docker compose pull`, then recreate with `docker compose up -d --wait`; follow the maintenance-window migration procedure when the schema changes. `TARUBOT_IMAGE_TAG` selects a matched latest/SemVer/SHA tag, and full `TARUBOT_IMAGE` / `NODESTONE_IMAGE` overrides support digest pinning. Local source builds explicitly add `docker-compose.build.yml`. See [CI_CD.md](CI_CD.md).
+
 | Setting | Default / purpose |
 | --- | --- |
 | `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID` | Required runtime credentials/identity |

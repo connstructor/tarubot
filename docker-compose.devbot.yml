@@ -2,9 +2,6 @@
 # Apply with: docker compose -f docker-compose.yml -f docker-compose.devbot.yml ...
 services:
   tarubot:
-    # Session plans are editable without rebuilding code; startup reads the current file.
-    volumes:
-      - ./test-plans:/app/test-plans:ro
     environment:
       DATABASE_URL: postgresql://tarubot:${POSTGRES_PASSWORD}@postgres:5432/tarubot_dev
       # A development launch must never fall back to unrestricted guild scope.
