@@ -1,6 +1,11 @@
 # Version history
 
-The current application version is **2.8.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.4**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.4 — Dependabot maintenance
+
+- Enable weekly Bun dependency-update pull requests.
+- Keep dependency updates subject to the existing SemVer, changelog, CI, and CodeQL requirements before merge.
 
 ## 2.8.3 — Release publication review fixes
 
@@ -61,6 +66,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.8.1 | Bounded subprocess/worker test budgets for emulated image builds |
 | 2.8.2 | CodeQL merge-gate integration and AGPL-3.0 licensing |
 | 2.8.3 | Non-cancelling release publication and exact registry version tags |
+| 2.8.4 | Weekly Bun dependency-update pull requests |
 
 ## Increment policy
 
