@@ -1,6 +1,11 @@
 # Version history
 
-The current application version is **2.8.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.1 — Cross-platform test startup budgets
+
+- Give subprocess and parser-worker tests bounded startup headroom under ARM64 emulation.
+- Preserve all module, parser, transport-spacing, and cancellation assertions while avoiding the default five-second test deadline for cold worker startup.
 
 ## 2.8.0 — Pull-request CI and published containers
 
@@ -41,6 +46,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.7.0 | Installed-version and verified GitHub commit-history command |
 | 2.7.1 | Mandatory version increments and delivery-readiness tracking |
 | 2.8.0 | Pull-request validation and GHCR container delivery |
+| 2.8.1 | Bounded subprocess/worker test budgets for emulated image builds |
 
 ## Increment policy
 

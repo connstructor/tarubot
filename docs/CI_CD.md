@@ -21,7 +21,7 @@ The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag 
 Both images support AMD64 and ARM64. Each successful publication supplies:
 
 - `latest` for the newest passing `main` publication.
-- The manifest SemVer, for example `2.8.0`.
+- The manifest SemVer, for example `2.8.1`.
 - `sha-FULL_COMMIT_SHA` for the exact published source commit.
 
 OCI labels identify source, revision, and version. Build provenance and SBOM attestations accompany the images. Both versioned images must publish successfully before the final job advances their `latest` tags. Registry tag changes are separate operations; use a shared version/SHA tag when selecting an exact matched pair.
@@ -39,7 +39,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.0` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
+The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.1` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
 
 Fresh installations still need explicit schema migration and command registration; see [README.md](../README.md#configure-and-start). Follow the migration runbook when an upgrade changes the schema. Image publication does not automatically restart deployment hosts or modify their databases.
 
