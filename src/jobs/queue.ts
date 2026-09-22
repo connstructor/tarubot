@@ -1,22 +1,24 @@
 /** PostgreSQL-backed work leases: deduplicate decisions and recover abandoned delivery. */
 import { randomUUID } from "node:crypto";
 import { DiscordAPIError } from "discord.js";
-import { Failure, json } from "../domain/values.js";
-import type { Connection, Database } from "../infrastructure/postgres/database.js";
+import { Failure } from "../domain/values.js";
+import { orm, type Connection, type Database } from "../infrastructure/postgres/database.js";
+import { and, asc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 
 /** Payload version describes its schema; generation describes superseding work for the same key. */
-export interface Job {
-  id: string;
-  kind: string;
-  guild_id: string | null;
-  user_id: string | null;
-  payload: unknown;
-  payload_version: number;
-  generation: number;
-  attempts: number;
-  lease_token: string;
-  message_id: string | null;
-}
+export type Job = Pick<
+  typeof t.jobs.$inferSelect,
+  | "id"
+  | "kind"
+  | "guild_id"
+  | "user_id"
+  | "payload"
+  | "payload_version"
+  | "generation"
+  | "attempts"
+  | "message_id"
+> & { lease_token: string };
 /** Enqueue in the decision transaction; updating active work increments its generation fence. */
 export async function enqueue(
   client: Connection,
@@ -27,14 +29,28 @@ export async function enqueue(
   user: string | null = null,
   delay = 0,
 ): Promise<string> {
-  const result = await client.query<{ id: string }>(
-    `INSERT INTO jobs(kind,dedupe_key,payload,guild_id,user_id,due_at)
-    VALUES($1,$2,$3,$4,$5,now()+$6*interval '1 second') ON CONFLICT(dedupe_key) WHERE status IN ('queued','running','blocked')
-    DO UPDATE SET payload=EXCLUDED.payload,generation=jobs.generation+1,due_at=LEAST(jobs.due_at,EXCLUDED.due_at),
-    status=CASE WHEN jobs.status='blocked' THEN 'queued' ELSE jobs.status END RETURNING id`,
-    [kind, key, json(payload), guild, user, delay],
-  );
-  const row = result.rows[0];
+  const [row] = await orm(client)
+    .insert(t.jobs)
+    .values({
+      kind,
+      dedupe_key: key,
+      payload: payload === null ? sql`'null'::jsonb` : payload,
+      guild_id: guild,
+      user_id: user,
+      due_at: sql`now()+${delay}*interval '1 second'`,
+    })
+    .onConflictDoUpdate({
+      target: t.jobs.dedupe_key,
+      // Literal states match the existing partial unique index, including generic prepared plans.
+      targetWhere: sql`${t.jobs.status} IN ('queued','running','blocked')`,
+      set: {
+        payload: sql`excluded.payload`,
+        generation: sql`${t.jobs.generation}+1`,
+        due_at: sql`least(${t.jobs.due_at},excluded.due_at)`,
+        status: sql`CASE WHEN ${t.jobs.status}='blocked' THEN 'queued' ELSE ${t.jobs.status} END`,
+      },
+    })
+    .returning({ id: t.jobs.id });
   if (!row) throw new Error("Missing queued job");
   return row.id;
 }
@@ -59,42 +75,85 @@ export class Queue {
   /** SKIP LOCKED lets workers claim distinct rows and reclaim expired leases atomically. */
   async claim(): Promise<Job | undefined> {
     const token = randomUUID();
-    const rows = await this.db.query<Job>(
-      `WITH candidate AS (
-      SELECT j.id FROM jobs j LEFT JOIN guilds g ON g.id=j.guild_id
-      WHERE ((j.status='queued' AND due_at<=now()) OR (j.status='running' AND lease_until<now()))
-        AND (j.guild_id IS NULL OR g.active) ORDER BY due_at FOR UPDATE OF j SKIP LOCKED LIMIT 1)
-      UPDATE jobs SET status='running',lease_token=$1,lease_until=now()+interval '45 seconds',attempts=attempts+1
-      FROM candidate WHERE jobs.id=candidate.id RETURNING jobs.*`,
-      [token],
+    const db = this.db.orm;
+    const candidate = db.$with("candidate").as(
+      db
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .leftJoin(t.guilds, eq(t.guilds.id, t.jobs.guild_id))
+        .where(
+          and(
+            or(
+              and(eq(t.jobs.status, "queued"), lte(t.jobs.due_at, sql`now()`)),
+              and(eq(t.jobs.status, "running"), lt(t.jobs.lease_until, sql`now()`)),
+            ),
+            or(isNull(t.jobs.guild_id), eq(t.guilds.active, true)),
+          ),
+        )
+        .orderBy(asc(t.jobs.due_at))
+        .limit(1)
+        .for("update", { of: t.jobs, skipLocked: true }),
     );
-    return rows[0];
+    const [row] = await db
+      .with(candidate)
+      .update(t.jobs)
+      .set({
+        status: "running",
+        lease_token: token,
+        lease_until: sql`now()+interval '45 seconds'`,
+        attempts: sql`${t.jobs.attempts}+1`,
+      })
+      .from(candidate)
+      .where(eq(t.jobs.id, candidate.id))
+      .returning();
+    if (!row) return undefined;
+    if (!row.lease_token) throw new Error("Claimed job has no lease token");
+    return { ...row, lease_token: row.lease_token };
   }
   /** Extend ownership while work runs, then publish only through the current lease token. */
   async perform(job: Job): Promise<void> {
     const guard = async (): Promise<void> => {
       // Reconciliation also checks generation because its desired state can change mid-flight.
-      const rows = await this.db.query<{ id: string }>(
-        "SELECT id FROM jobs WHERE id=$1 AND lease_token=$2 AND lease_until>now() AND status='running' AND ($3::boolean OR generation=$4)",
-        [job.id, job.lease_token, !job.kind.startsWith("reconcile."), job.generation],
-      );
+      const rows = await this.db.orm
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(
+          and(
+            eq(t.jobs.id, job.id),
+            eq(t.jobs.lease_token, job.lease_token),
+            gt(t.jobs.lease_until, sql`now()`),
+            eq(t.jobs.status, "running"),
+            job.kind.startsWith("reconcile.") ? eq(t.jobs.generation, job.generation) : undefined,
+          ),
+        );
       if (!rows.length) throw new Failure("superseded", "Worker lease expired.");
     };
     const heartbeat = setInterval(() => {
-      void this.db
-        .query(
-          "UPDATE jobs SET lease_until=now()+interval '45 seconds' WHERE id=$1 AND lease_token=$2 AND lease_until>now()",
-          [job.id, job.lease_token],
+      void this.db.orm
+        .update(t.jobs)
+        .set({ lease_until: sql`now()+interval '45 seconds'` })
+        .where(
+          and(
+            eq(t.jobs.id, job.id),
+            eq(t.jobs.lease_token, job.lease_token),
+            gt(t.jobs.lease_until, sql`now()`),
+          ),
         )
         .catch((e: unknown) => this.report(e, job));
     }, 10000);
     try {
       const result = await this.dispatch(job, guard);
       await guard();
-      await this.db.query(
-        "UPDATE jobs SET status=CASE WHEN generation=$3 THEN 'succeeded' ELSE 'queued' END,completed_at=now(),lease_until=NULL,result=$4,last_error=NULL WHERE id=$1 AND lease_token=$2",
-        [job.id, job.lease_token, job.generation, json(result ?? {})],
-      );
+      await this.db.orm
+        .update(t.jobs)
+        .set({
+          status: sql`CASE WHEN ${t.jobs.generation}=${job.generation} THEN 'succeeded' ELSE 'queued' END`,
+          completed_at: sql`now()`,
+          lease_until: null,
+          result: result ?? {},
+          last_error: null,
+        })
+        .where(and(eq(t.jobs.id, job.id), eq(t.jobs.lease_token, job.lease_token)));
     } catch (error) {
       this.report(error, job);
       const code =
@@ -130,11 +189,16 @@ export class Queue {
           : code === "blocked"
             ? "blocked: Recheck Discord roles, channel permissions, and bot hierarchy with /config validate."
             : code;
-      await this.db
-        .query(
-          "UPDATE jobs SET status=$3,due_at=now()+$4*interval '1 second',lease_until=NULL,last_error=$5,attempts=CASE WHEN $6 THEN GREATEST(0,attempts-1) ELSE attempts END WHERE id=$1 AND lease_token=$2",
-          [job.id, job.lease_token, status, delay, diagnostic, waiting],
-        )
+      await this.db.orm
+        .update(t.jobs)
+        .set({
+          status,
+          due_at: sql`now()+${delay}*interval '1 second'`,
+          lease_until: null,
+          last_error: diagnostic,
+          attempts: waiting ? sql`greatest(0,${t.jobs.attempts}-1)` : t.jobs.attempts,
+        })
+        .where(and(eq(t.jobs.id, job.id), eq(t.jobs.lease_token, job.lease_token)))
         .catch((e: unknown) => this.report(e, job));
     } finally {
       clearInterval(heartbeat);

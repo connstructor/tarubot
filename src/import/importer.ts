@@ -2,7 +2,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { Failure, idSchema, json } from "../domain/values.js";
-import { audit, ensureUser, type Database } from "../infrastructure/postgres/database.js";
+import { audit, ensureUser, orm, type Database } from "../infrastructure/postgres/database.js";
+import { and, eq } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 import { enqueue } from "../jobs/queue.js";
 import type { LegacyData } from "./dump.js";
 
@@ -165,11 +167,11 @@ export async function importLegacy(
   return db.transaction(async (client) => {
     // One importer owns publication; all validation/network capture was completed beforehand.
     await client.query("SELECT pg_advisory_xact_lock(714882492)");
-    const previous = (
-      await client.query<{ report: unknown }>("SELECT report FROM imports WHERE fingerprint=$1", [
-        data.fingerprint,
-      ])
-    ).rows[0];
+    const store = orm(client);
+    const [previous] = await store
+      .select({ report: t.imports.report })
+      .from(t.imports)
+      .where(eq(t.imports.fingerprint, data.fingerprint));
     if (previous) {
       // A recaptured snapshot cannot silently grandfather users added after the original cutover.
       const saved = z.object({ mapping: mappingSchema }).parse(previous.report);
@@ -181,8 +183,11 @@ export async function importLegacy(
       return { status: "already_imported", report: previous.report };
     }
     for (const guild of data.guilds) {
-      const existing = await client.query("SELECT id FROM guilds WHERE id=$1", [guild.guild_id]);
-      if (existing.rowCount)
+      const existing = await store
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guild.guild_id));
+      if (existing.length)
         throw new Failure(
           "conflict",
           `Guild ${guild.guild_id} already has application state. A changed input needs an explicit migration decision.`,
@@ -190,66 +195,75 @@ export async function importLegacy(
     }
     // Shared display caches are historical input facts, not successful live synchronization.
     for (const fc of data.companies)
-      await client.query(
-        "INSERT INTO free_companies(id,name,tag,world,source_timestamp) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
-        [fc.fc_id, fc.name, fc.tag, fc.world, fc.last_updated],
-      );
+      await store
+        .insert(t.freeCompanies)
+        .values({
+          id: fc.fc_id,
+          name: fc.name,
+          tag: fc.tag,
+          world: fc.world,
+          source_timestamp: fc.last_updated,
+        })
+        .onConflictDoNothing();
     for (const character of data.characters)
-      await client.query(
-        "INSERT INTO characters(id,name,world,fc_hint) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-        [
-          character.char_id,
-          `${character.forename} ${character.surname}`,
-          character.world,
-          character.fc,
-        ],
-      );
+      await store
+        .insert(t.characters)
+        .values({
+          id: character.char_id,
+          name: `${character.forename} ${character.surname}`,
+          world: character.world,
+          fc_hint: character.fc,
+        })
+        .onConflictDoNothing();
     for (const user of data.users)
-      await client.query("INSERT INTO users(id) VALUES($1) ON CONFLICT DO NOTHING", [user]);
+      await store.insert(t.users).values({ id: user }).onConflictDoNothing();
     for (const guild of data.guilds) {
-      await client.query(
-        "INSERT INTO guilds(id,fc_id,member_role_id,guest_role_id,ledger_channel_id,officer_notifications_channel_id,guest_application_channel_id,effects_enabled) VALUES($1,$2,$3,$4,$5,$6,$7,false)",
-        [
-          guild.guild_id,
-          guild.fc,
-          guild.member_role_id,
-          guild.guest_role_id,
-          guild.ledger_channel_id,
-          guild.officer_notifications_channel_id,
-          guild.guest_application_channel_id,
-        ],
-      );
+      await store.insert(t.guilds).values({
+        id: guild.guild_id,
+        fc_id: guild.fc,
+        member_role_id: guild.member_role_id,
+        guest_role_id: guild.guest_role_id,
+        ledger_channel_id: guild.ledger_channel_id,
+        officer_notifications_channel_id: guild.officer_notifications_channel_id,
+        guest_application_channel_id: guild.guest_application_channel_id,
+        effects_enabled: false,
+      });
       if (data.guilds.length === 1)
         for (const user of data.users) {
           await ensureUser(client, guild.guild_id, user);
-          await client.query(
-            "UPDATE guild_users SET imported=true WHERE guild_id=$1 AND user_id=$2",
-            [guild.guild_id, user],
-          );
+          await store
+            .update(t.guildUsers)
+            .set({ imported: true })
+            .where(and(eq(t.guildUsers.guild_id, guild.guild_id), eq(t.guildUsers.user_id, user)));
         }
       const capture = snapshot.guilds.find((row) => row.id === guild.guild_id);
       if (!capture) throw new Error("Missing validated snapshot");
       for (const member of capture.members) {
         // Snapshot-only users are retained separately from SQL counts and start nickname-disabled.
         await ensureUser(client, guild.guild_id, member.id, new Date(member.joinedAt));
-        await client.query(
-          "UPDATE guild_users SET imported=true,nickname_enabled=false,primary_character_id=NULL,nickname_before=$3 WHERE guild_id=$1 AND user_id=$2",
-          [guild.guild_id, member.id, member.nickname],
-        );
-        if (guild.guest_role_id && member.roles.includes(guild.guest_role_id))
-          await client.query(
-            "INSERT INTO guest_grants(guild_id,user_id,provenance,source_key,source) VALUES($1,$2,'imported_guest',$3,$4)",
-            [
-              guild.guild_id,
-              member.id,
-              `import:${data.fingerprint}:guest:${guild.guild_id}:${member.id}`,
-              json({
-                roleId: guild.guest_role_id,
-                capturedAt: snapshot.capturedAt,
-                snapshotChecksum: checksum,
-              }),
-            ],
+        await store
+          .update(t.guildUsers)
+          .set({
+            imported: true,
+            nickname_enabled: false,
+            primary_character_id: null,
+            nickname_before: member.nickname,
+          })
+          .where(
+            and(eq(t.guildUsers.guild_id, guild.guild_id), eq(t.guildUsers.user_id, member.id)),
           );
+        if (guild.guest_role_id && member.roles.includes(guild.guest_role_id))
+          await store.insert(t.guestGrants).values({
+            guild_id: guild.guild_id,
+            user_id: member.id,
+            provenance: "imported_guest",
+            source_key: `import:${data.fingerprint}:guest:${guild.guild_id}:${member.id}`,
+            source: {
+              roleId: guild.guest_role_id,
+              capturedAt: snapshot.capturedAt,
+              snapshotChecksum: checksum,
+            },
+          });
       }
       await audit(client, guild.guild_id, null, "migration.import", data.fingerprint, {
         snapshotChecksum: checksum,
@@ -261,39 +275,54 @@ export async function importLegacy(
       if (!character.owner) continue;
       for (const guildId of mapping.ownership[character.char_id] ?? []) {
         await ensureUser(client, guildId, character.owner);
-        await client.query(
-          "UPDATE guild_users SET imported=true WHERE guild_id=$1 AND user_id=$2",
-          [guildId, character.owner],
-        );
+        await store
+          .update(t.guildUsers)
+          .set({ imported: true })
+          .where(
+            and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, character.owner)),
+          );
         const provenance = {
           checksum: data.fingerprint,
           characterKey: character.char_id,
           ownerKey: character.owner,
           guildKey: guildId,
         };
-        const link = (
-          await client.query<{ id: string }>(
-            "INSERT INTO links(guild_id,user_id,character_id,provenance,source) VALUES($1,$2,$3,'imported_link',$4) RETURNING id",
-            [guildId, character.owner, character.char_id, json(provenance)],
-          )
-        ).rows[0];
+        const [link] = await store
+          .insert(t.links)
+          .values({
+            guild_id: guildId,
+            user_id: character.owner,
+            character_id: character.char_id,
+            provenance: "imported_link",
+            source: provenance,
+          })
+          .returning({ id: t.links.id });
         if (!link) throw new Error("Missing imported link");
         const guild = data.guilds.find((row) => row.guild_id === guildId);
         if (guild?.fc && character.fc === guild.fc) {
           // Historical eligibility requires both the supplied trusted ownership and matching FC.
-          await client.query(
-            "INSERT INTO membership_history(guild_id,user_id,fc_id,link_id,source) VALUES($1,$2,$3,$4,$5)",
-            [guildId, character.owner, guild.fc, link.id, json(provenance)],
-          );
+          await store.insert(t.membershipHistory).values({
+            guild_id: guildId,
+            user_id: character.owner,
+            fc_id: guild.fc,
+            link_id: link.id,
+            source: provenance,
+          });
           const holder = snapshot.guilds
             .find((row) => row.id === guildId)
             ?.members.find((row) => row.id === character.owner);
           if (guild.member_role_id && holder?.roles.includes(guild.member_role_id))
             // This baseline preserves existing access until two accepted absence observations.
-            await client.query(
-              "INSERT INTO membership(guild_id,fc_id,character_id,state,source) VALUES($1,$2,$3,'present',$4) ON CONFLICT DO NOTHING",
-              [guildId, guild.fc, character.char_id, json(provenance)],
-            );
+            await store
+              .insert(t.membership)
+              .values({
+                guild_id: guildId,
+                fc_id: guild.fc,
+                character_id: character.char_id,
+                state: "present",
+                source: provenance,
+              })
+              .onConflictDoNothing();
         }
       }
     }
@@ -301,40 +330,42 @@ export async function importLegacy(
       // NULL is uninitialized; known zero still gets an immutable opening entry at sequence one.
       const guild = mapping.accounts[fc.fc_id];
       if (!guild) throw new Error("Missing account mapping");
-      const account = (
-        await client.query<{ id: string }>(
-          "INSERT INTO ledger_accounts(guild_id,fc_id,balance,sequence) VALUES($1,$2,$3,$4) RETURNING id",
-          [guild, fc.fc_id, fc.gil_balance, fc.gil_balance === null ? 0 : 1],
-        )
-      ).rows[0];
+      const balance = fc.gil_balance === null ? null : BigInt(fc.gil_balance);
+      const [account] = await store
+        .insert(t.ledgerAccounts)
+        .values({ guild_id: guild, fc_id: fc.fc_id, balance, sequence: balance === null ? 0n : 1n })
+        .returning({ id: t.ledgerAccounts.id });
       if (!account) throw new Error("Missing account");
-      if (fc.gil_balance !== null)
-        await client.query(
-          "INSERT INTO ledger_entries(account_id,sequence,operation,delta,balance,guild_id,note,idempotency_key,source) VALUES($1,1,'import',$2,$2,$3,'Imported opening balance',$4,$5)",
-          [
-            account.id,
-            fc.gil_balance,
-            guild,
-            `import:${data.fingerprint}:balance:${fc.fc_id}`,
-            json({
-              checksum: data.fingerprint,
-              fcKey: fc.fc_id,
-              rawTimestamp: fc.last_updated,
-              sourceTimezone: "UTC",
-            }),
-          ],
-        );
+      if (balance !== null)
+        await store.insert(t.ledgerEntries).values({
+          account_id: account.id,
+          sequence: 1n,
+          operation: "import",
+          delta: balance,
+          balance,
+          guild_id: guild,
+          note: "Imported opening balance",
+          idempotency_key: `import:${data.fingerprint}:balance:${fc.fc_id}`,
+          source: {
+            checksum: data.fingerprint,
+            fcKey: fc.fc_id,
+            rawTimestamp: fc.last_updated,
+            sourceTimezone: "UTC",
+          },
+        });
     }
     for (const guild of data.guilds)
       if (guild.fc)
-        await client.query(
-          "INSERT INTO ledger_accounts(guild_id,fc_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-          [guild.guild_id, guild.fc],
-        );
-    await client.query(
-      "INSERT INTO imports(fingerprint,report,source_timezone,snapshot_checksum) VALUES($1,$2,'UTC',$3)",
-      [data.fingerprint, json(report), checksum],
-    );
+        await store
+          .insert(t.ledgerAccounts)
+          .values({ guild_id: guild.guild_id, fc_id: guild.fc })
+          .onConflictDoNothing();
+    await store.insert(t.imports).values({
+      fingerprint: data.fingerprint,
+      report,
+      source_timezone: "UTC",
+      snapshot_checksum: checksum,
+    });
     return { status: "imported", report };
   });
 }

@@ -1,6 +1,8 @@
 /** Derive extra roles only from trusted links and accepted FC roster rank observations. */
 import type { Database } from "../infrastructure/postgres/database.js";
 import type { GuildRecord } from "./records.js";
+import { and, eq, exists, gt, sql } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 
 export type RankState = "yes" | "no" | "unknown";
 export interface RankAccess {
@@ -18,33 +20,68 @@ export async function rankAccess(
   user: string,
   freshnessSeconds: number,
 ): Promise<RankAccess> {
-  const override = (
-    await db.query<{ state: string }>(
-      "SELECT state FROM officer_overrides WHERE guild_id=$1 AND user_id=$2",
-      [guild.id, user],
+  const [override] = await db.orm
+    .select({ state: t.officerOverrides.state })
+    .from(t.officerOverrides)
+    .where(and(eq(t.officerOverrides.guild_id, guild.id), eq(t.officerOverrides.user_id, user)));
+  const rows = await db.orm
+    .select({
+      state: t.membership.state,
+      fc_rank_key: t.rosterMembers.fc_rank_key,
+      is_fc_leader: t.rosterMembers.is_fc_leader,
+      officer_authority: sql<boolean>`(${t.links.provenance}<>'officer_assignment' OR COALESCE((${t.links.source}->>'officerAuthority')::boolean,true))`,
+    })
+    .from(t.links)
+    .leftJoin(
+      t.membership,
+      and(
+        eq(t.membership.guild_id, t.links.guild_id),
+        eq(t.membership.character_id, t.links.character_id),
+        guild.fc_id ? eq(t.membership.fc_id, guild.fc_id) : sql`false`,
+      ),
     )
-  )[0];
-  const rows = await db.query<{
-    state: string | null;
-    fc_rank_key: string | null;
-    is_fc_leader: boolean | null;
-    officer_authority: boolean;
-  }>(
-    `SELECT m.state,r.fc_rank_key,r.is_fc_leader,
-      (l.provenance<>'officer_assignment' OR COALESCE((l.source->>'officerAuthority')::boolean,true)) AS officer_authority
-      FROM links l LEFT JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id AND m.fc_id=$3
-      LEFT JOIN roster_members r ON r.snapshot_id=m.confirmed_snapshot_id AND r.character_id=l.character_id
-      WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active`,
-    [guild.id, user, guild.fc_id],
+    .leftJoin(
+      t.rosterMembers,
+      and(
+        eq(t.rosterMembers.snapshot_id, t.membership.confirmed_snapshot_id),
+        eq(t.rosterMembers.character_id, t.links.character_id),
+      ),
+    )
+    .where(
+      and(eq(t.links.guild_id, guild.id), eq(t.links.user_id, user), eq(t.links.active, true)),
+    );
+  const fresh = guild.fc_id
+    ? exists(
+        db.orm
+          .select({ id: t.freeCompanies.id })
+          .from(t.freeCompanies)
+          .where(
+            and(
+              eq(t.freeCompanies.id, guild.fc_id),
+              gt(
+                t.freeCompanies.last_successful_roster_at,
+                sql`now()-${freshnessSeconds}*interval '1 second'`,
+              ),
+            ),
+          ),
+      )
+    : sql<boolean>`false`;
+  const localLoss = exists(
+    db.orm
+      .select({ user_id: t.guildUsers.user_id })
+      .from(t.guildUsers)
+      .where(
+        and(
+          eq(t.guildUsers.guild_id, guild.id),
+          eq(t.guildUsers.user_id, user),
+          eq(t.guildUsers.local_member_loss, true),
+        ),
+      ),
   );
-  const facts = (
-    await db.query<{ fresh: boolean; local_loss: boolean }>(
-      `SELECT
-    EXISTS(SELECT 1 FROM free_companies WHERE id=$3 AND last_successful_roster_at>now()-$4*interval '1 second') AS fresh,
-    EXISTS(SELECT 1 FROM guild_users WHERE guild_id=$1 AND user_id=$2 AND local_member_loss) AS local_loss`,
-      [guild.id, user, guild.fc_id, freshnessSeconds],
-    )
-  )[0];
+  const [facts] = await db.orm
+    .select({ fresh: sql<boolean>`${fresh}`, local_loss: sql<boolean>`${localLoss}` })
+    .from(t.guilds)
+    .where(eq(t.guilds.id, guild.id));
   const eligible = rows.filter((row) => row.state === "present" || row.state === "missing");
   const unresolved = !facts?.local_loss && rows.some((row) => row.state === null);
   let officer: RankState = "no";

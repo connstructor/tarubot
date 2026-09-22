@@ -2,6 +2,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
+import * as t from "../../src/infrastructure/postgres/schema.js";
+import { capabilityMetrics } from "../../src/application/metrics.js";
 import { Service } from "../../src/application/service.js";
 import { GuildEvents } from "../../src/application/guild-events.js";
 import {
@@ -15,7 +19,7 @@ import type { Configuration } from "../../src/config/env.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { desiredAccess } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
-import { Database } from "../../src/infrastructure/postgres/database.js";
+import { audit, Database, ensureUser, orm } from "../../src/infrastructure/postgres/database.js";
 import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
 import type { Roster } from "../../src/infrastructure/nodestone/client.js";
 import { readDump } from "../../src/import/dump.js";
@@ -735,7 +739,10 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       "CREATE TRIGGER reject_test_import BEFORE INSERT ON imports FOR EACH ROW EXECUTE FUNCTION reject_test_import()",
     );
     try {
-      await expect(importLegacy(db, copy, empty, mappings(copy))).rejects.toThrow("injected");
+      // Drizzle retains the PostgreSQL failure as cause; assert the actual injected trigger error.
+      await expect(importLegacy(db, copy, empty, mappings(copy))).rejects.toMatchObject({
+        cause: { code: "P0001", message: "injected import publication failure" },
+      });
       expect(await db.query("SELECT id FROM guilds WHERE id=$1", [first.guild_id])).toHaveLength(0);
     } finally {
       await db.query("DROP TRIGGER reject_test_import ON imports");
@@ -1156,6 +1163,272 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]?.status,
     ).toBe("succeeded");
     expect(calls).toBe(2);
+  });
+
+  test("Drizzle mappings agree with every migrated application column", async () => {
+    // The SQL migrations are an independent authority: catch missing/default/null/type mapping drift.
+    const columns = await db.query<{
+      table_name: string;
+      column_name: string;
+      data_type: string;
+      domain_name: string | null;
+      is_nullable: string;
+      column_default: string | null;
+      is_identity: string;
+    }>(
+      "SELECT table_name,column_name,data_type,domain_name,is_nullable,column_default,is_identity FROM information_schema.columns WHERE table_schema='public' AND table_name<>'schema_migrations'",
+    );
+    const mappings = Object.values(t).map((table) => getTableConfig(table));
+    expect([...new Set(columns.map((column) => column.table_name))].sort()).toEqual(
+      mappings.map((table) => table.name).sort(),
+    );
+    for (const table of mappings) {
+      const actual = columns.filter((column) => column.table_name === table.name);
+      expect(actual.map((column) => column.column_name).sort()).toEqual(
+        table.columns.map((column) => column.name).sort(),
+      );
+      for (const column of table.columns) {
+        const row = actual.find((row) => row.column_name === column.name);
+        if (!row) throw new Error(`Missing migrated column ${table.name}.${column.name}`);
+        expect({
+          table: table.name,
+          column: column.name,
+          type: column.getSQLType(),
+          notNull: column.notNull,
+          hasDefault: column.hasDefault,
+        }).toEqual({
+          table: table.name,
+          column: row.column_name,
+          type: row.domain_name ?? row.data_type,
+          notNull: row.is_nullable === "NO",
+          hasDefault: row.column_default !== null || row.is_identity === "YES",
+        });
+      }
+    }
+  });
+
+  test("ORM values remain exact and policy, audit and outbox share rollback visibility", async () => {
+    // Exercise the actual node-postgres codecs, including JSON strings that are not serialized JSON.
+    const external = "18446744073709551615";
+    const maximum = 9223372036854775807n;
+    const sequence = 9007199254740993n;
+    const instant = new Date("2026-09-22T01:45:12.123-05:00");
+    const rollback = new Error("Intentional ORM visibility rollback");
+    const key = `orm:rollback:${randomUUID()}`;
+    await expect(
+      db.transaction(async (client) => {
+        const store = orm(client);
+        expect(orm(client)).toBe(store);
+        expect(store).not.toBe(db.orm);
+        await store
+          .insert(t.freeCompanies)
+          .values({ id: external, name: "Exact FC", world: "Diabolos", profile_at: instant });
+        await store.insert(t.guilds).values({ id: external, fc_id: external, created_at: instant });
+        await ensureUser(client, external, external, instant);
+        const [account] = await store
+          .insert(t.ledgerAccounts)
+          .values({ guild_id: external, fc_id: external, balance: maximum, sequence })
+          .returning();
+        expect(account).toMatchObject({
+          guild_id: external,
+          fc_id: external,
+          balance: maximum,
+          sequence,
+        });
+        if (!account) throw new Error("Missing exact account");
+        const [entry] = await store
+          .insert(t.ledgerEntries)
+          .values({
+            account_id: account.id,
+            guild_id: external,
+            sequence,
+            operation: "import",
+            delta: maximum,
+            balance: maximum,
+            note: "Exact ORM boundary",
+            idempotency_key: key,
+            event_at: instant,
+          })
+          .returning();
+        expect(entry).toMatchObject({
+          delta: maximum,
+          balance: maximum,
+          sequence,
+          event_at: instant,
+        });
+        const [present] = await store
+          .select()
+          .from(t.guildUsers)
+          .where(and(eq(t.guildUsers.guild_id, external), eq(t.guildUsers.user_id, external)));
+        expect(present).toMatchObject({
+          user_id: external,
+          present: true,
+          joined_at: instant,
+          nickname_before: null,
+        });
+
+        for (const value of [
+          "plain text",
+          "00123",
+          "null",
+          7,
+          true,
+          false,
+          null,
+          { amount: maximum, nested: ["零", null] },
+        ]) {
+          await audit(client, external, external, "orm.codec", null, value);
+          const queued = await enqueue(
+            client,
+            "probe",
+            `${key}:${randomUUID()}`,
+            value,
+            external,
+            external,
+          );
+          const [job] = await store
+            .select({ payload: t.jobs.payload })
+            .from(t.jobs)
+            .where(eq(t.jobs.id, queued));
+          expect(job?.payload).toEqual(
+            typeof value === "object" && value !== null
+              ? { amount: maximum.toString(), nested: ["零", null] }
+              : value,
+          );
+        }
+        const entries = await store
+          .select({ details: t.auditEvents.details })
+          .from(t.auditEvents)
+          .where(eq(t.auditEvents.guild_id, external))
+          .orderBy(t.auditEvents.id);
+        expect(entries.map((entry) => entry.details)).toEqual([
+          "plain text",
+          "00123",
+          "null",
+          7,
+          true,
+          false,
+          null,
+          { amount: maximum.toString(), nested: ["零", null] },
+        ]);
+        // Raw SQL independently confirms JSON null was not turned into SQL NULL, and UTC is intact.
+        const raw = (
+          await client.query<{ json_null: boolean; utc: string }>(
+            "SELECT EXISTS(SELECT 1 FROM audit WHERE guild_id=$1 AND details='null'::jsonb AND details IS NOT NULL) AS json_null,(SELECT to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS') FROM guilds WHERE id=$1) AS utc",
+            [external],
+          )
+        ).rows[0];
+        expect(raw).toEqual({ json_null: true, utc: "2026-09-22T06:45:12.123" });
+        expect(
+          await db.orm.select({ id: t.guilds.id }).from(t.guilds).where(eq(t.guilds.id, external)),
+        ).toEqual([]);
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+    expect(await db.query("SELECT id FROM guilds WHERE id=$1", [external])).toEqual([]);
+    expect(await db.query("SELECT id FROM audit WHERE guild_id=$1", [external])).toEqual([]);
+    expect(await db.query("SELECT id FROM jobs WHERE guild_id=$1", [external])).toEqual([]);
+    expect(await db.query("SELECT id FROM ledger_entries WHERE idempotency_key=$1", [key])).toEqual(
+      [],
+    );
+  });
+
+  test("ORM capability aggregates include empty scopes and count shared FCs only once", async () => {
+    const rollback = new Error("Intentional metrics rollback");
+    await expect(
+      db.transaction(async (client) => {
+        const store = orm(client);
+        // Hide existing work/FCs inside this transaction; the rest of the suite keeps its state.
+        await store.update(t.guilds).set({ active: false });
+        await store.update(t.jobs).set({ status: "disabled" });
+        expect(await capabilityMetrics(store)).toEqual({
+          pending: 0,
+          blocked: 0,
+          oldest_roster_age_seconds: null,
+          degraded_fcs: 0,
+        });
+        const company = "18446744073709551614";
+        await store.insert(t.freeCompanies).values({
+          id: company,
+          name: "Metrics FC",
+          world: "Diabolos",
+          last_error: "upstream",
+          last_successful_roster_at: sql`now()-interval '90 seconds'`,
+        });
+        await store.insert(t.guilds).values([
+          { id: company, fc_id: company },
+          { id: "18446744073709551613", fc_id: company },
+        ]);
+        for (const status of ["queued", "running", "blocked", "failed", "succeeded", "disabled"])
+          await store
+            .insert(t.jobs)
+            .values({ kind: "probe", dedupe_key: `metrics:${status}`, payload: {}, status });
+        expect(await capabilityMetrics(store)).toEqual({
+          pending: 2,
+          blocked: 2,
+          oldest_roster_age_seconds: 90,
+          degraded_fcs: 1,
+        });
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  });
+
+  test("ORM queue claims skip held locks and superseding generations cannot publish stale results", async () => {
+    // Isolate candidates from other scenarios, then hold the oldest row on a separate session.
+    await db.orm.update(t.jobs).set({ status: "disabled" });
+    const first = await enqueue(db.pool, "reconcile.user", "orm:claim:first", { revision: 1 });
+    const second = await enqueue(db.pool, "probe", "orm:claim:second", {});
+    const third = await enqueue(db.pool, "probe", "orm:claim:third", {});
+    let supersede = true;
+    const queue = new Queue(
+      db,
+      async (job, guard) => {
+        await guard();
+        if (job.id === first && supersede) {
+          supersede = false;
+          expect(await enqueue(db.pool, job.kind, "orm:claim:first", { revision: 2 })).toBe(first);
+        }
+        await guard();
+        return { generation: job.generation };
+      },
+      () => {},
+    );
+    const lock = await db.pool.connect();
+    try {
+      await lock.query("BEGIN");
+      await orm(lock)
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(eq(t.jobs.id, first))
+        .for("update");
+      const claimed = await Promise.all([queue.claim(), queue.claim()]);
+      expect(claimed.map((job) => job?.id).sort()).toEqual([second, third].sort());
+      expect(new Set(claimed.map((job) => job?.lease_token)).size).toBe(2);
+    } finally {
+      await lock.query("ROLLBACK");
+      lock.release();
+    }
+    const old = await queue.claim();
+    if (!old || old.id !== first) throw new Error("Missing unlocked candidate");
+    await queue.perform(old);
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first)))[0]).toMatchObject({
+      status: "queued",
+      generation: 2,
+      result: null,
+      payload: { revision: 2 },
+    });
+    expect(await queue.claim()).toBeUndefined();
+    // Advance the persisted due time instead of sleeping through the normal retry backoff.
+    await db.orm.update(t.jobs).set({ due_at: sql`now()` }).where(eq(t.jobs.id, first));
+    const current = await queue.claim();
+    if (!current || current.id !== first) throw new Error("Missing superseding candidate");
+    await queue.perform(current);
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first)))[0]).toMatchObject({
+      status: "succeeded",
+      result: { generation: 2 },
+    });
+    await db.orm.delete(t.jobs).where(inArray(t.jobs.id, [first, second, third]));
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {

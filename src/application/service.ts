@@ -1,13 +1,32 @@
 /** Authorized application decisions. Commit state and its outbox together; perform remote I/O outside transactions. */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  not,
+  or,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import * as t from "../infrastructure/postgres/schema.js";
 import type { PoolClient } from "pg";
 import type { Configuration } from "../config/env.js";
 import { authorize, authorizeRoleManager, type Actor } from "../domain/policy.js";
 import { rankAccess } from "./rank-policy.js";
-import { Failure, gil, json, MAX_GIL, note, normalized } from "../domain/values.js";
+import { Failure, gil, MAX_GIL, note, normalized } from "../domain/values.js";
 import {
   audit,
   ensureUser,
+  orm,
   type Connection,
   type Database,
 } from "../infrastructure/postgres/database.js";
@@ -17,7 +36,7 @@ import type {
   Nodestone,
 } from "../infrastructure/nodestone/client.js";
 import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
-import type { ApplicationRecord, DiscordPort, EntryRecord, GuildRecord } from "./records.js";
+import type { DiscordPort, GuildRecord } from "./records.js";
 
 /** Guild-scoped operations reused by slash commands, components, and operational workflows. */
 export class Service {
@@ -31,11 +50,10 @@ export class Service {
   /** Delegate bot-only officer authority without granting Discord server permissions. */
   async enrichActor(actor: Actor): Promise<Actor> {
     if (actor.serverManager ?? actor.officer) return actor;
-    const guild = (
-      await this.db.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 AND active", [
-        actor.guildId,
-      ])
-    )[0];
+    const [guild] = await this.db.orm
+      .select()
+      .from(t.guilds)
+      .where(and(eq(t.guilds.id, actor.guildId), eq(t.guilds.active, true)));
     if (!guild?.officer_role_id || !actor.roleIds?.includes(guild.officer_role_id)) return actor;
     const access = await rankAccess(
       this.db,
@@ -48,11 +66,10 @@ export class Service {
   /** Read configured state without silently creating a guild for an ordinary/read-only command. */
   async guild(actor: Actor): Promise<GuildRecord> {
     authorize(actor, actor.guildId, "user");
-    const row = (
-      await this.db.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 AND active", [
-        actor.guildId,
-      ])
-    )[0];
+    const [row] = await this.db.orm
+      .select()
+      .from(t.guilds)
+      .where(and(eq(t.guilds.id, actor.guildId), eq(t.guilds.active, true)));
     if (!row)
       throw new Failure(
         "setup",
@@ -65,10 +82,33 @@ export class Service {
     authorize(actor, actor.guildId, "user", owner);
     await this.guild(actor);
     return {
-      characters: await this.db.query(
-        "SELECT l.id,l.character_id,l.active,l.provenance,l.created_at,c.name,c.world,c.fc_hint,f.name AS fc_name,u.primary_character_id,u.nickname_enabled,u.nickname_suspended FROM links l JOIN characters c ON c.id=l.character_id LEFT JOIN free_companies f ON f.id=c.fc_hint JOIN guild_users u ON u.guild_id=l.guild_id AND u.user_id=l.user_id WHERE l.guild_id=$1 AND l.user_id=$2 ORDER BY l.created_at",
-        [actor.guildId, owner],
-      ),
+      characters: await this.db.orm
+        .select({
+          id: t.links.id,
+          character_id: t.links.character_id,
+          active: t.links.active,
+          provenance: t.links.provenance,
+          created_at: t.links.created_at,
+          name: t.characters.name,
+          world: t.characters.world,
+          fc_hint: t.characters.fc_hint,
+          fc_name: t.freeCompanies.name,
+          primary_character_id: t.guildUsers.primary_character_id,
+          nickname_enabled: t.guildUsers.nickname_enabled,
+          nickname_suspended: t.guildUsers.nickname_suspended,
+        })
+        .from(t.links)
+        .innerJoin(t.characters, eq(t.characters.id, t.links.character_id))
+        .leftJoin(t.freeCompanies, eq(t.freeCompanies.id, t.characters.fc_hint))
+        .innerJoin(
+          t.guildUsers,
+          and(
+            eq(t.guildUsers.guild_id, t.links.guild_id),
+            eq(t.guildUsers.user_id, t.links.user_id),
+          ),
+        )
+        .where(and(eq(t.links.guild_id, actor.guildId), eq(t.links.user_id, owner)))
+        .orderBy(asc(t.links.created_at)),
     };
   }
   /** Keep application outcomes, grants, revocation, history, and delivery visibly separate. */
@@ -76,49 +116,162 @@ export class Service {
     authorize(actor, actor.guildId, "user", owner);
     const guild = await this.guild(actor);
     return {
-      applications: await this.db.query(
-        "SELECT * FROM guest_applications WHERE guild_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 10",
-        [actor.guildId, owner],
-      ),
-      grants: await this.db.query(
-        "SELECT provenance,created_at,reason FROM guest_grants WHERE guild_id=$1 AND user_id=$2",
-        [actor.guildId, owner],
-      ),
-      revocation: await this.db.query(
-        "SELECT revoked,changed_at,reason FROM guest_state WHERE guild_id=$1 AND user_id=$2",
-        [actor.guildId, owner],
-      ),
-      formerMember: await this.db.query(
-        "SELECT EXISTS(SELECT 1 FROM membership_history WHERE guild_id=$1 AND user_id=$2 AND fc_id=$3) AS eligible",
-        [actor.guildId, owner, guild.fc_id],
-      ),
-      delivery: await this.db.query(
-        "SELECT id,kind,status,last_error,result FROM jobs WHERE guild_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 10",
-        [actor.guildId, owner],
-      ),
+      applications: await this.db.orm
+        .select()
+        .from(t.guestApplications)
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, actor.guildId),
+            eq(t.guestApplications.user_id, owner),
+          ),
+        )
+        .orderBy(desc(t.guestApplications.created_at))
+        .limit(10),
+      grants: await this.db.orm
+        .select({
+          provenance: t.guestGrants.provenance,
+          created_at: t.guestGrants.created_at,
+          reason: t.guestGrants.reason,
+        })
+        .from(t.guestGrants)
+        .where(and(eq(t.guestGrants.guild_id, actor.guildId), eq(t.guestGrants.user_id, owner))),
+      revocation: await this.db.orm
+        .select({
+          revoked: t.guestState.revoked,
+          changed_at: t.guestState.changed_at,
+          reason: t.guestState.reason,
+        })
+        .from(t.guestState)
+        .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, owner))),
+      formerMember: [
+        {
+          eligible:
+            guild.fc_id !== null &&
+            (
+              await this.db.orm
+                .select({ id: t.membershipHistory.id })
+                .from(t.membershipHistory)
+                .where(
+                  and(
+                    eq(t.membershipHistory.guild_id, actor.guildId),
+                    eq(t.membershipHistory.user_id, owner),
+                    eq(t.membershipHistory.fc_id, guild.fc_id),
+                  ),
+                )
+                .limit(1)
+            ).length > 0,
+        },
+      ],
+      delivery: await this.db.orm
+        .select({
+          id: t.jobs.id,
+          kind: t.jobs.kind,
+          status: t.jobs.status,
+          last_error: t.jobs.last_error,
+          result: t.jobs.result,
+        })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.guild_id, actor.guildId), eq(t.jobs.user_id, owner)))
+        .orderBy(desc(t.jobs.created_at))
+        .limit(10),
     };
   }
   /** Aggregate child work without exposing another requester's private run or user effects. */
   async syncStatus(actor: Actor, run: string | null): Promise<unknown> {
     const guild = await this.guild(actor);
-    const runs = await this.db.query(
-      `SELECT r.id,r.created_at,r.enumeration_completed_at,j.kind AS acquisition_kind,j.status AS acquisition_status,j.last_error,j.result,
-      CASE WHEN s.failed>0 THEN 'failed' WHEN s.blocked>0 THEN 'blocked' WHEN s.pending>0 THEN 'queued' ELSE 'completed' END AS status,
-      s.total AS work_total,s.completed AS work_completed,s.blocked AS work_blocked,s.failed AS work_failed
-      FROM sync_runs r LEFT JOIN jobs j ON j.id=r.job_id
-      LEFT JOIN LATERAL(SELECT count(*)::int AS total,count(*) FILTER(WHERE w.status='succeeded')::int AS completed,
-      count(*) FILTER(WHERE w.status IN ('queued','running'))::int AS pending,count(*) FILTER(WHERE w.status IN ('blocked','disabled'))::int AS blocked,
-      count(*) FILTER(WHERE w.status='failed')::int AS failed FROM sync_run_jobs p JOIN jobs w ON w.id=p.job_id WHERE p.run_id=r.id) s ON true
-      WHERE r.guild_id=$1 AND ($2::boolean OR r.requester_id=$3) AND ($4::uuid IS NULL OR r.id=$4) ORDER BY r.created_at DESC LIMIT 10`,
-      [actor.guildId, actor.officer, actor.userId, run],
-    );
-    const work = await this.db.query(
-      `SELECT j.id,j.kind,j.status,j.attempts,j.due_at,j.last_error,j.result FROM jobs j
-      WHERE ((j.guild_id=$1 AND ($2::boolean OR j.user_id=$3)) OR (j.guild_id IS NULL AND
-      (($2::boolean AND j.payload->>'fcId'=$4) OR EXISTS(SELECT 1 FROM links l WHERE l.guild_id=$1 AND l.active AND l.character_id::text=j.payload->>'characterId' AND ($2::boolean OR l.user_id=$3)))))
-      AND j.status IN ('queued','running','blocked','failed','disabled') ORDER BY j.created_at DESC LIMIT 25`,
-      [actor.guildId, actor.officer, actor.userId, guild.fc_id],
-    );
+    const db = this.db.orm,
+      child = alias(t.jobs, "child");
+    const totals = db
+      .select({
+        total: sql<number>`count(*)::int`.as("total"),
+        completed: sql<number>`count(*) FILTER(WHERE ${child.status}='succeeded')::int`.as(
+          "completed",
+        ),
+        pending:
+          sql<number>`count(*) FILTER(WHERE ${child.status} IN ('queued','running'))::int`.as(
+            "pending",
+          ),
+        blocked:
+          sql<number>`count(*) FILTER(WHERE ${child.status} IN ('blocked','disabled'))::int`.as(
+            "blocked",
+          ),
+        failed: sql<number>`count(*) FILTER(WHERE ${child.status}='failed')::int`.as("failed"),
+      })
+      .from(t.syncRunJobs)
+      .innerJoin(child, eq(child.id, t.syncRunJobs.job_id))
+      .where(eq(t.syncRunJobs.run_id, t.syncRuns.id))
+      .as("totals");
+    const runs = await db
+      .select({
+        id: t.syncRuns.id,
+        created_at: t.syncRuns.created_at,
+        enumeration_completed_at: t.syncRuns.enumeration_completed_at,
+        acquisition_kind: t.jobs.kind,
+        acquisition_status: t.jobs.status,
+        last_error: t.jobs.last_error,
+        result: t.jobs.result,
+        status: sql<string>`CASE WHEN ${totals.failed}>0 THEN 'failed' WHEN ${totals.blocked}>0 THEN 'blocked' WHEN ${totals.pending}>0 THEN 'queued' ELSE 'completed' END`,
+        work_total: totals.total,
+        work_completed: totals.completed,
+        work_blocked: totals.blocked,
+        work_failed: totals.failed,
+      })
+      .from(t.syncRuns)
+      .leftJoin(t.jobs, eq(t.jobs.id, t.syncRuns.job_id))
+      .leftJoinLateral(totals, sql`true`)
+      .where(
+        and(
+          eq(t.syncRuns.guild_id, actor.guildId),
+          actor.officer ? undefined : eq(t.syncRuns.requester_id, actor.userId),
+          run ? eq(t.syncRuns.id, run) : undefined,
+        ),
+      )
+      .orderBy(desc(t.syncRuns.created_at))
+      .limit(10);
+    const ownProfile = db
+      .select({ id: t.links.id })
+      .from(t.links)
+      .where(
+        and(
+          eq(t.links.guild_id, actor.guildId),
+          eq(t.links.active, true),
+          eq(t.links.character_id, sql`${t.jobs.payload}->>'characterId'`),
+          actor.officer ? undefined : eq(t.links.user_id, actor.userId),
+        ),
+      );
+    const work = await db
+      .select({
+        id: t.jobs.id,
+        kind: t.jobs.kind,
+        status: t.jobs.status,
+        attempts: t.jobs.attempts,
+        due_at: t.jobs.due_at,
+        last_error: t.jobs.last_error,
+        result: t.jobs.result,
+      })
+      .from(t.jobs)
+      .where(
+        and(
+          or(
+            and(
+              eq(t.jobs.guild_id, actor.guildId),
+              actor.officer ? undefined : eq(t.jobs.user_id, actor.userId),
+            ),
+            and(
+              isNull(t.jobs.guild_id),
+              or(
+                actor.officer && guild.fc_id
+                  ? eq(sql`${t.jobs.payload}->>'fcId'`, guild.fc_id)
+                  : sql`false`,
+                exists(ownProfile),
+              ),
+            ),
+          ),
+          inArray(t.jobs.status, ["queued", "running", "blocked", "failed", "disabled"]),
+        ),
+      )
+      .orderBy(desc(t.jobs.created_at))
+      .limit(25);
     return { runs, work };
   }
   /** Diagnose independent capabilities; validation never mutates configuration or access. */
@@ -148,10 +301,15 @@ export class Service {
       effectsGloballyEnabled: this.config.ENABLE_EFFECTS,
       capabilities,
       fc: guild.fc_id
-        ? await this.db.query(
-            "SELECT id,last_successful_roster_at,last_attempt_at,last_error FROM free_companies WHERE id=$1",
-            [guild.fc_id],
-          )
+        ? await this.db.orm
+            .select({
+              id: t.freeCompanies.id,
+              last_successful_roster_at: t.freeCompanies.last_successful_roster_at,
+              last_attempt_at: t.freeCompanies.last_attempt_at,
+              last_error: t.freeCompanies.last_error,
+            })
+            .from(t.freeCompanies)
+            .where(eq(t.freeCompanies.id, guild.fc_id))
         : null,
     };
   }
@@ -165,10 +323,20 @@ export class Service {
     authorize(actor, actor.guildId, kind === "application" ? "officer" : "user", owner);
     query = query.replaceAll("%", "\\%").replaceAll("_", "\\_");
     if (kind === "application") {
-      const rows = await this.db.query<{ id: string; user_id: string }>(
-        "SELECT id,user_id FROM guest_applications WHERE guild_id=$1 AND state='pending' AND (id::text ILIKE $2 OR user_id::text ILIKE $2) LIMIT 25",
-        [actor.guildId, `%${query}%`],
-      );
+      const rows = await this.db.orm
+        .select({ id: t.guestApplications.id, user_id: t.guestApplications.user_id })
+        .from(t.guestApplications)
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, actor.guildId),
+            eq(t.guestApplications.state, "pending"),
+            or(
+              ilike(sql`${t.guestApplications.id}::text`, `%${query}%`),
+              ilike(t.guestApplications.user_id, `%${query}%`),
+            ),
+          ),
+        )
+        .limit(25);
       return rows.map((row) => ({
         name: `${row.user_id} — ${row.id}`.slice(0, 100),
         value: row.id,
@@ -176,14 +344,38 @@ export class Service {
     }
     const rows =
       kind === "verify"
-        ? await this.db.query<{ id: string; name: string; world: string }>(
-            "SELECT DISTINCT c.id,c.name,c.world FROM challenges v JOIN characters c ON c.id=v.character_id WHERE v.guild_id=$1 AND v.user_id=$2 AND v.expires_at>now() AND v.consumed_at IS NULL AND v.replaced_at IS NULL AND (c.name ILIKE $3 OR c.id::text ILIKE $3) LIMIT 25",
-            [actor.guildId, owner, `%${query}%`],
-          )
-        : await this.db.query<{ id: string; name: string; world: string }>(
-            "SELECT c.id,c.name,c.world FROM links l JOIN characters c ON c.id=l.character_id WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active AND (c.name ILIKE $3 OR c.id::text ILIKE $3) LIMIT 25",
-            [actor.guildId, owner, `%${query}%`],
-          );
+        ? await this.db.orm
+            .selectDistinct({
+              id: t.characters.id,
+              name: t.characters.name,
+              world: t.characters.world,
+            })
+            .from(t.challenges)
+            .innerJoin(t.characters, eq(t.characters.id, t.challenges.character_id))
+            .where(
+              and(
+                eq(t.challenges.guild_id, actor.guildId),
+                eq(t.challenges.user_id, owner),
+                gt(t.challenges.expires_at, sql`now()`),
+                isNull(t.challenges.consumed_at),
+                isNull(t.challenges.replaced_at),
+                or(ilike(t.characters.name, `%${query}%`), ilike(t.characters.id, `%${query}%`)),
+              ),
+            )
+            .limit(25)
+        : await this.db.orm
+            .select({ id: t.characters.id, name: t.characters.name, world: t.characters.world })
+            .from(t.links)
+            .innerJoin(t.characters, eq(t.characters.id, t.links.character_id))
+            .where(
+              and(
+                eq(t.links.guild_id, actor.guildId),
+                eq(t.links.user_id, owner),
+                eq(t.links.active, true),
+                or(ilike(t.characters.name, `%${query}%`), ilike(t.characters.id, `%${query}%`)),
+              ),
+            )
+            .limit(25);
     return rows.map((row) => ({
       name: `${row.name} @ ${row.world} (${row.id})`.slice(0, 100),
       value: row.id,
@@ -191,10 +383,17 @@ export class Service {
   }
   /** Refresh public display metadata without treating a profile fetch as an accepted roster. */
   async storeCompany(client: Connection, value: CompanyIdentity): Promise<void> {
-    await client.query(
-      "INSERT INTO free_companies(id,name,tag,world,dc,profile_at) VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(id) DO UPDATE SET name=$2,tag=$3,world=$4,dc=$5,profile_at=now()",
-      [value.id, value.name, value.tag, value.world, value.dc],
-    );
+    const data = {
+      name: value.name,
+      tag: value.tag,
+      world: value.world,
+      dc: value.dc,
+      profile_at: sql`now()`,
+    };
+    await orm(client)
+      .insert(t.freeCompanies)
+      .values({ id: value.id, ...data })
+      .onConflictDoUpdate({ target: t.freeCompanies.id, set: data });
   }
   /** Roster display updates must not advance profile freshness or overwrite independent FC hints. */
   async storeCharacter(
@@ -203,10 +402,23 @@ export class Service {
     profile = true,
   ): Promise<void> {
     // Profile FC hints are deliberately independent from roster authority.
-    await client.query(
-      "INSERT INTO characters(id,name,world,dc,fc_hint,profile_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $6 THEN now() ELSE NULL END) ON CONFLICT(id) DO UPDATE SET name=$2,world=$3,dc=$4,fc_hint=CASE WHEN $6 THEN $5 ELSE characters.fc_hint END,profile_at=CASE WHEN $6 THEN now() ELSE characters.profile_at END",
-      [value.id, value.name, value.world, value.dc, value.fcId, profile],
-    );
+    const display = { name: value.name, world: value.world, dc: value.dc };
+    await orm(client)
+      .insert(t.characters)
+      .values({
+        id: value.id,
+        ...display,
+        fc_hint: value.fcId,
+        profile_at: profile ? sql`now()` : null,
+      })
+      .onConflictDoUpdate({
+        target: t.characters.id,
+        set: {
+          ...display,
+          fc_hint: profile ? value.fcId : t.characters.fc_hint,
+          profile_at: profile ? sql`now()` : t.characters.profile_at,
+        },
+      });
   }
   /** Validate external resources first, then atomically revise config and queue cleanup/projection. */
   async configure(actor: Actor, field: string, value: string | null): Promise<unknown> {
@@ -220,14 +432,16 @@ export class Service {
       "ledger_channel_id",
       "officer_notifications_channel_id",
       "guest_application_channel_id",
-    ];
-    if (!fields.includes(field)) throw new Failure("input", "Invalid configuration field.");
+    ] as const;
+    const column = fields.find((candidate) => candidate === field);
+    if (!column) throw new Failure("input", "Invalid configuration field.");
     if (field === "officer_role_id" || field === "leader_role_id") authorizeRoleManager(actor);
     if (field === "fc_id" && value === null)
       throw new Failure("input", "Use FC unlink with the currently linked ID.");
-    const existing = (
-      await this.db.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1", [actor.guildId])
-    )[0];
+    const [existing] = await this.db.orm
+      .select()
+      .from(t.guilds)
+      .where(eq(t.guilds.id, actor.guildId));
     if (field === "fc_id" && existing?.officer_rank_key) authorizeRoleManager(actor);
     let fc: CompanyIdentity | undefined;
     if (field === "fc_id" && value) {
@@ -247,15 +461,16 @@ export class Service {
           )
         : [];
     return this.db.transaction(async (client) => {
-      await client.query(
-        "INSERT INTO guilds(id,effects_enabled) VALUES($1,true) ON CONFLICT DO NOTHING",
-        [actor.guildId],
-      );
-      const saved = (
-        await client.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 FOR UPDATE", [
-          actor.guildId,
-        ])
-      ).rows[0];
+      const db = orm(client);
+      await db
+        .insert(t.guilds)
+        .values({ id: actor.guildId, effects_enabled: true })
+        .onConflictDoNothing();
+      const [saved] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("update");
       if (!saved) throw new Error("Missing guild");
       if (field === "fc_id" && value && saved.fc_id && saved.fc_id !== value)
         throw new Failure("conflict", "Another FC was linked; unlink it explicitly first.");
@@ -276,45 +491,54 @@ export class Service {
         if (value && other.some((key) => key !== field && saved[key] === value))
           throw new Failure("input", "Managed roles must be distinct.");
         if (old && old !== value)
-          await client.query(
-            "INSERT INTO retired_roles(guild_id,role_id,revision) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-            [actor.guildId, old, saved.revision],
-          );
+          await db
+            .insert(t.retiredRoles)
+            .values({ guild_id: actor.guildId, role_id: old, revision: saved.revision })
+            .onConflictDoNothing();
         if (value)
-          await client.query("DELETE FROM retired_roles WHERE guild_id=$1 AND role_id=$2", [
-            actor.guildId,
-            value,
-          ]);
+          await db
+            .delete(t.retiredRoles)
+            .where(
+              and(eq(t.retiredRoles.guild_id, actor.guildId), eq(t.retiredRoles.role_id, value)),
+            );
       }
-      // field is selected exclusively from the allowlist above; values remain parameterized.
-      await client.query(
-        `UPDATE guilds SET ${field}=$2,revision=revision+1,active=true WHERE id=$1`,
-        [actor.guildId, value],
-      );
+      // The computed field is a schema-key union from the allowlist, never a SQL identifier string.
+      await db
+        .update(t.guilds)
+        .set({ [column]: value, revision: sql`${t.guilds.revision}+1`, active: true })
+        .where(eq(t.guilds.id, actor.guildId));
       if (field === "fc_id" && value) {
-        await client.query(
-          "INSERT INTO ledger_accounts(guild_id,fc_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-          [actor.guildId, value],
-        );
+        await db
+          .insert(t.ledgerAccounts)
+          .values({ guild_id: actor.guildId, fc_id: value })
+          .onConflictDoNothing();
         await enqueue(client, "roster", `roster:${value}`, { fcId: value });
       }
       await audit(client, actor.guildId, actor.userId, "config", field, { value });
       if (field.endsWith("role_id")) await layoutGuildRoles(client, actor.guildId);
       for (const member of adopted) {
         await ensureUser(client, actor.guildId, member.id, member.joinedAt);
-        await client.query(
-          "INSERT INTO officer_overrides(guild_id,user_id,state,actor_id,reason) VALUES($1,$2,'granted',$3,'Existing Officer role adopted by configuration') ON CONFLICT DO NOTHING",
-          [actor.guildId, member.id, actor.userId],
-        );
+        await db
+          .insert(t.officerOverrides)
+          .values({
+            guild_id: actor.guildId,
+            user_id: member.id,
+            state: "granted",
+            actor_id: actor.userId,
+            reason: "Existing Officer role adopted by configuration",
+          })
+          .onConflictDoNothing();
         await audit(client, actor.guildId, actor.userId, "officer.adopt", member.id, {
           roleId: value,
         });
       }
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
-      await client.query(
-        "UPDATE jobs SET status='queued',attempts=0,due_at=now() WHERE guild_id=$1 AND status IN ('blocked','disabled')",
-        [actor.guildId],
-      );
+      await db
+        .update(t.jobs)
+        .set({ status: "queued", attempts: 0, due_at: sql`now()` })
+        .where(
+          and(eq(t.jobs.guild_id, actor.guildId), inArray(t.jobs.status, ["blocked", "disabled"])),
+        );
       return { status: "saved", effects: "queued" };
     });
   }
@@ -324,10 +548,14 @@ export class Service {
     await this.guild(actor);
     if (rank !== null) rank = note(rank);
     return this.db.transaction(async (client) => {
-      await client.query(
-        "UPDATE guilds SET officer_rank_name=$2,officer_rank_key=$3,revision=revision+1 WHERE id=$1",
-        [actor.guildId, rank, rank ? normalized(rank) : null],
-      );
+      await orm(client)
+        .update(t.guilds)
+        .set({
+          officer_rank_name: rank,
+          officer_rank_key: rank ? normalized(rank) : null,
+          revision: sql`${t.guilds.revision}+1`,
+        })
+        .where(eq(t.guilds.id, actor.guildId));
       await audit(client, actor.guildId, actor.userId, "config.officer_rank", actor.guildId, {
         rank,
       });
@@ -345,11 +573,12 @@ export class Service {
     authorize(actor, actor.guildId, "officer");
     if ((await this.guild(actor)).officer_rank_key) authorizeRoleManager(actor);
     return this.db.transaction(async (client) => {
-      const result = await client.query(
-        "UPDATE guilds SET fc_id=NULL,revision=revision+1 WHERE id=$1 AND fc_id=$2 RETURNING id",
-        [actor.guildId, fcId],
-      );
-      if (!result.rowCount)
+      const result = await orm(client)
+        .update(t.guilds)
+        .set({ fc_id: null, revision: sql`${t.guilds.revision}+1` })
+        .where(and(eq(t.guilds.id, actor.guildId), eq(t.guilds.fc_id, fcId)))
+        .returning({ id: t.guilds.id });
+      if (!result.length)
         throw new Failure("input", "The supplied FC ID does not match the linked FC.");
       await audit(client, actor.guildId, actor.userId, "fc.unlink", fcId);
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
@@ -366,13 +595,22 @@ export class Service {
     reason: string | null,
     source: unknown,
   ): Promise<string> {
-    await client.query("SELECT id FROM characters WHERE id=$1 FOR UPDATE", [character]);
-    const linked = (
-      await client.query<{ id: string; user_id: string }>(
-        "SELECT id,user_id FROM links WHERE guild_id=$1 AND character_id=$2 AND active",
-        [actor.guildId, character],
-      )
-    ).rows[0];
+    const db = orm(client);
+    await db
+      .select({ id: t.characters.id })
+      .from(t.characters)
+      .where(eq(t.characters.id, character))
+      .for("update");
+    const [linked] = await db
+      .select({ id: t.links.id, user_id: t.links.user_id })
+      .from(t.links)
+      .where(
+        and(
+          eq(t.links.guild_id, actor.guildId),
+          eq(t.links.character_id, character),
+          eq(t.links.active, true),
+        ),
+      );
     if (linked) {
       if (linked.user_id !== owner)
         throw new Failure(
@@ -382,47 +620,113 @@ export class Service {
       await reconcileUser(client, actor.guildId, owner);
       return linked.id;
     }
-    const previous = (
-      await client.query<{ exists: boolean }>(
-        "SELECT EXISTS(SELECT 1 FROM links WHERE guild_id=$1 AND user_id=$2) OR EXISTS(SELECT 1 FROM guild_users WHERE guild_id=$1 AND user_id=$2 AND imported) AS exists",
-        [actor.guildId, owner],
-      )
-    ).rows[0]?.exists;
-    await client.query("DELETE FROM membership WHERE guild_id=$1 AND character_id=$2", [
-      actor.guildId,
-      character,
-    ]);
-    const link = (
-      await client.query<{ id: string }>(
-        "INSERT INTO links(guild_id,user_id,character_id,provenance,actor_id,reason,source) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-        [actor.guildId, owner, character, provenance, actor.userId, reason, json(source)],
-      )
-    ).rows[0];
+    const previous =
+      (
+        await db
+          .select({ id: t.links.id })
+          .from(t.links)
+          .where(and(eq(t.links.guild_id, actor.guildId), eq(t.links.user_id, owner)))
+          .limit(1)
+      ).length > 0 ||
+      (
+        await db
+          .select({ user_id: t.guildUsers.user_id })
+          .from(t.guildUsers)
+          .where(
+            and(
+              eq(t.guildUsers.guild_id, actor.guildId),
+              eq(t.guildUsers.user_id, owner),
+              eq(t.guildUsers.imported, true),
+            ),
+          )
+          .limit(1)
+      ).length > 0;
+    await db
+      .delete(t.membership)
+      .where(
+        and(eq(t.membership.guild_id, actor.guildId), eq(t.membership.character_id, character)),
+      );
+    const [link] = await db
+      .insert(t.links)
+      .values({
+        guild_id: actor.guildId,
+        user_id: owner,
+        character_id: character,
+        provenance,
+        actor_id: actor.userId,
+        reason,
+        source,
+      })
+      .returning({ id: t.links.id });
     if (!link) throw new Error("Missing link");
-    const evidence = (
-      await client.query<{ id: string; fc_id: string; observed_at: Date }>(
-        `SELECT s.id,s.fc_id,s.observed_at FROM guilds g
-      JOIN LATERAL(SELECT id,fc_id,observed_at FROM roster_snapshots WHERE fc_id=g.fc_id ORDER BY observed_at DESC LIMIT 1) s ON true
-      JOIN roster_members r ON r.snapshot_id=s.id AND r.character_id=$2
-      WHERE g.id=$1 AND s.observed_at>now()-$3*interval '1 second'`,
-        [actor.guildId, character, this.config.ROSTER_INTERVAL_SECONDS],
+    const latest = db
+      .select({
+        id: t.rosterSnapshots.id,
+        fc_id: t.rosterSnapshots.fc_id,
+        observed_at: t.rosterSnapshots.observed_at,
+      })
+      .from(t.rosterSnapshots)
+      .where(eq(t.rosterSnapshots.fc_id, t.guilds.fc_id))
+      .orderBy(desc(t.rosterSnapshots.observed_at))
+      .limit(1)
+      .as("latest");
+    const [evidence] = await db
+      .select({ id: latest.id, fc_id: latest.fc_id, observed_at: latest.observed_at })
+      .from(t.guilds)
+      .innerJoinLateral(latest, sql`true`)
+      .innerJoin(
+        t.rosterMembers,
+        and(
+          eq(t.rosterMembers.snapshot_id, latest.id),
+          eq(t.rosterMembers.character_id, character),
+        ),
       )
-    ).rows[0];
+      .where(
+        and(
+          eq(t.guilds.id, actor.guildId),
+          gt(
+            latest.observed_at,
+            sql`now()-${this.config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
+          ),
+        ),
+      );
     if (evidence) {
-      await client.query(
-        "INSERT INTO membership(guild_id,fc_id,character_id,state,snapshot_id,confirmed_snapshot_id) VALUES($1,$2,$3,'present',$4,$4) ON CONFLICT(guild_id,fc_id,character_id) DO UPDATE SET state='present',first_absence_at=NULL,snapshot_id=$4,confirmed_snapshot_id=$4",
-        [actor.guildId, evidence.fc_id, character, evidence.id],
-      );
-      await client.query(
-        "INSERT INTO membership_history(guild_id,user_id,fc_id,link_id,snapshot_id,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
-        [actor.guildId, owner, evidence.fc_id, link.id, evidence.id, evidence.observed_at],
-      );
+      await db
+        .insert(t.membership)
+        .values({
+          guild_id: actor.guildId,
+          fc_id: evidence.fc_id,
+          character_id: character,
+          state: "present",
+          snapshot_id: evidence.id,
+          confirmed_snapshot_id: evidence.id,
+        })
+        .onConflictDoUpdate({
+          target: [t.membership.guild_id, t.membership.fc_id, t.membership.character_id],
+          set: {
+            state: "present",
+            first_absence_at: null,
+            snapshot_id: evidence.id,
+            confirmed_snapshot_id: evidence.id,
+          },
+        });
+      await db
+        .insert(t.membershipHistory)
+        .values({
+          guild_id: actor.guildId,
+          user_id: owner,
+          fc_id: evidence.fc_id,
+          link_id: link.id,
+          snapshot_id: evidence.id,
+          observed_at: evidence.observed_at,
+        })
+        .onConflictDoNothing();
     }
     if (!previous)
-      await client.query(
-        "UPDATE guild_users SET primary_character_id=$3,nickname_enabled=true,nickname_suspended=false WHERE guild_id=$1 AND user_id=$2",
-        [actor.guildId, owner, character],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({ primary_character_id: character, nickname_enabled: true, nickname_suspended: false })
+        .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)));
     await audit(client, actor.guildId, actor.userId, "character.link", link.id, {
       character,
       owner,
@@ -444,14 +748,19 @@ export class Service {
       .digest("hex");
     return this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(714882491)");
+      const db = orm(client);
       await ensureUser(client, actor.guildId, actor.userId, member.joinedAt);
       await this.storeCharacter(client, identity);
-      const existing = (
-        await client.query<{ user_id: string }>(
-          "SELECT user_id FROM links WHERE guild_id=$1 AND character_id=$2 AND active",
-          [actor.guildId, identity.id],
-        )
-      ).rows[0];
+      const [existing] = await db
+        .select({ user_id: t.links.user_id })
+        .from(t.links)
+        .where(
+          and(
+            eq(t.links.guild_id, actor.guildId),
+            eq(t.links.character_id, identity.id),
+            eq(t.links.active, true),
+          ),
+        );
       if (existing) {
         if (existing.user_id === actor.userId) {
           await reconcileUser(client, actor.guildId, actor.userId);
@@ -462,27 +771,48 @@ export class Service {
           "This character is already linked to another user.",
         );
       }
-      await client.query(
-        "UPDATE challenges SET replaced_at=now() WHERE guild_id=$1 AND user_id=$2 AND character_id=$3 AND consumed_at IS NULL AND replaced_at IS NULL",
-        [actor.guildId, actor.userId, identity.id],
-      );
-      const counts = (
-        await client.query<{ own: bigint; total: bigint }>(
-          "SELECT count(*) FILTER(WHERE guild_id=$1 AND user_id=$2) AS own,count(*) AS total FROM challenges WHERE expires_at>now() AND consumed_at IS NULL AND replaced_at IS NULL",
-          [actor.guildId, actor.userId],
-        )
-      ).rows[0];
+      await db
+        .update(t.challenges)
+        .set({ replaced_at: sql`now()` })
+        .where(
+          and(
+            eq(t.challenges.guild_id, actor.guildId),
+            eq(t.challenges.user_id, actor.userId),
+            eq(t.challenges.character_id, identity.id),
+            isNull(t.challenges.consumed_at),
+            isNull(t.challenges.replaced_at),
+          ),
+        );
+      const [counts] = await db
+        .select({
+          own: sql<bigint>`count(*) FILTER(WHERE ${t.challenges.guild_id}=${actor.guildId} AND ${t.challenges.user_id}=${actor.userId})`.mapWith(
+            BigInt,
+          ),
+          total: sql<bigint>`count(*)`.mapWith(BigInt),
+        })
+        .from(t.challenges)
+        .where(
+          and(
+            gt(t.challenges.expires_at, sql`now()`),
+            isNull(t.challenges.consumed_at),
+            isNull(t.challenges.replaced_at),
+          ),
+        );
       if (!counts || counts.own >= 5n || counts.total >= 1000n)
         throw new Failure(
           "cooldown",
           "Too many pending verification challenges. Try again after one expires.",
         );
-      const row = (
-        await client.query<{ id: string; expires_at: Date }>(
-          "INSERT INTO challenges(guild_id,user_id,character_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+$5*interval '1 second') RETURNING id,expires_at",
-          [actor.guildId, actor.userId, identity.id, hash, this.config.VERIFICATION_SECONDS],
-        )
-      ).rows[0];
+      const [row] = await db
+        .insert(t.challenges)
+        .values({
+          guild_id: actor.guildId,
+          user_id: actor.userId,
+          character_id: identity.id,
+          token_hash: hash,
+          expires_at: sql`now()+${this.config.VERIFICATION_SECONDS}*interval '1 second'`,
+        })
+        .returning({ id: t.challenges.id, expires_at: t.challenges.expires_at });
       return {
         status: "pending",
         character: identity.id,
@@ -501,21 +831,28 @@ export class Service {
     const identity = await this.lodestone.profile(characterId, true);
     const tokens = identity.biography?.match(/tarubot_[A-Za-z0-9_-]{43}/g) ?? [];
     return this.db.transaction(async (client) => {
-      await client.query(
-        "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, actor.userId],
-      );
-      const challenge = (
-        await client.query<{
-          id: string;
-          token_hash: string;
-          expires_at: Date;
-          consumed_at: Date | null;
-        }>(
-          "SELECT * FROM challenges WHERE guild_id=$1 AND user_id=$2 AND character_id=$3 AND replaced_at IS NULL ORDER BY issued_at DESC LIMIT 1 FOR UPDATE",
-          [actor.guildId, actor.userId, characterId],
+      const db = orm(client);
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(
+          and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, actor.userId)),
         )
-      ).rows[0];
+        .for("update");
+      const [challenge] = await db
+        .select()
+        .from(t.challenges)
+        .where(
+          and(
+            eq(t.challenges.guild_id, actor.guildId),
+            eq(t.challenges.user_id, actor.userId),
+            eq(t.challenges.character_id, characterId),
+            isNull(t.challenges.replaced_at),
+          ),
+        )
+        .orderBy(desc(t.challenges.issued_at))
+        .limit(1)
+        .for("update");
       if (!challenge || challenge.expires_at.getTime() <= Date.now())
         throw new Failure("expired", "No unexpired challenge. Use /claim to obtain a new token.");
       if (challenge.consumed_at) return { status: "already_verified" };
@@ -544,11 +881,19 @@ export class Service {
         null,
         { challengeId: challenge.id },
       );
-      const consumed = await client.query(
-        "UPDATE challenges SET consumed_at=clock_timestamp() WHERE id=$1 AND expires_at>clock_timestamp() AND consumed_at IS NULL AND replaced_at IS NULL RETURNING id",
-        [challenge.id],
-      );
-      if (!consumed.rowCount)
+      const consumed = await db
+        .update(t.challenges)
+        .set({ consumed_at: sql`clock_timestamp()` })
+        .where(
+          and(
+            eq(t.challenges.id, challenge.id),
+            gt(t.challenges.expires_at, sql`clock_timestamp()`),
+            isNull(t.challenges.consumed_at),
+            isNull(t.challenges.replaced_at),
+          ),
+        )
+        .returning({ id: t.challenges.id });
+      if (!consumed.length)
         throw new Failure(
           "expired",
           "The challenge expired before completion. Request a new challenge.",
@@ -599,28 +944,76 @@ export class Service {
     await this.guild(actor);
     if (owner !== actor.userId || reason !== undefined) reason = note(reason ?? "");
     return this.db.transaction(async (client) => {
-      await client.query(
-        "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, owner],
-      );
-      await client.query("SELECT id FROM characters WHERE id=$1 FOR UPDATE", [character]);
-      const link = (
-        await client.query<{ id: string; user_id: string }>(
-          "SELECT id,user_id FROM links WHERE guild_id=$1 AND character_id=$2 AND active FOR UPDATE",
-          [actor.guildId, character],
+      const db = orm(client);
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)))
+        .for("update");
+      await db
+        .select({ id: t.characters.id })
+        .from(t.characters)
+        .where(eq(t.characters.id, character))
+        .for("update");
+      const [link] = await db
+        .select({ id: t.links.id, user_id: t.links.user_id })
+        .from(t.links)
+        .where(
+          and(
+            eq(t.links.guild_id, actor.guildId),
+            eq(t.links.character_id, character),
+            eq(t.links.active, true),
+          ),
         )
-      ).rows[0];
+        .for("update");
       if (!link || link.user_id !== owner)
         throw new Failure("input", "That character is not actively linked to the specified owner.");
-      await client.query("UPDATE links SET active=false,ended_at=now() WHERE id=$1", [link.id]);
-      await client.query(
-        "UPDATE guild_users u SET local_member_loss=true WHERE guild_id=$1 AND user_id=$2 AND NOT EXISTS(SELECT 1 FROM links l JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id JOIN guilds g ON g.id=l.guild_id AND g.fc_id=m.fc_id WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active AND m.state IN ('present','missing'))",
-        [actor.guildId, owner],
-      );
-      await client.query(
-        "UPDATE guild_users SET primary_character_id=NULL,nickname_restore=true WHERE guild_id=$1 AND user_id=$2 AND primary_character_id=$3",
-        [actor.guildId, owner, character],
-      );
+      await db
+        .update(t.links)
+        .set({ active: false, ended_at: sql`now()` })
+        .where(eq(t.links.id, link.id));
+      const remaining = db
+        .select({ id: t.links.id })
+        .from(t.links)
+        .innerJoin(
+          t.membership,
+          and(
+            eq(t.membership.guild_id, t.links.guild_id),
+            eq(t.membership.character_id, t.links.character_id),
+          ),
+        )
+        .innerJoin(
+          t.guilds,
+          and(eq(t.guilds.id, t.links.guild_id), eq(t.guilds.fc_id, t.membership.fc_id)),
+        )
+        .where(
+          and(
+            eq(t.links.guild_id, actor.guildId),
+            eq(t.links.user_id, owner),
+            eq(t.links.active, true),
+            inArray(t.membership.state, ["present", "missing"]),
+          ),
+        );
+      await db
+        .update(t.guildUsers)
+        .set({ local_member_loss: true })
+        .where(
+          and(
+            eq(t.guildUsers.guild_id, actor.guildId),
+            eq(t.guildUsers.user_id, owner),
+            not(exists(remaining)),
+          ),
+        );
+      await db
+        .update(t.guildUsers)
+        .set({ primary_character_id: null, nickname_restore: true })
+        .where(
+          and(
+            eq(t.guildUsers.guild_id, actor.guildId),
+            eq(t.guildUsers.user_id, owner),
+            eq(t.guildUsers.primary_character_id, character),
+          ),
+        );
       await audit(client, actor.guildId, actor.userId, "character.unlink", link.id, {
         reason: reason ?? null,
       });
@@ -640,28 +1033,48 @@ export class Service {
   ): Promise<unknown> {
     await this.guild(actor);
     return this.db.transaction(async (client) => {
-      await client.query(
-        "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, actor.userId],
+      const db = orm(client);
+      const scope = and(
+        eq(t.guildUsers.guild_id, actor.guildId),
+        eq(t.guildUsers.user_id, actor.userId),
       );
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(scope)
+        .for("update");
       if (character) {
-        const owned = await client.query(
-          "SELECT id FROM links WHERE guild_id=$1 AND user_id=$2 AND character_id=$3 AND active FOR UPDATE",
-          [actor.guildId, actor.userId, character],
-        );
-        if (!owned.rowCount)
+        const owned = await db
+          .select({ id: t.links.id })
+          .from(t.links)
+          .where(
+            and(
+              eq(t.links.guild_id, actor.guildId),
+              eq(t.links.user_id, actor.userId),
+              eq(t.links.character_id, character),
+              eq(t.links.active, true),
+            ),
+          )
+          .for("update");
+        if (!owned.length)
           throw new Failure("input", "Choose one of your active linked characters.");
-        await client.query(
-          "UPDATE guild_users SET primary_character_id=$3,nickname_restore=false WHERE guild_id=$1 AND user_id=$2",
-          [actor.guildId, actor.userId, character],
-        );
+        await db
+          .update(t.guildUsers)
+          .set({ primary_character_id: character, nickname_restore: false })
+          .where(scope);
       }
       if (enabled !== null) {
-        const updated = await client.query(
-          "UPDATE guild_users SET nickname_enabled=$3,nickname_suspended=false,nickname_restore=NOT $3,nickname_baseline_set=CASE WHEN $3 THEN false ELSE nickname_baseline_set END WHERE guild_id=$1 AND user_id=$2 AND (NOT $3 OR primary_character_id IS NOT NULL) RETURNING user_id",
-          [actor.guildId, actor.userId, enabled],
-        );
-        if (!updated.rowCount)
+        const updated = await db
+          .update(t.guildUsers)
+          .set({
+            nickname_enabled: enabled,
+            nickname_suspended: false,
+            nickname_restore: !enabled,
+            nickname_baseline_set: enabled ? false : t.guildUsers.nickname_baseline_set,
+          })
+          .where(and(scope, enabled ? isNotNull(t.guildUsers.primary_character_id) : undefined))
+          .returning({ user_id: t.guildUsers.user_id });
+        if (!updated.length)
           throw new Failure("input", "Select a primary character with /main first.");
       }
       await reconcileUser(client, actor.guildId, actor.userId);
@@ -671,13 +1084,28 @@ export class Service {
   /** Ledger authority requires actual accepted positive evidence, not just imported role protection. */
   async memberEligible(client: Connection, guild: GuildRecord, user: string): Promise<boolean> {
     if (!guild.fc_id) return false;
-    const row = (
-      await client.query<{ eligible: boolean }>(
-        "SELECT EXISTS(SELECT 1 FROM links l JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active AND m.fc_id=$3 AND m.state IN ('present','missing') AND m.confirmed_snapshot_id IS NOT NULL) AS eligible",
-        [guild.id, user, guild.fc_id],
+    const rows = await orm(client)
+      .select({ id: t.links.id })
+      .from(t.links)
+      .innerJoin(
+        t.membership,
+        and(
+          eq(t.membership.guild_id, t.links.guild_id),
+          eq(t.membership.character_id, t.links.character_id),
+        ),
       )
-    ).rows[0];
-    return row?.eligible ?? false;
+      .where(
+        and(
+          eq(t.links.guild_id, guild.id),
+          eq(t.links.user_id, user),
+          eq(t.links.active, true),
+          eq(t.membership.fc_id, guild.fc_id),
+          inArray(t.membership.state, ["present", "missing"]),
+          isNotNull(t.membership.confirmed_snapshot_id),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
   /** Account locking orders exact-once financial mutations independently of notification delivery. */
   async ledger(
@@ -693,6 +1121,7 @@ export class Service {
     if (operation !== "deposit") authorize(actor, actor.guildId, "officer");
     if (!guild.fc_id || !guild.ledger_channel_id)
       throw new Failure("setup", "Configure an FC and ledger channel first.");
+    const linkedFc = guild.fc_id;
     await this.discord.validateChannel(actor.guildId, guild.ledger_channel_id);
     let amount: bigint;
     if (operation === "deposit" || operation === "withdraw") {
@@ -701,27 +1130,28 @@ export class Service {
       amount = BigInt(input);
     } else amount = gil(input);
     return this.db.transaction(async (client) => {
-      const current = (
-        await client.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 FOR SHARE", [
-          actor.guildId,
-        ])
-      ).rows[0];
+      const db = orm(client);
+      const [current] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("share");
       if (!current || current.revision !== guild.revision)
         throw new Failure("conflict", "Configuration changed. Retry the operation.");
       if (!actor.officer && !(await this.memberEligible(client, current, actor.userId)))
         throw new Failure("forbidden", "Confirmed FC membership is required to deposit.");
-      const account = (
-        await client.query<{ id: string; balance: bigint | null; sequence: bigint }>(
-          "SELECT * FROM ledger_accounts WHERE guild_id=$1 AND fc_id=$2 FOR UPDATE",
-          [actor.guildId, guild.fc_id],
+      const [account] = await db
+        .select()
+        .from(t.ledgerAccounts)
+        .where(
+          and(eq(t.ledgerAccounts.guild_id, actor.guildId), eq(t.ledgerAccounts.fc_id, linkedFc)),
         )
-      ).rows[0];
+        .for("update");
       if (!account) throw new Failure("setup", "The ledger account is unavailable.");
-      const duplicate = (
-        await client.query<EntryRecord>("SELECT * FROM ledger_entries WHERE idempotency_key=$1", [
-          key,
-        ])
-      ).rows[0];
+      const [duplicate] = await db
+        .select()
+        .from(t.ledgerEntries)
+        .where(eq(t.ledgerEntries.idempotency_key, key));
       if (duplicate) {
         if (duplicate.guild_id !== actor.guildId || duplicate.account_id !== account.id)
           throw new Failure("conflict", "Idempotency key belongs to another account.");
@@ -735,11 +1165,13 @@ export class Service {
           "An officer must initialize the recorded balance first.",
         );
       if (correction) {
-        const referenced = await client.query(
-          "SELECT id FROM ledger_entries WHERE id=$1 AND account_id=$2",
-          [correction, account.id],
-        );
-        if (!referenced.rowCount)
+        const referenced = await db
+          .select({ id: t.ledgerEntries.id })
+          .from(t.ledgerEntries)
+          .where(
+            and(eq(t.ledgerEntries.id, correction), eq(t.ledgerEntries.account_id, account.id)),
+          );
+        if (!referenced.length)
           throw new Failure("input", "Correction entry must belong to this account.");
       }
       const before = account.balance ?? 0n;
@@ -752,29 +1184,26 @@ export class Service {
       if (balance < 0n || balance > MAX_GIL)
         throw new Failure("funds", "Insufficient funds or balance range exceeded.");
       if (operation === "adjust" && balance === before) return { status: "unchanged", balance };
-      const entry = (
-        await client.query<EntryRecord>(
-          "INSERT INTO ledger_entries(account_id,sequence,operation,delta,balance,actor_id,guild_id,note,idempotency_key,correction_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
-          [
-            account.id,
-            account.sequence + 1n,
-            operation,
-            balance - before,
-            balance,
-            actor.userId,
-            actor.guildId,
-            noteText,
-            key,
-            correction,
-          ],
-        )
-      ).rows[0];
+      const [entry] = await db
+        .insert(t.ledgerEntries)
+        .values({
+          account_id: account.id,
+          sequence: account.sequence + 1n,
+          operation,
+          delta: balance - before,
+          balance,
+          actor_id: actor.userId,
+          guild_id: actor.guildId,
+          note: noteText,
+          idempotency_key: key,
+          correction_id: correction,
+        })
+        .returning();
       if (!entry) throw new Error("Missing entry");
-      await client.query("UPDATE ledger_accounts SET balance=$2,sequence=$3 WHERE id=$1", [
-        account.id,
-        balance,
-        entry.sequence,
-      ]);
+      await db
+        .update(t.ledgerAccounts)
+        .set({ balance, sequence: entry.sequence })
+        .where(eq(t.ledgerAccounts.id, account.id));
       await enqueue(
         client,
         "ledger.notify",
@@ -808,17 +1237,24 @@ export class Service {
     if (target !== guild.fc_id) authorize(actor, actor.guildId, "officer");
     if (!actor.officer && !(await this.memberEligible(this.db.pool, guild, actor.userId)))
       throw new Failure("forbidden", "Confirmed FC membership is required.");
-    const account = (
-      await this.db.query<{ id: string; balance: bigint | null; sequence: bigint }>(
-        "SELECT * FROM ledger_accounts WHERE guild_id=$1 AND fc_id=$2",
-        [actor.guildId, target],
-      )
-    )[0];
+    const [account] = await this.db.orm
+      .select()
+      .from(t.ledgerAccounts)
+      .where(and(eq(t.ledgerAccounts.guild_id, actor.guildId), eq(t.ledgerAccounts.fc_id, target)));
     if (!account) throw new Failure("input", "No ledger account exists for that FC in this guild.");
-    const delivery = await this.db.query(
-      "SELECT j.id,j.status,j.last_error,j.message_id,j.payload->>'entryId' AS entry_id FROM jobs j JOIN ledger_entries e ON e.id::text=j.payload->>'entryId' WHERE j.kind='ledger.notify' AND e.account_id=$1 ORDER BY e.sequence DESC LIMIT 10",
-      [account.id],
-    );
+    const delivery = await this.db.orm
+      .select({
+        id: t.jobs.id,
+        status: t.jobs.status,
+        last_error: t.jobs.last_error,
+        message_id: t.jobs.message_id,
+        entry_id: sql<string>`${t.jobs.payload}->>'entryId'`,
+      })
+      .from(t.jobs)
+      .innerJoin(t.ledgerEntries, sql`${t.ledgerEntries.id}::text=${t.jobs.payload}->>'entryId'`)
+      .where(and(eq(t.jobs.kind, "ledger.notify"), eq(t.ledgerEntries.account_id, account.id)))
+      .orderBy(desc(t.ledgerEntries.sequence))
+      .limit(10);
     if (!history)
       return {
         account,
@@ -826,10 +1262,12 @@ export class Service {
         delivery,
       };
     const cursor = before === null ? account.sequence + 1n : gil(before);
-    const entries = await this.db.query<EntryRecord>(
-      "SELECT * FROM ledger_entries WHERE account_id=$1 AND sequence<$2 ORDER BY sequence DESC LIMIT 10",
-      [account.id, cursor],
-    );
+    const entries = await this.db.orm
+      .select()
+      .from(t.ledgerEntries)
+      .where(and(eq(t.ledgerEntries.account_id, account.id), lt(t.ledgerEntries.sequence, cursor)))
+      .orderBy(desc(t.ledgerEntries.sequence))
+      .limit(10);
     return {
       entries,
       delivery,
@@ -841,36 +1279,45 @@ export class Service {
     const guild = await this.guild(actor);
     if (!guild.guest_role_id || !guild.guest_application_channel_id)
       throw new Failure("setup", "Configure a guest role and application review channel first.");
+    const reviewChannel = guild.guest_application_channel_id;
     await this.discord.validateRole(actor.guildId, guild.guest_role_id);
     await this.discord.validateChannel(actor.guildId, guild.guest_application_channel_id);
     const member = await this.discord.member(actor.guildId, actor.userId);
     if (!member || member.bot)
       throw new Failure("forbidden", "Only current human guild members may apply.");
     return this.db.transaction(async (client) => {
-      const current = (
-        await client.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 FOR SHARE", [
-          actor.guildId,
-        ])
-      ).rows[0];
+      const db = orm(client);
+      const [current] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("share");
       if (!current || current.revision !== guild.revision)
         throw new Failure("conflict", "Configuration changed. Retry your application.");
       await ensureUser(client, actor.guildId, actor.userId, member.joinedAt);
-      await client.query(
-        "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, actor.userId],
-      );
-      const pending = (
-        await client.query<ApplicationRecord>(
-          "SELECT * FROM guest_applications WHERE guild_id=$1 AND user_id=$2 AND state='pending'",
-          [actor.guildId, actor.userId],
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(
+          and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, actor.userId)),
         )
-      ).rows[0];
+        .for("update");
+      const [pending] = await db
+        .select()
+        .from(t.guestApplications)
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, actor.guildId),
+            eq(t.guestApplications.user_id, actor.userId),
+            eq(t.guestApplications.state, "pending"),
+          ),
+        );
       if (pending && pending.joined_at.getTime() === member.joinedAt.getTime()) return pending;
       if (pending) {
-        await client.query(
-          "UPDATE guest_applications SET state='cancelled',decided_at=now() WHERE id=$1",
-          [pending.id],
-        );
+        await db
+          .update(t.guestApplications)
+          .set({ state: "cancelled", decided_at: sql`now()` })
+          .where(eq(t.guestApplications.id, pending.id));
         await enqueue(
           client,
           "guest.review",
@@ -880,12 +1327,42 @@ export class Service {
           actor.userId,
         );
       }
-      const guest = (
-        await client.query<{ eligible: boolean }>(
-          "SELECT (EXISTS(SELECT 1 FROM guest_grants WHERE guild_id=$1 AND user_id=$2) OR EXISTS(SELECT 1 FROM membership_history WHERE guild_id=$1 AND user_id=$2 AND fc_id=$3)) AND NOT EXISTS(SELECT 1 FROM guest_state WHERE guild_id=$1 AND user_id=$2 AND revoked) AS eligible",
-          [actor.guildId, actor.userId, guild.fc_id],
-        )
-      ).rows[0];
+      const granted = db
+        .select({ id: t.guestGrants.id })
+        .from(t.guestGrants)
+        .where(
+          and(eq(t.guestGrants.guild_id, actor.guildId), eq(t.guestGrants.user_id, actor.userId)),
+        );
+      const former = guild.fc_id
+        ? exists(
+            db
+              .select({ id: t.membershipHistory.id })
+              .from(t.membershipHistory)
+              .where(
+                and(
+                  eq(t.membershipHistory.guild_id, actor.guildId),
+                  eq(t.membershipHistory.user_id, actor.userId),
+                  eq(t.membershipHistory.fc_id, guild.fc_id),
+                ),
+              ),
+          )
+        : sql`false`;
+      const revoked = db
+        .select({ user_id: t.guestState.user_id })
+        .from(t.guestState)
+        .where(
+          and(
+            eq(t.guestState.guild_id, actor.guildId),
+            eq(t.guestState.user_id, actor.userId),
+            eq(t.guestState.revoked, true),
+          ),
+        );
+      const [guest] = await db
+        .select({
+          eligible: sql<boolean>`(${exists(granted)} OR ${former}) AND NOT ${exists(revoked)}`,
+        })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId));
       if (
         guest?.eligible ||
         (await this.memberEligible(client, guild, actor.userId)) ||
@@ -896,17 +1373,30 @@ export class Service {
           "eligible",
           "You already have member or guest access; reconciliation can repair a missing role.",
         );
-      const denied = await client.query(
-        "SELECT id FROM guest_applications WHERE guild_id=$1 AND user_id=$2 AND state='denied' AND decided_at>now()-$3*interval '1 second'",
-        [actor.guildId, actor.userId, this.config.GUEST_COOLDOWN_SECONDS],
-      );
-      if (denied.rowCount) throw new Failure("cooldown", "Your denial cooldown has not expired.");
-      const application = (
-        await client.query<ApplicationRecord>(
-          "INSERT INTO guest_applications(guild_id,user_id,joined_at,channel_id) VALUES($1,$2,$3,$4) RETURNING *",
-          [actor.guildId, actor.userId, member.joinedAt, guild.guest_application_channel_id],
-        )
-      ).rows[0];
+      const denied = await db
+        .select({ id: t.guestApplications.id })
+        .from(t.guestApplications)
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, actor.guildId),
+            eq(t.guestApplications.user_id, actor.userId),
+            eq(t.guestApplications.state, "denied"),
+            gt(
+              t.guestApplications.decided_at,
+              sql`now()-${this.config.GUEST_COOLDOWN_SECONDS}*interval '1 second'`,
+            ),
+          ),
+        );
+      if (denied.length) throw new Failure("cooldown", "Your denial cooldown has not expired.");
+      const [application] = await db
+        .insert(t.guestApplications)
+        .values({
+          guild_id: actor.guildId,
+          user_id: actor.userId,
+          joined_at: member.joinedAt,
+          channel_id: reviewChannel,
+        })
+        .returning();
       if (!application) throw new Error("Missing application");
       await enqueue(
         client,
@@ -929,33 +1419,45 @@ export class Service {
   ): Promise<unknown> {
     authorize(actor, actor.guildId, "officer");
     await this.guild(actor);
-    const preliminary = (
-      await this.db.query<ApplicationRecord>(
-        "SELECT * FROM guest_applications WHERE id=$1 AND guild_id=$2",
-        [applicationId, actor.guildId],
-      )
-    )[0];
+    const [preliminary] = await this.db.orm
+      .select()
+      .from(t.guestApplications)
+      .where(
+        and(
+          eq(t.guestApplications.id, applicationId),
+          eq(t.guestApplications.guild_id, actor.guildId),
+        ),
+      );
     if (!preliminary) throw new Failure("input", "Unknown application in this guild.");
     const member = await this.discord.member(actor.guildId, preliminary.user_id);
     return this.db.transaction(async (client) => {
-      const guild = (
-        await client.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 FOR SHARE", [
-          actor.guildId,
-        ])
-      ).rows[0];
+      const db = orm(client);
+      const [guild] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("share");
       if (!guild) throw new Failure("setup", "Guild configuration unavailable.");
-      const presence = (
-        await client.query<{ present: boolean; joined_at: Date | null }>(
-          "SELECT present,joined_at FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-          [actor.guildId, preliminary.user_id],
+      const [presence] = await db
+        .select({ present: t.guildUsers.present, joined_at: t.guildUsers.joined_at })
+        .from(t.guildUsers)
+        .where(
+          and(
+            eq(t.guildUsers.guild_id, actor.guildId),
+            eq(t.guildUsers.user_id, preliminary.user_id),
+          ),
         )
-      ).rows[0];
-      const application = (
-        await client.query<ApplicationRecord>(
-          "SELECT * FROM guest_applications WHERE id=$1 AND guild_id=$2 FOR UPDATE",
-          [applicationId, actor.guildId],
+        .for("update");
+      const [application] = await db
+        .select()
+        .from(t.guestApplications)
+        .where(
+          and(
+            eq(t.guestApplications.id, applicationId),
+            eq(t.guestApplications.guild_id, actor.guildId),
+          ),
         )
-      ).rows[0];
+        .for("update");
       if (!application) throw new Failure("input", "Unknown application.");
       if (messageId && application.message_id !== messageId)
         throw new Failure("forbidden", "This review message is obsolete.");
@@ -970,10 +1472,10 @@ export class Service {
       )
         state = "cancelled";
       else if (await this.memberEligible(client, guild, application.user_id)) state = "superseded";
-      await client.query(
-        "UPDATE guest_applications SET state=$2,reviewer_id=$3,decided_at=now(),reason=$4 WHERE id=$1",
-        [application.id, state, actor.userId, reason],
-      );
+      await db
+        .update(t.guestApplications)
+        .set({ state, reviewer_id: actor.userId, decided_at: sql`now()`, reason })
+        .where(eq(t.guestApplications.id, application.id));
       if (state === "approved")
         await this.grantWithin(
           client,
@@ -1015,29 +1517,52 @@ export class Service {
     key: string,
     reason: string | null,
   ): Promise<void> {
-    const previous = (
-      await client.query<{ revoked: boolean }>(
-        "SELECT revoked FROM guest_state WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, user],
-      )
-    ).rows[0];
-    const inserted = await client.query(
-      "INSERT INTO guest_grants(guild_id,user_id,provenance,source_key,actor_id,reason) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(source_key) DO NOTHING RETURNING id",
-      [actor.guildId, user, provenance, key, actor.userId, reason],
-    );
-    if (!inserted.rowCount) {
-      const existing = await client.query(
-        "SELECT id FROM guest_grants WHERE source_key=$1 AND guild_id=$2 AND user_id=$3",
-        [key, actor.guildId, user],
-      );
-      if (!existing.rowCount)
+    const db = orm(client);
+    const [previous] = await db
+      .select({ revoked: t.guestState.revoked })
+      .from(t.guestState)
+      .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)))
+      .for("update");
+    const inserted = await db
+      .insert(t.guestGrants)
+      .values({
+        guild_id: actor.guildId,
+        user_id: user,
+        provenance,
+        source_key: key,
+        actor_id: actor.userId,
+        reason,
+      })
+      .onConflictDoNothing({ target: t.guestGrants.source_key })
+      .returning({ id: t.guestGrants.id });
+    if (!inserted.length) {
+      const existing = await db
+        .select({ id: t.guestGrants.id })
+        .from(t.guestGrants)
+        .where(
+          and(
+            eq(t.guestGrants.source_key, key),
+            eq(t.guestGrants.guild_id, actor.guildId),
+            eq(t.guestGrants.user_id, user),
+          ),
+        );
+      if (!existing.length)
         throw new Failure("conflict", "Grant idempotency key belongs to a different target.");
       return;
     }
-    await client.query(
-      "INSERT INTO guest_state(guild_id,user_id,revoked,actor_id,reason) VALUES($1,$2,false,$3,$4) ON CONFLICT(guild_id,user_id) DO UPDATE SET revoked=false,actor_id=$3,reason=$4,changed_at=now()",
-      [actor.guildId, user, actor.userId, reason],
-    );
+    await db
+      .insert(t.guestState)
+      .values({
+        guild_id: actor.guildId,
+        user_id: user,
+        revoked: false,
+        actor_id: actor.userId,
+        reason,
+      })
+      .onConflictDoUpdate({
+        target: [t.guestState.guild_id, t.guestState.user_id],
+        set: { revoked: false, actor_id: actor.userId, reason, changed_at: sql`now()` },
+      });
     if (previous?.revoked)
       await audit(client, actor.guildId, actor.userId, "guest.restore", user, {
         provenance,
@@ -1061,20 +1586,38 @@ export class Service {
       throw new Failure("input", "Guest access applies to human guild members.");
     return this.db.transaction(async (client) => {
       await ensureUser(client, actor.guildId, user);
-      await client.query(
-        "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
-        [actor.guildId, user],
-      );
+      const db = orm(client);
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, user)))
+        .for("update");
       if (revoke) {
-        await client.query(
-          "INSERT INTO guest_state(guild_id,user_id,revoked,actor_id,reason) VALUES($1,$2,true,$3,$4) ON CONFLICT(guild_id,user_id) DO UPDATE SET revoked=true,actor_id=$3,reason=$4,changed_at=now()",
-          [actor.guildId, user, actor.userId, reason],
-        );
-        const cancelled = await client.query<{ id: string }>(
-          "UPDATE guest_applications SET state='cancelled',decided_at=now(),reviewer_id=$3,reason=$4 WHERE guild_id=$1 AND user_id=$2 AND state='pending' RETURNING id",
-          [actor.guildId, user, actor.userId, reason],
-        );
-        for (const row of cancelled.rows)
+        await db
+          .insert(t.guestState)
+          .values({
+            guild_id: actor.guildId,
+            user_id: user,
+            revoked: true,
+            actor_id: actor.userId,
+            reason,
+          })
+          .onConflictDoUpdate({
+            target: [t.guestState.guild_id, t.guestState.user_id],
+            set: { revoked: true, actor_id: actor.userId, reason, changed_at: sql`now()` },
+          });
+        const cancelled = await db
+          .update(t.guestApplications)
+          .set({ state: "cancelled", decided_at: sql`now()`, reviewer_id: actor.userId, reason })
+          .where(
+            and(
+              eq(t.guestApplications.guild_id, actor.guildId),
+              eq(t.guestApplications.user_id, user),
+              eq(t.guestApplications.state, "pending"),
+            ),
+          )
+          .returning({ id: t.guestApplications.id });
+        for (const row of cancelled)
           await enqueue(
             client,
             "guest.review",
@@ -1093,12 +1636,10 @@ export class Service {
         { reason },
       );
       await reconcileUser(client, actor.guildId, user);
-      const state = (
-        await client.query<{ revoked: boolean }>(
-          "SELECT revoked FROM guest_state WHERE guild_id=$1 AND user_id=$2",
-          [actor.guildId, user],
-        )
-      ).rows[0];
+      const [state] = await db
+        .select({ revoked: t.guestState.revoked })
+        .from(t.guestState)
+        .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)));
       return { status: state?.revoked ? "revoked" : "granted", effects: "queued" };
     });
   }

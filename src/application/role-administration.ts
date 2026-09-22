@@ -2,9 +2,11 @@
 import type { Actor } from "../domain/policy.js";
 import { authorizeRoleManager } from "../domain/policy.js";
 import { Failure, normalized, note } from "../domain/values.js";
-import { audit, ensureUser } from "../infrastructure/postgres/database.js";
+import { audit, ensureUser, orm } from "../infrastructure/postgres/database.js";
+import { and, eq, sql } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
-import type { DiscordPort, GuildRecord } from "./records.js";
+import type { DiscordPort } from "./records.js";
 import type { Service } from "./service.js";
 
 /** Extra provisioning capability, separate from the reconciliation/test port. */
@@ -49,9 +51,10 @@ export class RoleAdministration {
         ).rows[0]?.locked ?? false;
       if (!locked)
         throw new Failure("busy", "Setup is already running for this guild. Retry shortly.");
-      const previous = (
-        await this.app.db.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1", [actor.guildId])
-      )[0];
+      const [previous] = await this.app.db.orm
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId));
       if (fcId && previous?.fc_id && previous.fc_id !== fcId)
         throw new Failure(
           "input",
@@ -96,16 +99,17 @@ export class RoleAdministration {
             )
           : [];
       return await this.app.db.transaction(async (client) => {
+        const db = orm(client);
         if (company) await this.app.storeCompany(client, company);
-        await client.query(
-          "INSERT INTO guilds(id,effects_enabled) VALUES($1,true) ON CONFLICT DO NOTHING",
-          [actor.guildId],
-        );
-        const current = (
-          await client.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 FOR UPDATE", [
-            actor.guildId,
-          ])
-        ).rows[0];
+        await db
+          .insert(t.guilds)
+          .values({ id: actor.guildId, effects_enabled: true })
+          .onConflictDoNothing();
+        const [current] = await db
+          .select()
+          .from(t.guilds)
+          .where(eq(t.guilds.id, actor.guildId))
+          .for("update");
         if (
           !current ||
           (previous && current.revision !== previous.revision) ||
@@ -119,44 +123,51 @@ export class RoleAdministration {
         for (const role of roles) {
           const old = current[role.field];
           if (old && old !== role.id)
-            await client.query(
-              "INSERT INTO retired_roles(guild_id,role_id,revision) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-              [actor.guildId, old, current.revision],
+            await db
+              .insert(t.retiredRoles)
+              .values({ guild_id: actor.guildId, role_id: old, revision: current.revision })
+              .onConflictDoNothing();
+          await db
+            .delete(t.retiredRoles)
+            .where(
+              and(eq(t.retiredRoles.guild_id, actor.guildId), eq(t.retiredRoles.role_id, role.id)),
             );
-          await client.query("DELETE FROM retired_roles WHERE guild_id=$1 AND role_id=$2", [
-            actor.guildId,
-            role.id,
-          ]);
         }
-        await client.query(
-          `UPDATE guilds SET fc_id=$2,member_role_id=$3,guest_role_id=$4,officer_role_id=$5,leader_role_id=$6,
-          officer_rank_name=COALESCE($7,officer_rank_name),officer_rank_key=COALESCE($8,officer_rank_key),revision=revision+1,active=true WHERE id=$1`,
-          [
-            actor.guildId,
-            targetFc,
-            roles[0]?.id,
-            roles[1]?.id,
-            roles[2]?.id,
-            roles[3]?.id,
-            officerRank,
-            officerRank ? normalized(officerRank) : null,
-          ],
-        );
+        await db
+          .update(t.guilds)
+          .set({
+            fc_id: targetFc,
+            member_role_id: roles[0]?.id ?? null,
+            guest_role_id: roles[1]?.id ?? null,
+            officer_role_id: roles[2]?.id ?? null,
+            leader_role_id: roles[3]?.id ?? null,
+            officer_rank_name: officerRank ?? t.guilds.officer_rank_name,
+            officer_rank_key: officerRank ? normalized(officerRank) : t.guilds.officer_rank_key,
+            revision: sql`${t.guilds.revision}+1`,
+            active: true,
+          })
+          .where(eq(t.guilds.id, actor.guildId));
         for (const member of adopted) {
           await ensureUser(client, actor.guildId, member.id, member.joinedAt);
-          await client.query(
-            "INSERT INTO officer_overrides(guild_id,user_id,state,actor_id,reason) VALUES($1,$2,'granted',$3,'Existing Officer role adopted by setup') ON CONFLICT DO NOTHING",
-            [actor.guildId, member.id, actor.userId],
-          );
+          await db
+            .insert(t.officerOverrides)
+            .values({
+              guild_id: actor.guildId,
+              user_id: member.id,
+              state: "granted",
+              actor_id: actor.userId,
+              reason: "Existing Officer role adopted by setup",
+            })
+            .onConflictDoNothing();
           await audit(client, actor.guildId, actor.userId, "officer.adopt", member.id, {
             roleId: officerRole?.id,
           });
         }
         if (targetFc) {
-          await client.query(
-            "INSERT INTO ledger_accounts(guild_id,fc_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-            [actor.guildId, targetFc],
-          );
+          await db
+            .insert(t.ledgerAccounts)
+            .values({ guild_id: actor.guildId, fc_id: targetFc })
+            .onConflictDoNothing();
           await enqueue(client, "roster", `roster:${targetFc}`, { fcId: targetFc });
         }
         await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
@@ -198,10 +209,14 @@ export class RoleAdministration {
       throw new Failure("input", "Officer grants require a current human guild member.");
     return this.app.db.transaction(async (client) => {
       await ensureUser(client, guild.id, user, member?.joinedAt);
-      await client.query(
-        "INSERT INTO officer_overrides(guild_id,user_id,state,actor_id,reason) VALUES($1,$2,$3,$4,$5) ON CONFLICT(guild_id,user_id) DO UPDATE SET state=$3,actor_id=$4,reason=$5,changed_at=now()",
-        [guild.id, user, grant ? "granted" : "revoked", actor.userId, reason],
-      );
+      const data = { state: grant ? "granted" : "revoked", actor_id: actor.userId, reason };
+      await orm(client)
+        .insert(t.officerOverrides)
+        .values({ guild_id: guild.id, user_id: user, ...data })
+        .onConflictDoUpdate({
+          target: [t.officerOverrides.guild_id, t.officerOverrides.user_id],
+          set: { ...data, changed_at: sql`now()` },
+        });
       await audit(
         client,
         guild.id,

@@ -1,4 +1,6 @@
-/** Read-only restore verification: compare complete data and schema support objects exactly. */
+/** Read-only restore verification: compare complete data and schema support objects exactly.
+ * Catalog SQL is intentional: an independent restore check must include tables absent from ORM mappings.
+ */
 import { Database } from "../src/infrastructure/postgres/database.js";
 import { json } from "../src/domain/values.js";
 

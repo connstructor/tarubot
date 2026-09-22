@@ -3,10 +3,13 @@ import type { Logger } from "pino";
 import type { Configuration } from "../config/env.js";
 import type { DiscordGateway } from "../discord/gateway.js";
 import { Failure } from "../domain/values.js";
-import type { Database } from "../infrastructure/postgres/database.js";
+import { orm, type Database } from "../infrastructure/postgres/database.js";
+import { and, eq, notInArray } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 import { enqueue, layoutGuildRoles, type Queue } from "../jobs/queue.js";
 import type { Service } from "./service.js";
 import type { Synchronization } from "./synchronization.js";
+import { capabilityMetrics } from "./metrics.js";
 
 /** Owns readiness, application scheduling, and graceful release of durable work resources. */
 export class ApplicationLifecycle {
@@ -67,19 +70,26 @@ export class ApplicationLifecycle {
         );
       }
       await this.db.transaction(async (client) => {
+        const db = orm(client);
         const present = [...this.gateway.client.guilds.cache.keys()].filter((guild) =>
           this.allowsGuild(guild),
         );
-        await client.query(
-          "UPDATE guilds SET active=false WHERE NOT(id::text=ANY($1::text[])) AND ($2='' OR id=$2)",
-          [present, this.config.TEST_GUILD_ID],
-        );
-        for (const guild of present) {
-          const configured = await client.query(
-            "UPDATE guilds SET active=true WHERE id=$1 RETURNING id",
-            [guild],
+        await db
+          .update(t.guilds)
+          .set({ active: false })
+          .where(
+            and(
+              notInArray(t.guilds.id, present),
+              this.config.TEST_GUILD_ID ? eq(t.guilds.id, this.config.TEST_GUILD_ID) : undefined,
+            ),
           );
-          if (configured.rowCount) {
+        for (const guild of present) {
+          const configured = await db
+            .update(t.guilds)
+            .set({ active: true })
+            .where(eq(t.guilds.id, guild))
+            .returning({ id: t.guilds.id });
+          if (configured.length) {
             await enqueue(client, "reconcile.guild", `guild:${guild}`, {}, guild);
             await layoutGuildRoles(client, guild);
           }
@@ -106,10 +116,7 @@ export class ApplicationLifecycle {
       await this.db.query("SELECT 1");
       this.databaseReady = true;
       await this.sync.schedule();
-      const metrics = await this.db.query(
-        "SELECT (SELECT count(*)::int FROM jobs WHERE status IN ('queued','running')) AS pending,(SELECT count(*)::int FROM jobs WHERE status IN ('blocked','failed')) AS blocked,(SELECT max(extract(epoch FROM now()-last_successful_roster_at))::float FROM free_companies f WHERE EXISTS(SELECT 1 FROM guilds g WHERE g.fc_id=f.id AND g.active)) AS oldest_roster_age_seconds,(SELECT count(*)::int FROM free_companies f WHERE last_error IS NOT NULL AND EXISTS(SELECT 1 FROM guilds g WHERE g.fc_id=f.id AND g.active)) AS degraded_fcs",
-      );
-      this.capabilities = metrics[0] ?? {};
+      this.capabilities = await capabilityMetrics(this.db.orm);
       this.log.info({ metrics: this.capabilities }, "Capability status");
     } catch (error) {
       this.databaseReady = false;

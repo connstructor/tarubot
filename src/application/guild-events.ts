@@ -1,5 +1,7 @@
 /** Persist Discord observations and schedule work; gateway modules remain thin adapters. */
-import { ensureUser, type Database } from "../infrastructure/postgres/database.js";
+import { ensureUser, orm, type Database } from "../infrastructure/postgres/database.js";
+import { and, eq, sql } from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
 
 /** Application operations shared by independently loaded guild/member/role listeners. */
@@ -9,8 +11,11 @@ export class GuildEvents {
   /** A rejoin updates presence/context while retaining ownership, grants, and ledger identity. */
   async memberJoined(guildId: string, userId: string, joinedAt: Date): Promise<void> {
     await this.db.transaction(async (client) => {
-      const configured = await client.query("SELECT id FROM guilds WHERE id=$1", [guildId]);
-      if (!configured.rowCount) return;
+      const configured = await orm(client)
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guildId));
+      if (!configured.length) return;
       await ensureUser(client, guildId, userId, joinedAt);
       await reconcileUser(client, guildId, userId);
     });
@@ -19,16 +24,22 @@ export class GuildEvents {
   /** Pending reviews belong to one join context; durable grants/history survive departure. */
   async memberLeft(guildId: string, userId: string): Promise<void> {
     await this.db.transaction(async (client) => {
-      await client.query("UPDATE guild_users SET present=false WHERE guild_id=$1 AND user_id=$2", [
-        guildId,
-        userId,
-      ]);
-      const cancelled = (
-        await client.query<{ id: string }>(
-          "UPDATE guest_applications SET state='cancelled',decided_at=now() WHERE guild_id=$1 AND user_id=$2 AND state='pending' RETURNING id",
-          [guildId, userId],
+      const db = orm(client);
+      await db
+        .update(t.guildUsers)
+        .set({ present: false })
+        .where(and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, userId)));
+      const cancelled = await db
+        .update(t.guestApplications)
+        .set({ state: "cancelled", decided_at: sql`now()` })
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, guildId),
+            eq(t.guestApplications.user_id, userId),
+            eq(t.guestApplications.state, "pending"),
+          ),
         )
-      ).rows;
+        .returning({ id: t.guestApplications.id });
       for (const row of cancelled)
         await enqueue(
           client,
@@ -44,24 +55,28 @@ export class GuildEvents {
   /** Coalesce drift, including the bot's own events; reconciliation observes fresh state. */
   async memberChanged(guildId: string, userId: string): Promise<void> {
     await this.db.transaction(async (client) => {
-      const configured = await client.query("SELECT id FROM guilds WHERE id=$1", [guildId]);
-      if (configured.rowCount) await reconcileUser(client, guildId, userId);
+      const configured = await orm(client)
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guildId));
+      if (configured.length) await reconcileUser(client, guildId, userId);
     });
   }
 
   /** Removing the bot disables work without deleting any guild-owned application records. */
   async guildLeft(guildId: string): Promise<void> {
-    await this.db.query("UPDATE guilds SET active=false WHERE id=$1", [guildId]);
+    await this.db.orm.update(t.guilds).set({ active: false }).where(eq(t.guilds.id, guildId));
   }
 
   /** Reinstallation resumes a configured guild; initial configuration stays officer-owned. */
   async guildJoined(guildId: string): Promise<void> {
     await this.db.transaction(async (client) => {
-      const configured = await client.query(
-        "UPDATE guilds SET active=true WHERE id=$1 RETURNING id",
-        [guildId],
-      );
-      if (configured.rowCount) {
+      const configured = await orm(client)
+        .update(t.guilds)
+        .set({ active: true })
+        .where(eq(t.guilds.id, guildId))
+        .returning({ id: t.guilds.id });
+      if (configured.length) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
         await layoutGuildRoles(client, guildId);
       }
@@ -71,8 +86,11 @@ export class GuildEvents {
   /** Role changes can unblock hierarchy checks or require cleanup of managed-role drift. */
   async roleChanged(guildId: string): Promise<void> {
     await this.db.transaction(async (client) => {
-      const configured = await client.query("SELECT id FROM guilds WHERE id=$1", [guildId]);
-      if (configured.rowCount) {
+      const configured = await orm(client)
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guildId));
+      if (configured.length) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
         await layoutGuildRoles(client, guildId);
       }

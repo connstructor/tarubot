@@ -2,17 +2,32 @@
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import pg from "pg";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import * as schema from "./schema.js";
 import type { PoolClient, QueryResultRow } from "pg";
-import { Failure, json } from "../../domain/values.js";
+import { Failure } from "../../domain/values.js";
 
 // OID 20 covers balances, sequences, and counts; Number would silently lose large integers.
 pg.types.setTypeParser(20, (value) => BigInt(value));
 /** Both a transaction client and the pool can execute these parameterized helper operations. */
-export type Connection = Pick<PoolClient, "query">;
+export type Connection = pg.Pool | PoolClient;
+export type Orm = NodePgDatabase<typeof schema>;
+const sessions = new WeakMap<Connection, Orm>();
+/** Bind ORM operations to the exact pool/client supplied, preserving transaction and lock scope. */
+export function orm(connection: Connection): Orm {
+  let instance = sessions.get(connection);
+  if (!instance) {
+    instance = drizzle(connection, { schema });
+    sessions.set(connection, instance);
+  }
+  return instance;
+}
 export const SCHEMA_VERSION = "002_setup_and_ranks.sql";
 /** The pool is application-owned; remote Discord/Lodestone work stays outside transactions. */
 export class Database {
   readonly pool: pg.Pool;
+  readonly orm: Orm;
   healthy = false;
   /** Bound connection/query waits and normalize all database-generated instants to UTC. */
   constructor(url: string) {
@@ -23,6 +38,7 @@ export class Database {
       idleTimeoutMillis: 30000,
       options: "-c timezone=UTC -c statement_timeout=15000",
     });
+    this.orm = orm(this.pool);
     this.pool.on("error", () => {
       this.healthy = false;
     });
@@ -33,7 +49,7 @@ export class Database {
       });
     });
   }
-  /** Typed result contracts describe our own SQL/schema; values are always parameterized. */
+  /** Escape hatch for migrations, probes, catalogs, and independent test observations; use orm for application rows. */
   async query<T extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<T[]> {
     try {
       const result = await this.pool.query<T>(sql, values);
@@ -123,10 +139,15 @@ export async function audit(
   target: string | null,
   details: unknown = {},
 ): Promise<void> {
-  await client.query(
-    "INSERT INTO audit(guild_id,actor_id,action,target,details) VALUES($1,$2,$3,$4,$5)",
-    [guildId, actor, action, target, json(details)],
-  );
+  await orm(client)
+    .insert(schema.auditEvents)
+    .values({
+      guild_id: guildId,
+      actor_id: actor,
+      action,
+      target,
+      details: details === null ? sql`'null'::jsonb` : details,
+    });
 }
 
 /** Preserve durable user policy while refreshing presence and resetting an obsolete join baseline. */
@@ -136,9 +157,28 @@ export async function ensureUser(
   userId: string,
   joinedAt?: Date,
 ): Promise<void> {
-  await client.query("INSERT INTO users(id) VALUES($1) ON CONFLICT DO NOTHING", [userId]);
-  await client.query(
-    "INSERT INTO guild_users(guild_id,user_id,present,joined_at) VALUES($1,$2,$3,$4) ON CONFLICT(guild_id,user_id) DO UPDATE SET present=CASE WHEN $3 THEN true ELSE guild_users.present END,nickname_baseline_set=CASE WHEN $3 AND guild_users.joined_at IS DISTINCT FROM $4 THEN false ELSE guild_users.nickname_baseline_set END,nickname_pending=CASE WHEN $3 AND guild_users.joined_at IS DISTINCT FROM $4 THEN false ELSE guild_users.nickname_pending END,joined_at=COALESCE($4,guild_users.joined_at)",
-    [guildId, userId, joinedAt !== undefined, joinedAt ?? null],
-  );
+  const db = orm(client),
+    user = schema.guildUsers;
+  await db.insert(schema.users).values({ id: userId }).onConflictDoNothing();
+  await db
+    .insert(user)
+    .values({
+      guild_id: guildId,
+      user_id: userId,
+      present: joinedAt !== undefined,
+      joined_at: joinedAt ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [user.guild_id, user.user_id],
+      set: {
+        present: joinedAt ? true : user.present,
+        nickname_baseline_set: joinedAt
+          ? sql`CASE WHEN ${user.joined_at} IS DISTINCT FROM ${joinedAt.toISOString()}::timestamptz THEN false ELSE ${user.nickname_baseline_set} END`
+          : user.nickname_baseline_set,
+        nickname_pending: joinedAt
+          ? sql`CASE WHEN ${user.joined_at} IS DISTINCT FROM ${joinedAt.toISOString()}::timestamptz THEN false ELSE ${user.nickname_pending} END`
+          : user.nickname_pending,
+        joined_at: joinedAt ?? user.joined_at,
+      },
+    });
 }
