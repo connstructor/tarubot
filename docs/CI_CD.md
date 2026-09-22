@@ -4,7 +4,7 @@
 
 1. Create a feature branch. Increment SemVer and update `CHANGELOG.md` for each coherent change set.
 2. Open a PR against `main`. **CI** runs version/changelog validation, type checking, lint/format checks, compilation, all unit/contract/PostgreSQL integration tests, and both runtime image builds for `linux/amd64` and `linux/arm64`.
-3. Merge after **CI result** passes. This is the aggregate check to require in `main` branch protection.
+3. Merge after **CI result** and the required **CodeQL** security/code-quality results pass. CodeQL analyzes both JavaScript/TypeScript and GitHub Actions workflows on PRs, main updates, and a weekly schedule; it excludes upstream/generated dependencies.
 4. **Publish containers** revalidates the merged commit, builds both image targets, and pushes them to GHCR. Pull requests have read-only repository permissions; only publication jobs receive `packages: write`.
 
 Actions are pinned to full commits. Checkouts include the exact Nodestone submodule revision and do not persist checkout credentials. Registry login uses the workflow's `GITHUB_TOKEN`; no stored publishing PAT or Discord/database production credentials are needed by CI.
@@ -21,7 +21,7 @@ The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag 
 Both images support AMD64 and ARM64. Each successful publication supplies:
 
 - `latest` for the newest passing `main` publication.
-- The manifest SemVer, for example `2.8.1`.
+- The manifest SemVer, for example `2.8.2`.
 - `sha-FULL_COMMIT_SHA` for the exact published source commit.
 
 OCI labels identify source, revision, and version. Build provenance and SBOM attestations accompany the images. Both versioned images must publish successfully before the final job advances their `latest` tags. Registry tag changes are separate operations; use a shared version/SHA tag when selecting an exact matched pair.
@@ -39,7 +39,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.1` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
+The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.2` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
 
 Fresh installations still need explicit schema migration and command registration; see [README.md](../README.md#configure-and-start). Follow the migration runbook when an upgrade changes the schema. Image publication does not automatically restart deployment hosts or modify their databases.
 

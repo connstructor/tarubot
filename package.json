@@ -1,6 +1,7 @@
 {
   "name": "tarubot",
-  "version": "2.8.1",
+  "version": "2.8.2",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/connstructor/tarubot.git"

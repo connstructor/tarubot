@@ -173,3 +173,7 @@ The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs,
 - `sidecar`: Nodestone worker isolation, source compatibility transformations, and transport controls.
 - `vendor/nodestone`: upstream parser Git submodule, required for local and Docker builds.
 - `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.
+
+## License
+
+TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. The Nodestone submodule and other third-party dependencies retain their own licenses.

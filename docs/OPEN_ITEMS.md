@@ -50,4 +50,4 @@ These paths have implementation and automated coverage. The remaining work is to
 3. Least-privilege and interruption/recovery rehearsal.
 4. Production capture, import preview, and coordinated cutover.
 
-PR validation and post-merge GHCR publication are now defined in `.github/workflows/ci.yml` and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. First publication and registry deployment follow merge of the passing CI/CD PR. This automation complements the live acceptance and cutover work above.
+PR validation, required CodeQL security/code-quality analysis, and post-merge GHCR publication are defined in `.github/workflows/ci.yml`, `codeql.yml`, and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. First publication and registry deployment follow merge of the passing CI/CD PR. This automation complements the live acceptance and cutover work above.

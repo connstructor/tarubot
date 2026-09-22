@@ -22,6 +22,8 @@ WORKDIR /app
 COPY --from=dependencies --chown=bun:bun /app/node_modules ./node_modules
 COPY --from=build --chown=bun:bun /app/dist ./dist
 COPY --chown=bun:bun package.json ./
+COPY --chown=bun:bun LICENSE ./LICENSE
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER bun
 STOPSIGNAL SIGTERM
 

@@ -1,11 +1,11 @@
 {
   "title": "Session: CI/CD and published container deployment",
-  "objective": "Validate version 2.8.1 through PR checks and post-merge GHCR publication, then confirm that the bot can be deployed from published images with its existing database and Discord configuration.",
+  "objective": "Validate version 2.8.2 through PR tests and CodeQL checks, then confirm post-merge GHCR deployment with the existing database and Discord configuration.",
   "user": [
-    "Review the CI/CD PR after CI result is green. Merging it to main triggers publication of the bot and sidecar images.",
+    "Review the CI/CD PR after CI and required CodeQL security/code-quality checks pass. Merging to main triggers image publication.",
     "After first publication, make both GHCR packages public or authenticate deployment hosts for package read access.",
     "Pull the published images with the DevBot Compose overlay and recreate the services. Keep the isolated tarubot_dev database.",
-    "Run `/version`, `/config validate`, and `/sync status`. Confirm version 2.8.1, available configured resources, and no unexpected blocked work.",
+    "Run `/version`, `/config validate`, and `/sync status`. Confirm version 2.8.2, source/license links, available resources, and no unexpected blocked work.",
     "Report the results. The lobby/officer-channel security implementation is the next feature; this release adds delivery automation."
   ],
   "assistant": [

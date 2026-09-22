@@ -45,6 +45,8 @@ test("version output links commit IDs, badges only verified signatures, and fits
   if (!raw) throw new Error("Missing version embed");
   const embed = new EmbedBuilder("toJSON" in raw ? raw.toJSON() : raw).toJSON();
   expect(embed.title).toBe(`TaruBot v${project.version}`);
+  expect(embed.description).toContain(`[Source code](${project.url})`);
+  expect(embed.description).toContain(`[${project.license}](${project.url}/blob/main/LICENSE)`);
   expect(embed.fields).toHaveLength(10);
   expect(embed.fields?.[0]?.value).toBe(`[0000000](${project.url}/commit/${"0".repeat(40)}) ✅`);
   expect(embed.fields?.slice(1).every((field) => !field.value.includes("✅"))).toBe(true);

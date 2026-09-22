@@ -1,6 +1,12 @@
 # Version history
 
-The current application version is **2.8.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.2 — CodeQL and project licensing
+
+- Analyze JavaScript/TypeScript and GitHub Actions workflows with CodeQL, including the repository's required security/code-quality results.
+- License first-party TaruBot code under AGPL-3.0-only; include the license in runtime images and OCI metadata.
+- Add source-code and license links to `/version` output.
 
 ## 2.8.1 — Cross-platform test startup budgets
 
@@ -47,6 +53,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.7.1 | Mandatory version increments and delivery-readiness tracking |
 | 2.8.0 | Pull-request validation and GHCR container delivery |
 | 2.8.1 | Bounded subprocess/worker test budgets for emulated image builds |
+| 2.8.2 | CodeQL merge-gate integration and AGPL-3.0 licensing |
 
 ## Increment policy
 
