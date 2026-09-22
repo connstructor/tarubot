@@ -1,0 +1,16 @@
+# Explicit source-build override for contributors; normal deployments use published GHCR images.
+# DevBot: docker compose -f docker-compose.yml -f docker-compose.devbot.yml -f docker-compose.build.yml ...
+services:
+  nodestone:
+    image: tarubot-nodestone:local
+    build:
+      context: .
+      target: nodestone
+  tarubot:
+    image: tarubot:local
+    build:
+      context: .
+      target: tarubot
+    # Source-based sessions can update their plan without rebuilding; registry images carry a default.
+    volumes:
+      - ./test-plans:/app/test-plans:ro

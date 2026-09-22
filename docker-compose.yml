@@ -1,4 +1,4 @@
-# Normal stack: private dependencies, persistent PostgreSQL, and one active bot writer.
+# Registry deployment: pull published images; source builds use docker-compose.build.yml.
 services:
   postgres:
     image: postgres:18.4-alpine
@@ -17,9 +17,7 @@ services:
     restart: unless-stopped
   nodestone:
     # Resource limits apply to actual upstream work; health probes use local state only.
-    build:
-      context: .
-      target: nodestone
+    image: ${NODESTONE_IMAGE:-ghcr.io/connstructor/tarubot-nodestone:${TARUBOT_IMAGE_TAG:-latest}}
     environment:
       PAGE_REGION: ${PAGE_REGION:-na}
       LODESTONE_CONCURRENCY: ${LODESTONE_CONCURRENCY:-2}
@@ -37,9 +35,7 @@ services:
     stop_grace_period: 30s
   tarubot:
     # Runtime credentials are supplied here, independently of the compiled image.
-    build:
-      context: .
-      target: tarubot
+    image: ${TARUBOT_IMAGE:-ghcr.io/connstructor/tarubot:${TARUBOT_IMAGE_TAG:-latest}}
     environment:
       DATABASE_URL: postgresql://tarubot:${POSTGRES_PASSWORD}@postgres:5432/tarubot
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}

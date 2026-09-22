@@ -5,7 +5,7 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The full automated suite passed **82 tests / 351 assertions**.
+- The full automated suite passed **85 tests / 366 assertions** with both supplied and synthetic migration inputs.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
 - Nodestone submodule builds, dependency-update checks, clean-clone installation, containers, fixture import, and an earlier backup/restore rehearsal have passed.
@@ -15,6 +15,7 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 
 | Priority | Open item | Requirement / evidence |
 | --- | --- | --- |
+| P1 | Implement the newly requested lobby security model: no-access-role users see only the lobby; Members/Guests cannot see it; staff can; ordinary channels of every type are role-gated. Reuse or create at least one officer-only room, and automatically qualify verified non-FC users for Guest while respecting revocation. | Owner-requested onboarding expansion, agreed after the initial delivery review; implementation follows the CI/CD work. |
 | P1 | Complete officer operational notifications: aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices, with per-guild/run throttling. | **OPS-11, DB-07**. `Synchronization.roster` currently emits roster acceptance/degraded messages; general queue failures go to logs/status through `Queue` and `src/main.ts`. |
 | P1 | Complete operational telemetry: application/job duration, queue age, retry context, and consistent guild/FC/run context. | **OPS-10**. Current reporting has operation IDs, result/error categories, queue counts, and roster age, but does not cover all required measurements. |
 | P2 | Harden and rehearse coalescing/backoff for bursts of role events and complete member enumeration. | **SYNC-02, SYNC-14–17**. Live role changes produced transient gateway rate-limit errors before recovering; exercise this at representative guild size. |
@@ -49,4 +50,4 @@ These paths have implementation and automated coverage. The remaining work is to
 3. Least-privilege and interruption/recovery rehearsal.
 4. Production capture, import preview, and coordinated cutover.
 
-GitHub Actions for build/type/lint/unit/contract checks and automated release packaging would improve repeatability. No workflow is currently configured; this is additional delivery tooling rather than a substitute for the required live acceptance and cutover work.
+PR validation and post-merge GHCR publication are now defined in `.github/workflows/ci.yml` and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. First publication and registry deployment follow merge of the passing CI/CD PR. This automation complements the live acceptance and cutover work above.

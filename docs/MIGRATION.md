@@ -13,6 +13,7 @@ The importer reads MySQL/MariaDB dump syntax as data. Its reader handles escaped
 ## Rehearse
 
 ```sh
+git submodule update --init --recursive
 bun install --frozen-lockfile
 bun run build
 bun run test:docker

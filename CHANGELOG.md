@@ -1,6 +1,14 @@
 # Version history
 
-The current application version is **2.7.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.0 — Pull-request CI and published containers
+
+- Validate PRs with version/changelog checks, source checks, the full PostgreSQL-backed test suite, and both multi-platform container builds.
+- Generate an invented CI migration fixture while retaining the separate supplied-dump acceptance path.
+- Build and publish TaruBot and Nodestone images to GHCR after `main` changes pass verification, using latest, SemVer, and full-commit tags.
+- Default Compose to registry images; retain an explicit local source-build override and development database overlay.
+- Adopt the feature-branch, PR, passing-CI, merge-to-main workflow.
 
 ## 2.7.1 — Versioning policy and delivery readiness
 
@@ -32,6 +40,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.6.0 | Nodestone submodule-backed builds, source fingerprints, and clean-clone verification |
 | 2.7.0 | Installed-version and verified GitHub commit-history command |
 | 2.7.1 | Mandatory version increments and delivery-readiness tracking |
+| 2.8.0 | Pull-request validation and GHCR container delivery |
 
 ## Increment policy
 

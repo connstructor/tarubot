@@ -93,7 +93,15 @@ if (results.some((result) => !result.current)) {
   await run([process.execPath, "run", "test:contract"]);
   if (args.includes("--deploy")) {
     // The sidecar has a stable HTTP contract, so parser updates do not restart the Discord client.
-    await run(["docker", "compose", "build", "nodestone"]);
-    await run(["docker", "compose", "up", "-d", "--no-deps", "--wait", "nodestone"]);
+    const compose = [
+      "docker",
+      "compose",
+      "-f",
+      "docker-compose.yml",
+      "-f",
+      "docker-compose.build.yml",
+    ];
+    await run([...compose, "build", "nodestone"]);
+    await run([...compose, "up", "-d", "--no-deps", "--wait", "nodestone"]);
   }
 }

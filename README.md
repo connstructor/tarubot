@@ -13,6 +13,8 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 
 The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
 
+Normal deployments pull **`ghcr.io/connstructor/tarubot:latest`** and **`ghcr.io/connstructor/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
+
 The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
 
 ```sh
@@ -20,7 +22,7 @@ bun run nodestone:check
 bun run nodestone:update --deploy
 ```
 
-For unattended deployments, schedule the update-and-deploy command from this project directory. A normal container restart uses its existing image; the update workflow rebuilds the parser and selector assets.
+For registry deployments, run dependency updates in a source checkout, merge the verified update PR, and pull its published images. The `--deploy` form performs an explicit local source rebuild using the Compose build override.
 
 ## Modular commands and events
 
@@ -32,7 +34,7 @@ See [MODULES.md](docs/MODULES.md) for complete command/event/component examples 
 
 See [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) for the remaining requirements-backed implementation, live acceptance, and production-delivery work. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
 
-## Install and check
+## Development install and check
 
 Clone with `git clone --recurse-submodules REPOSITORY_URL`, or initialize the submodule in an existing checkout before installing dependencies. Run these commands from this directory:
 
@@ -48,7 +50,7 @@ bun run test:contract
 bun run test:docker
 ```
 
-`test:docker` creates a uniquely named disposable PostgreSQL project, copies the supplied SQL fixture into an ephemeral test container, runs the full test suite, and removes its test containers and volume. It requires Docker and `tarubot_backup.sql`. Container images exclude the SQL backup, local environment files, repository metadata, caches, and import reports.
+`test:docker` creates a uniquely named disposable PostgreSQL project, copies the selected SQL fixture into an ephemeral test container, runs the full test suite, and removes its test containers and volume. Its default is the locally supplied `tarubot_backup.sql`. CI instead generates synthetic input with `bun run test:fixture` and selects it through `LEGACY_FIXTURE_PATH=.cache/ci/legacy.sql`. Container images exclude SQL inputs, local environment files, repository metadata, caches, and import reports.
 
 For an existing **disposable** test database whose name ends in `_test`:
 
@@ -93,7 +95,7 @@ All commands are guild-only. Responses use the declared privacy defaults, with p
 Create `.env` using `.env.example` and supply the token, application ID, and database password. Use a URL-safe PostgreSQL password; set the same credential in `DATABASE_URL` for local tools. Tokens are runtime configuration.
 
 ```sh
-docker compose build
+docker compose pull
 docker compose up -d --wait postgres nodestone
 docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
 docker compose run --rm --no-deps tarubot bun dist/scripts/register.js --guild YOUR_TEST_GUILD_ID

@@ -17,9 +17,10 @@ async function run(command: string[], capture = false): Promise<string> {
   if (exit !== 0) throw new Error(`${command[0]} ${command[1]} failed (${exit})`);
   return output.trim();
 }
-if (!(await Bun.file("tarubot_backup.sql").exists()))
+const fixture = process.env.LEGACY_FIXTURE_PATH ?? "tarubot_backup.sql";
+if (!(await Bun.file(fixture).exists()))
   throw new Error(
-    "Place the supplied acceptance fixture at tarubot_backup.sql before running this check.",
+    "Provide tarubot_backup.sql, or generate test:fixture and set LEGACY_FIXTURE_PATH=.cache/ci/legacy.sql.",
   );
 try {
   await run(["docker", "build", "--target", "test", "-t", "tarubot-test:local", "."]);
@@ -51,7 +52,7 @@ try {
     "test",
     "tests",
   ]);
-  await run(["docker", "cp", "tarubot_backup.sql", `${container}:/app/tarubot_backup.sql`]);
+  await run(["docker", "cp", fixture, `${container}:/app/tarubot_backup.sql`]);
   await run(["docker", "start", "-a", container]);
   const exit = await run(["docker", "inspect", "--format", "{{.State.ExitCode}}", container], true);
   if (exit !== "0") throw new Error(`Container tests failed (${exit})`);

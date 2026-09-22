@@ -1,4 +1,4 @@
-/** Real PostgreSQL invariants/recovery with the supplied SQL input and controlled external effects. */
+/** Real PostgreSQL invariants/recovery with supplied or synthetic SQL and controlled external effects. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -26,9 +26,11 @@ import { dispatcher } from "../../src/jobs/dispatch.js";
 const url = process.env.TEST_DATABASE_URL;
 // These tests deliberately recreate a disposable schema; production connections are rejected below.
 const sourceText = url
-  ? await Bun.file(new URL("../../tarubot_backup.sql", import.meta.url)).text()
+  ? await Bun.file(
+      process.env.LEGACY_FIXTURE_PATH ?? new URL("../../tarubot_backup.sql", import.meta.url),
+    ).text()
   : "";
-describe.skipIf(!url)("PostgreSQL invariants and supplied migration fixture", () => {
+describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", () => {
   if (!url) return;
   if (!new URL(url).pathname.endsWith("_test"))
     throw new Error("TEST_DATABASE_URL must point to a disposable database ending in _test.");
@@ -201,7 +203,7 @@ describe.skipIf(!url)("PostgreSQL invariants and supplied migration fixture", ()
   afterAll(async () => {
     await db.close();
   });
-  test("actual dump reconciles counts, opening states and exact configured balance", async () => {
+  test("selected dump reconciles counts, opening states and exact configured balance", async () => {
     const row = (
       await db.query<{
         fc: bigint;
