@@ -11,8 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: true
+  # Distinct release SHAs must finish independently, including when several merges arrive together.
+  group: publish-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -85,6 +86,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Only mutable latest promotion is serialized; version/SHA publication has already completed.
+    concurrency:
+      group: ghcr-latest
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write

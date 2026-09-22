@@ -22,3 +22,12 @@ test("tag publication requires the exact manifest version", () => {
     "Release tag",
   );
 });
+
+test("publishable SemVer maps exactly to an unambiguous Docker tag", () => {
+  expect(() => checkRelease("2.8.1+build.5", null, "", "## 2.8.1+build.5\n")).toThrow(
+    "build metadata",
+  );
+  const long = `2.8.1-${"a".repeat(128)}`;
+  expect(() => checkRelease(long, null, "", `## ${long}\n`)).toThrow("128-character");
+  expect(checkRelease("2.8.1-build.5", null, "", "## 2.8.1-build.5\n")).toBe("2.8.1-build.5");
+});

@@ -21,6 +21,11 @@ export function checkRelease(
   changelog: string,
 ): string {
   validateVersion(version);
+  // Docker tags cannot contain SemVer build metadata, and silently sanitizing it creates collisions.
+  if (version.includes("+") || version.length > 128)
+    throw new Error(
+      "Published versions must omit build metadata and fit Docker's 128-character tag limit.",
+    );
   if (previous !== null && Bun.semver.order(version, validateVersion(previous)) <= 0)
     throw new Error("Every change set must increment package.json above its base version.");
   if (ref.startsWith("refs/tags/") && ref !== `refs/tags/v${version}`)

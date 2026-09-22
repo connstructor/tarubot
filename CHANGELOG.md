@@ -1,6 +1,12 @@
 # Version history
 
-The current application version is **2.8.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.8.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.8.3 — Release publication review fixes
+
+- Isolate publication and reusable verification by commit SHA so new merges cannot cancel an older version's image builds.
+- Serialize only the mutable latest-tag promotion, retaining its current-main guard.
+- Reject build metadata and oversized release versions instead of silently changing or colliding Docker tags.
 
 ## 2.8.2 — CodeQL and project licensing
 
@@ -54,6 +60,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.8.0 | Pull-request validation and GHCR container delivery |
 | 2.8.1 | Bounded subprocess/worker test budgets for emulated image builds |
 | 2.8.2 | CodeQL merge-gate integration and AGPL-3.0 licensing |
+| 2.8.3 | Non-cancelling release publication and exact registry version tags |
 
 ## Increment policy
 

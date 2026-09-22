@@ -9,7 +9,9 @@
 
 Actions are pinned to full commits. Checkouts include the exact Nodestone submodule revision and do not persist checkout credentials. Registry login uses the workflow's `GITHUB_TOKEN`; no stored publishing PAT or Discord/database production credentials are needed by CI.
 
-The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag can publish a release snapshot. Only `main` advances `latest`, so publishing an older tag cannot move that tag backward. Version tags must match the manifest; PR/main changes must advance the base version.
+The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag can publish a release snapshot. Only `main` advances `latest`, so publishing an older tag cannot move that tag backward. Version tags must match the manifest; PR/main changes must advance the base version. Published versions omit SemVer build metadata (`+...`) and fit Docker's 128-character tag limit so their registry tag is exactly the manifest version.
+
+Distinct source commits have independent, non-cancelling publication and reusable-CI concurrency groups. This avoids discarding an older version when merges arrive during a build. Only latest-tag promotion is serialized, after version/SHA images have completed; its current-main check prevents stale runs from moving latest backward.
 
 ## Published images and tags
 
@@ -21,7 +23,7 @@ The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag 
 Both images support AMD64 and ARM64. Each successful publication supplies:
 
 - `latest` for the newest passing `main` publication.
-- The manifest SemVer, for example `2.8.2`.
+- The manifest SemVer, for example `2.8.3`.
 - `sha-FULL_COMMIT_SHA` for the exact published source commit.
 
 OCI labels identify source, revision, and version. Build provenance and SBOM attestations accompany the images. Both versioned images must publish successfully before the final job advances their `latest` tags. Registry tag changes are separate operations; use a shared version/SHA tag when selecting an exact matched pair.
@@ -39,7 +41,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.2` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
+The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.3` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
 
 Fresh installations still need explicit schema migration and command registration; see [README.md](../README.md#configure-and-start). Follow the migration runbook when an upgrade changes the schema. Image publication does not automatically restart deployment hosts or modify their databases.
 
