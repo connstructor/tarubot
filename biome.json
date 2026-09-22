@@ -1,0 +1,22 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.cache",
+      "!**/dist",
+      "!**/artifacts",
+      "!**/bun.lock",
+      "!tarubot_backup.sql",
+      "!REQUIREMENTS.md"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
+  "linter": {
+    "enabled": true,
+    "rules": { "style": { "noCommonJs": "error" }, "suspicious": { "noExplicitAny": "error" } }
+  },
+  "assist": { "enabled": false }
+}

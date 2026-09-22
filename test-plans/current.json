@@ -1,0 +1,22 @@
+{
+  "title": "Session: existing-role reuse and a consecutive hierarchy",
+  "objective": "Reuse the original Member and Guest role IDs, preserve their permissions and eligible holders, and keep FC Leader > Officer > Member > Guest in one uninterrupted block with separate member-list display enabled.",
+  "user": [
+    "Open Server Settings > Roles: confirm DevBot FC Leader > DevBot Officer > DevBot Member > DevBot Guest are consecutive, with no unrelated roles between them.",
+    "Confirm the renamed Member retains ID 1042089882677420172 and Guest retains ID 1042089887798677545. These are the original roles.",
+    "Check all four have separate member-list display enabled, and both verified FC members retain Member access after the duplicate roles are removed.",
+    "Run DevBot's `/config validate` and `/sync status`; report any role-layout failure. Replies remain public here.",
+    "Report any mismatch in the role list or member grouping. The guild owner's nickname limitation is still expected."
+  ],
+  "assistant": [
+    "Rebind setup to the original Member and Guest IDs, rename them consistently, and verify permissions and member assignments survive.",
+    "Remove only the two obsolete roles created by the earlier setup once their holders and channel references are clear.",
+    "Verify adjacent hierarchy positions, hoist flags, no-op convergence, readiness, and this startup announcement; record the corrected results."
+  ],
+  "bot": [
+    "Reuse configured or uniquely matching canonical roles during setup, including existing unprefixed Member and Guest roles.",
+    "Arrange all configured roles in one consecutive FC Leader > Officer > Member > Guest block, preserving unrelated roles' relative order.",
+    "Verify the complete hierarchy after writes, keep separate member-list display enabled, and skip writes once the block is correct.",
+    "Reconcile current role bindings from accepted evidence and expose queued or blocked work through `/sync status`."
+  ]
+}

@@ -1,0 +1,13 @@
+# Development overlay: DevBot uses its own database while sharing local dependency services.
+# Apply with: docker compose -f docker-compose.yml -f docker-compose.devbot.yml ...
+services:
+  tarubot:
+    # Session plans are editable without rebuilding code; startup reads the current file.
+    volumes:
+      - ./test-plans:/app/test-plans:ro
+    environment:
+      DATABASE_URL: postgresql://tarubot:${POSTGRES_PASSWORD}@postgres:5432/tarubot_dev
+      # A development launch must never fall back to unrestricted guild scope.
+      TEST_GUILD_ID: ${TEST_GUILD_ID:?Set TEST_GUILD_ID for DevBot}
+      # Development observers requested public command/button output in this scoped test guild.
+      PUBLIC_TEST_RESPONSES: ${PUBLIC_TEST_RESPONSES:-true}

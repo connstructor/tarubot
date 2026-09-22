@@ -1,0 +1,86 @@
+# DevBot live test session
+
+## Identity and deployment
+
+- Application/bot: **DevBot**, `943291473477128243`.
+- Test guild: **TaruBot Development**, `1040379370159743139`.
+- The other application in this guild is **TaruBot**, `965294750741692416`.
+- DevBot's isolated PostgreSQL database is `tarubot_dev`.
+- `docker-compose.devbot.yml` supplies the development database and requires explicit test-guild scope.
+
+Use the development overlay consistently for this running instance:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.devbot.yml up -d --wait tarubot nodestone
+docker compose -f docker-compose.yml -f docker-compose.devbot.yml logs -f tarubot
+```
+
+The Compose service is named `tarubot`; its actual Discord identity comes from the configured application/token and is checked on startup.
+
+## Completed on 2026-09-22
+
+- Authenticated identity matched the configured DevBot application.
+- Guild-only registration produced 16 root commands and all 33 expected paths. Readback matched command ownership, guild scope, and default permissions.
+- Gateway login and complete privileged member enumeration succeeded: one human and the two separate bots.
+- After the owner moved DevBot's role to the top, the existing Member/Guest role definitions and hierarchy passed read-only validation.
+- In `#dev`, a message authored by DevBot was sent, fetched, edited, and deleted. The probe checked message ownership before editing/deleting it.
+- The bot restarted into ready state with both database and Discord connectivity healthy.
+- The sidecar reported both deployed upstream revisions current against their repositories' HEADs.
+- Human-invoked `/ping` returned `discordGatewayLatencyMs: 72`, confirming a live gateway latency response through the discovered command handler.
+- Human-invoked `/channel` returned channel `1040379370931507252`, name `chat`, and type `GuildText`, matching the test guild's channel metadata.
+- The owner confirmed that both utility replies were ephemeral.
+- Human-invoked `/config show` returned the expected unconfigured-guild setup instruction (operation `1551950477652918342`). A database check confirmed the read-only command created no guild configuration.
+- After the owner set `ENABLE_EFFECTS=true`, the development container was recreated and its readiness probe confirmed `effects: true`, with database and Discord connectivity healthy.
+- The setup/rank extension was migrated and deployed. Guild-scoped readback now matches 18 root commands and 39 command paths, including `/setup`, `/officer`, and officer-rank configuration.
+- The startup plan was posted by DevBot in `#chat`, with separate **You**, **Me**, and **DevBot** action sections: message `1551970559120642221`.
+- A fresh complete live roster exposed the FC rank names and a unique master marker: 105 members, with the leader's custom rank title `Fussy Bunbun` and the officer rank `Officer`.
+- The latest guild enumeration includes five humans and the two bots, so non-owner nickname test participants are now available.
+- Live `/setup` created all four DevBot roles; a second invocation reused the identical IDs with `created: false` for every role. Both decisions were confirmed in the guild audit records.
+- `/config validate` confirmed all four managed roles and all three notification destinations available, with global and guild effects enabled. Officer-rank mapping is `Officer`.
+- Refresh run `236bb6fc-3780-443d-8b86-43476835b9df` reused fresh roster evidence, completed guild enumeration plus five human reconciliation jobs, and finished with six successful jobs, no blocked/failed work, and no role deltas.
+- The accepted snapshot at `2026-09-22T15:33:15.264Z` contains 105 distinct members, one leader, and six characters with FC rank `Officer`. At the end of setup there were no active DevBot character links, so withholding membership-derived roles was correct.
+- The requested public test-guild reply policy was deployed. Readiness reports `publicTestResponses: true`; scoped visibility tests passed. A human repeat command can confirm channel-visible interaction delivery.
+- Restart posted the updated character-verification plan in `#chat` as message `1551983447013064705`, with separate You/Me/DevBot responsibilities.
+- Shion Tsuji (`38371223`) completed profile-token verification after an initial publication-delay result. Link `4da8b599-533f-4d63-aa5f-26a670bff5e7` is active with `profile_token` provenance; the challenge was consumed and only its hash was persisted. The proof token is deliberately excluded from this log.
+- Discord readback confirmed **DevBot Member** and **DevBot FC Leader** on the verified owner, alongside the pre-existing Member role. The accepted FC rank is `Fussy Bunbun`; the configured `Officer` rank did not match.
+- The verified user is the guild owner. Nickname delivery is correctly blocked by Discord hierarchy, while roles are applied and ownership remains committed.
+- Successful verification responses were visible through the ordinary `#chat` message API with flags `0`, confirming the requested public response behavior.
+- The role-layout build passed 66 automated tests and was deployed with the development overlay. Startup posted the role-hierarchy/member-list plan as message `1551994024498303009` in `#chat`, with flags `0` and all three responsibility sections.
+- Live Discord readback confirmed all four configured roles have `hoist: true` and the intended priority below DevBot. Unrelated roles retained their relative order and separate-display settings; the verified owner retained both DevBot roles and the existing Member role.
+- Layout job `7c5d1498-2db8-4caa-abfb-0a90d241b829` coalesced its role-event echoes and succeeded after two passes. Follow-up job `1ad404bb-6dd9-41c2-a367-340a0faf6657` succeeded with empty hoist/position deltas, confirming convergence.
+- The startup role events briefly rate-limited complete member enumeration. Durable retries recovered: job `b43dcbaf-9755-400c-a3d3-20acb6fc34d7` completed all five humans. Final readiness showed zero pending work and zero degraded FCs; the only blocked effect was the expected guild-owner nickname update.
+
+### Verified role layout
+
+Read back after the 2026-09-22 role-layout deployment. Higher positions take priority; DevBot's own role is at position 8.
+
+| Managed role | ID | Position | Separate member-list display |
+| --- | --- | --- | --- |
+| DevBot FC Leader | `1551979217087103137` | 7 | Enabled |
+| DevBot Officer | `1551979211391115405` | 5 | Enabled |
+| DevBot Member | `1551979199554912286` | 3 | Enabled |
+| DevBot Guest | `1551979205183406210` | 1 | Enabled |
+
+Unrelated roles remain interleaved in their existing relative order. The latest session announcement is [available in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1551994024498303009).
+
+Repeat the scoped probes with:
+
+```sh
+bun run build
+bun dist/scripts/discord-inspect.js
+bun dist/scripts/discord-smoke.js --member-role 1042089882677420172 --guest-role 1042089887798677545
+```
+
+Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the temporary bot-owned message test in `#dev`.
+
+## Human interaction checks
+
+Setup, idempotent role reuse, resource validation, complete cached reconciliation, and Shion Tsuji's real profile-token verification have passed. Member and FC Leader delivery, role order, and hoist flags are confirmed by Discord readback. The current plan asks testers to confirm the visible member-list grouping and prepares non-owner nickname testing. See `test-plans/current.json` and the latest plan in `#chat`.
+
+The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
+
+The owner requested public output for observers in this development server. The DevBot Compose overlay enables `PUBLIC_TEST_RESPONSES` by default; new slash-command, component, and error replies in the configured test guild are public. Authorization still applies to every operation. Visibility is selected when Discord acknowledges an interaction, so the setting applies to new replies after deployment.
+
+DevBot still has **Administrator**. Functional probes succeeded under that permission; validating the intended minimum-permission deployment requires disabling Administrator and granting Manage Roles, Manage Nicknames, and the documented channel permissions explicitly.
+
+Discord forbids bots from changing the owner's nickname regardless of role order. Choose one of the non-owner human participants for successful nickname-write tests; the owner's expected blocked outcome can be tested separately.

@@ -1,0 +1,10 @@
+{
+  "nodestone-upstream": {
+    "repository": "xivapi/nodestone",
+    "revision": "5b7eec64008ba40175ac0ff24f7f44ee1093f77e"
+  },
+  "lodestone-css-selectors": {
+    "repository": "xivapi/lodestone-css-selectors",
+    "revision": "1e9dd659b5d518150f2a793139b3f7167d739e9b"
+  }
+}

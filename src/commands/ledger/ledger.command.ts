@@ -1,0 +1,83 @@
+/** Ledger presentation and selection; exact accounting and authorization stay transactional. */
+import { z } from "zod";
+import { applicationKey } from "../../application/keys.js";
+import { defineCommand } from "../../bot/command.js";
+import { command, string } from "../../discord/options.js";
+import { dataReply } from "../../discord/replies.js";
+import { id } from "../../domain/values.js";
+
+const data = command("ledger", "Exact, human-maintained FC gil ledger");
+for (const name of ["deposit", "withdraw"])
+  data.addSubcommand((sub) =>
+    sub
+      .setName(name)
+      .setDescription(`Record a gil ${name}`)
+      .addIntegerOption((option) =>
+        option
+          .setName("amount")
+          .setDescription("Gil amount")
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(999999999),
+      )
+      .addStringOption(string("note", "Transaction explanation", true)),
+  );
+for (const name of ["initialize", "adjust"])
+  data.addSubcommand((sub) => {
+    sub
+      .setName(name)
+      .setDescription(
+        name === "initialize"
+          ? "Initialize an unknown opening balance"
+          : "Append a correction to a target balance",
+      )
+      .addStringOption(string("balance", "Nonnegative exact decimal balance", true))
+      .addStringOption(string("note", "Required explanation", true));
+    if (name === "adjust") sub.addStringOption(string("entry", "Optional corrected entry ID"));
+    return sub;
+  });
+for (const name of ["balance", "history"])
+  data.addSubcommand((sub) => {
+    sub
+      .setName(name)
+      .setDescription(`Inspect ledger ${name}`)
+      .addStringOption(string("fc_id", "Officers may select a historical FC account"));
+    if (name === "history")
+      sub.addStringOption(string("before", "Sequence cursor from the preceding page"));
+    return sub;
+  });
+
+export default defineCommand({
+  data,
+  requires: [applicationKey],
+  async execute({ actor, interaction, services }) {
+    const app = services.get(applicationKey);
+    const options = interaction.options;
+    const sub = options.getSubcommand(true);
+    if (sub === "balance" || sub === "history")
+      return dataReply(
+        await app.ledgerRead(
+          actor,
+          options.getString("fc_id") ? id(options.getString("fc_id", true)) : null,
+          options.getString("before"),
+          sub === "history",
+        ),
+      );
+    const amount =
+      sub === "deposit" || sub === "withdraw"
+        ? options.getInteger("amount", true)
+        : options.getString("balance", true);
+    const correction = options.getString("entry");
+    // Discord's interaction ID is the stable financial idempotency key for retries.
+    return dataReply(
+      await app.ledger(
+        actor,
+        sub,
+        amount,
+        options.getString("note", true),
+        interaction.id,
+        correction ? z.uuid().parse(correction) : null,
+      ),
+    );
+  },
+});

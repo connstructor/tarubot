@@ -1,0 +1,11 @@
+[run]
+# Honor Bun throughout even when a dependency tool's shebang names Node.
+bun = true
+
+[install]
+# Pin direct additions exactly; the lockfile also fixes transitive resolutions.
+exact = true
+
+[install.cache]
+# Keep dependency working artifacts inside the project.
+dir = ".cache/bun"

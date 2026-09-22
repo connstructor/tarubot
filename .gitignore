@@ -1,0 +1,19 @@
+# Dependencies and generated output are reproducible from source and bun.lock.
+node_modules/
+.cache/
+dist/
+coverage/
+# Local coding-tool state is not part of the application.
+.serena/
+# Runtime secrets are local; the documented example is intentionally tracked.
+.env
+.env.*
+!.env.example
+# Captures, reports, and diagnostics may contain guild-owned operational information.
+artifacts/
+# The supplied database dump is a local migration fixture and may contain private records.
+tarubot_backup.sql
+*.dump
+*.backup
+*.log
+.DS_Store

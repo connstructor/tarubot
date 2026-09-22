@@ -1,0 +1,149 @@
+# TaruBot
+
+A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies character ownership through Lodestone biographies, reconciles FC access from complete roster observations, manages guest applications and nicknames, and maintains an exact, transactional gil ledger.
+
+## Stack
+
+| Component | Pinned version |
+| --- | --- |
+| Bun | 1.4.2 |
+| TypeScript | 7.0.2 |
+| Discord.js | 14.27.0 |
+| PostgreSQL | 18.4 |
+
+The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar. Its source dependencies follow upstream HEAD; each checked build records its exact resolved code and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
+
+The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
+
+```sh
+bun run nodestone:check
+bun run nodestone:update --deploy
+```
+
+For unattended deployments, schedule the update-and-deploy command from this project directory. A normal container restart uses its existing image; the update workflow rebuilds the parser and selector assets.
+
+## Modular commands and events
+
+Add a `*.command.ts` under `src/commands/`, a `*.event.ts` under `src/events/`, or a `*.component.ts` under `src/components/`. Discovery is recursive. Each command keeps its definition, execution, and autocomplete together; event modules have typed Discord arguments and independent handler IDs. Both runtime and command deployment use the same discovered inventory.
+
+`src/bot/` provides the general module contracts, typed service registry, loader, and router. Modules can use Discord directly or declare injected capabilities. `src/main.ts` is the composition root. Builds clean generated output so removed modules cannot linger in production.
+
+See [MODULES.md](docs/MODULES.md) for complete command/event/component examples and service injection, and [CONFIGURATION.md](docs/CONFIGURATION.md) for configuration-code commentary.
+
+## Install and check
+
+Run these commands from this directory:
+
+```sh
+bun install --frozen-lockfile
+bun run build
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test:unit
+bun run test:contract
+bun run test:docker
+```
+
+`test:docker` creates a uniquely named disposable PostgreSQL project, copies the supplied SQL fixture into an ephemeral test container, runs the full test suite, and removes its test containers and volume. It requires Docker and `tarubot_backup.sql`. Container images exclude the SQL backup, local environment files, repository metadata, caches, and import reports.
+
+For an existing **disposable** test database whose name ends in `_test`:
+
+```sh
+TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/tarubot_test bun run test:integration
+```
+
+The integration suite recreates that test database's `public` schema. Tests use controlled Discord/Lodestone fixtures and real PostgreSQL; live Discord acceptance is described in [VERIFICATION.md](docs/VERIFICATION.md).
+
+## Discord setup
+
+1. Create a development Discord application and install it in the test guild. Production cutover reuses the existing production application.
+2. Enable **Server Members Intent**. The application uses `Guilds` and `GuildMembers` gateway intents.
+3. Install with the `bot` and `applications.commands` scopes.
+4. Grant the bot **Manage Roles**, **Manage Nicknames** when nicknames are enabled, and **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in configured channels. Keep bot **Administrator** disabled.
+5. Place its role above the member and guest roles and the members whose nicknames it will manage. Member/guest roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles.
+6. Officers use effective **Manage Server** permission. Selecting/clearing access roles also requires **Manage Roles**; selection respects the officer's role hierarchy.
+
+All commands are guild-only. Responses use the declared privacy defaults, with public replies enabled for the observed DevBot test guild through `PUBLIC_TEST_RESPONSES`. Review/ledger/officer messages go to their configured destinations. Notifications default to no parsed mentions.
+
+## Configure and start
+
+Create `.env` using `.env.example` and supply the token, application ID, and database password. Use a URL-safe PostgreSQL password; set the same credential in `DATABASE_URL` for local tools. Tokens are runtime configuration.
+
+```sh
+docker compose build
+docker compose up -d --wait postgres nodestone
+docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
+docker compose run --rm --no-deps tarubot bun dist/scripts/register.js --guild YOUR_TEST_GUILD_ID
+```
+
+For a fresh test guild, set `TEST_GUILD_ID` and `ENABLE_EFFECTS=true`, then:
+
+```sh
+docker compose up -d tarubot
+docker compose logs -f tarubot
+```
+
+The configured **DevBot** test session uses `docker-compose.devbot.yml` and its own `tarubot_dev` database. See [DEV_GUILD.md](docs/DEV_GUILD.md) for its exact launch commands and completed live checks.
+
+Use `/config fc link`, `/config roles member`, `/config roles guest`, and the three notification-channel configuration commands. `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles.
+
+`/setup` can create or reuse Member, Guest, Officer, and FC Leader roles in one operation. An optional in-game officer rank enables automatic bot-only Officer access; explicit manager grants/revocations are also supported. See [SETUP.md](docs/SETUP.md).
+
+Every development startup posts the current responsibility-separated session plan to `#chat`. Update `test-plans/current.json` for the next session; see [TEST_PLANS.md](docs/TEST_PLANS.md).
+
+For the supplied legacy data, follow the [migration runbook](docs/MIGRATION.md) before enabling effects. An imported guild has its own persisted activation flag as well as the process-wide `ENABLE_EFFECTS` setting.
+
+To run the compiled bot or one-shot tools locally, publish loopback-only dependency ports explicitly:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --wait postgres nodestone
+bun run build
+bun run start
+```
+
+The normal Compose configuration keeps dependency ports private. Use a separate database and development application for test-guild work.
+
+## Daily use
+
+- `/claim` resolves an ID/profile URL or an exact full-name/world match. Put its proof token in the public biography, then use `/verify`. Tokens expire after 30 minutes by default.
+- `/characters`, `/main`, and `/nickname` manage local identity preferences. Existing-link operations use stored IDs and work during Lodestone outages.
+- Imported users select `/main character:ID` and `/nickname enabled:true` explicitly to opt in to nicknames.
+- `/refresh` returns an inspectable run ID; `/sync status` reports durable work. Officer-only `force:true` bypasses freshness while retaining rate limits and locks.
+- `/apply` opens a durable guest application. Officers can use its persistent review buttons or `/guest approve` and `/guest deny`. `/guest grant` and `/guest revoke` record explicit access decisions.
+- `/ledger deposit`, `/ledger withdraw`, `/ledger initialize`, and `/ledger adjust` require notes. `/ledger balance` and `/ledger history` expose immutable entries and notification delivery state.
+- A confirmed departure requires two complete accepted observations at least 60 seconds apart. Former-member guest eligibility is scoped to the currently linked FC. Explicit revocation overrides guest eligibility; FC membership takes precedence.
+
+## Operations
+
+| Script | Purpose |
+| --- | --- |
+| `bun run db:migrate` | Apply checksum-verified, serialized migrations |
+| `bun run commands:register --guild ID` | Reconcile test-guild commands to the declared inventory |
+| `bun run commands:register --global` | Reconcile production commands during cutover |
+| `bun run snapshot --dump FILE --output FILE` | Capture complete human membership, roles, join contexts, and nicknames |
+| `bun run import:legacy --file FILE --dry-run` | Read-only SQL validation and mapping report |
+| `bun run import:legacy --file FILE --snapshot FILE` | Atomically publish a validated legacy import |
+| `bun run roster:acquire GUILD_ID` | Acquire/publish a complete roster during a maintenance window |
+| `bun run preview GUILD_ID` | Read-only role/nickname reconciliation preview |
+| `bun run activate GUILD_ID` | Validate resources and enable an imported guild's effects |
+| `bun run jobs:retry GUILD_ID JOB_ID` | Retry delivery independently of a committed decision |
+
+One-shot commands execute compiled scripts; run `bun run build` after source changes. The equivalent container commands use `bun dist/scripts/NAME.js`.
+
+Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, and Discord connectivity. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations. The sidecar exposes `/health` on port 8080.
+
+The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs, and outbox deliveries remain in PostgreSQL across restarts. [Recovery and backup procedures](docs/OPERATIONS.md) explain inspection, retries, and restoration.
+
+## Layout
+
+- `src/domain`: identifiers, exact money, authorization, access and transition policy.
+- `src/application`: transactional operations and reconciliation.
+- `src/bot`: reusable module discovery, contracts, service injection, and interaction dispatch.
+- `src/commands`, `src/events`, `src/components`: independently loaded feature adapters.
+- `src/discord`: Discord effects, shared option builders, selectors, and reply presentation.
+- `src/infrastructure`: PostgreSQL and typed Nodestone HTTP adaptation.
+- `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
+- `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
+- `sidecar`: Nodestone worker isolation, source compatibility transformations, and transport controls.
+- `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.

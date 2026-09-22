@@ -1,0 +1,15 @@
+# Omit repository metadata and local build/test working state.
+.git
+**/.git
+.serena
+.cache
+node_modules
+dist
+coverage
+artifacts
+# Credentials and legacy inputs enter only at runtime/cutover, never through image layers.
+.env
+.env.*
+tarubot_backup.sql
+*.log
+.DS_Store
