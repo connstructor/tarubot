@@ -9,11 +9,14 @@ import {
   lifecycleKey,
   synchronizationKey,
   roleAdministrationKey,
+  versionInformationKey,
 } from "./application/keys.js";
 import { ApplicationLifecycle } from "./application/lifecycle.js";
 import { Service } from "./application/service.js";
 import { Synchronization } from "./application/synchronization.js";
 import { RoleAdministration } from "./application/role-administration.js";
+import { VersionInformation } from "./application/version-information.js";
+import { GitHubHistory } from "./infrastructure/github/client.js";
 import type { BotContext } from "./bot/context.js";
 import { bindEvents, loadCommands, loadComponents, loadEvents } from "./bot/discovery.js";
 import { InteractionRouter, interactionRouterKey } from "./bot/router.js";
@@ -63,6 +66,7 @@ const services = new Services()
   .provide(databaseKey, db)
   .provide(gatewayKey, gateway)
   .provide(roleAdministrationKey, new RoleAdministration(app, gateway))
+  .provide(versionInformationKey, new VersionInformation(new GitHubHistory()))
   .provide(guildEventsKey, new GuildEvents(db))
   .provide(lifecycleKey, lifecycle);
 const context: BotContext = {

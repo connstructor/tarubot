@@ -6,6 +6,8 @@
 
 ### Approved implementation amendments (2026-09-21)
 
+The owner requested `/version [commits]` for any guild user. It displays the installed SemVer and the latest requested number of GitHub commit IDs, links, and titles from `connstructor/tarubot`; show ✅ next to an ID only when GitHub confirms its signature is valid and verified. Default to five commits and bound requests to ten. Record versioned development milestones and retain local version output when GitHub is unavailable.
+
 The owner requested non-ephemeral output in the development server so other testers can observe the session. `PUBLIC_TEST_RESPONSES` overrides response visibility for the configured test guild, including command/component success and error replies. Operation authorization and other guilds' default presentation policy remain independently enforced.
 
 The owner additionally requested a development startup announcement in `#chat`, containing the current session's actions grouped by human tester, coding assistant, and bot. The owner requested `/setup` to create/reuse Member, Guest, Officer, and FC Leader roles; the Officer role grants bot-only officer-command access. An optional configured in-game FC rank may derive Officer eligibility from accepted roster evidence. Explicit officer grants/revocations and changes to this authority mapping require a server manager with Manage Roles. This is a specific extension of the original rank-mapping scope, not a general arbitrary role-mapping system.
@@ -219,6 +221,7 @@ For set/clear commands, require exactly one of a value or `clear: true`. Validat
 | `/ledger adjust balance note [entry]` | Officer | Append a correction bringing the recorded balance to the specified value; optionally reference the corrected entry. |
 | `/ping` | Guild user | Report Discord gateway latency with an appropriate label. |
 | `/channel` | Guild user | Report the current channel's ID, name, and type. |
+| `/version [commits]` | Guild user | Show the installed SemVer and recent GitHub commit IDs, links, titles, and verified-signature badges. |
 
 **UX-01.** Bound input sizes and honor Discord message, embed, autocomplete, and component limits. Escape user-controlled display content and set an explicit allowed-mentions policy, defaulting to no parsed mentions. Authorize any intended recipient mention separately from user-supplied text.
 

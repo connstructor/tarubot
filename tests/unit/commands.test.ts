@@ -73,6 +73,7 @@ test("command inventory exactly matches the declared public surface", async () =
       "ledger adjust",
       "ping",
       "channel",
+      "version",
     ].sort(),
   );
 });

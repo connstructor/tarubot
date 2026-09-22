@@ -1,22 +1,22 @@
 {
-  "title": "Session: existing-role reuse and a consecutive hierarchy",
-  "objective": "Reuse the original Member and Guest role IDs, preserve their permissions and eligible holders, and keep FC Leader > Officer > Member > Guest in one uninterrupted block with separate member-list display enabled.",
+  "title": "Session: version and verified GitHub history",
+  "objective": "Check /version for all guild members: installed version 1.7.0, bounded recent GitHub history, linked commit IDs and titles, and green checkmarks only for verified signatures.",
   "user": [
-    "Open Server Settings > Roles: confirm DevBot FC Leader > DevBot Officer > DevBot Member > DevBot Guest are consecutive, with no unrelated roles between them.",
-    "Confirm the renamed Member retains ID 1042089882677420172 and Guest retains ID 1042089887798677545. These are the original roles.",
-    "Check all four have separate member-list display enabled, and both verified FC members retain Member access after the duplicate roles are removed.",
-    "Run DevBot's `/config validate` and `/sync status`; report any role-layout failure. Replies remain public here.",
-    "Report any mismatch in the role list or member grouping. The guild owner's nickname limitation is still expected."
+    "Run DevBot's `/version`. Confirm the heading shows v1.7.0 and up to five recent commits from connstructor/tarubot.",
+    "Run `/version commits:1` and `/version commits:10`. Check the result count and that every displayed commit ID opens its GitHub commit.",
+    "Compare the green checkmarks with GitHub's Verified status. A signed but unverified commit must not receive a green checkmark.",
+    "Have an ordinary non-officer guild member run `/version` to confirm access. Replies remain public in this development guild.",
+    "Send me the output or a screenshot. GitHub history may be cached for up to five minutes and reflects published commits on main."
   ],
   "assistant": [
-    "Rebind setup to the original Member and Guest IDs, rename them consistently, and verify permissions and member assignments survive.",
-    "Remove only the two obsolete roles created by the earlier setup once their holders and channel references are clear.",
-    "Verify adjacent hierarchy positions, hoist flags, no-op convergence, readiness, and this startup announcement; record the corrected results."
+    "Verify command registration, compiled version identity, commit-count bounds, GitHub links, and signature-badge mapping.",
+    "Check controlled outage, rate-limit, malformed-response, and unsigned/unverified fixtures; the local version must stay visible.",
+    "Record deployment and test results, commit the verified implementation, and summarize remaining requirement-delivery work."
   ],
   "bot": [
-    "Reuse configured or uniquely matching canonical roles during setup, including existing unprefixed Member and Guest roles.",
-    "Arrange all configured roles in one consecutive FC Leader > Officer > Member > Guest block, preserving unrelated roles' relative order.",
-    "Verify the complete hierarchy after writes, keep separate member-list display enabled, and skip writes once the block is correct.",
-    "Reconcile current role bindings from accepted evidence and expose queued or blocked work through `/sync status`."
+    "Show its installed SemVer from the compiled package manifest.",
+    "Fetch recent commits from GitHub with bounded, cached requests; show titles and linked short commit IDs.",
+    "Add ✅ next to an ID only when GitHub reports a valid verified signature.",
+    "Keep version information available with a useful message if GitHub history is unavailable."
   ]
 }

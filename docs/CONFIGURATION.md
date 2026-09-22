@@ -22,6 +22,8 @@ Nodestone uses the `vendor/nodestone` Git submodule through a local `file:` depe
 
 ## `tsconfig.json`
 
+`resolveJsonModule` includes the package manifest in compiled output. `/version` uses that build-local copy, so its reported SemVer identifies the deployed application. The source manifest and [CHANGELOG.md](../CHANGELOG.md) define the version policy and milestone numbering.
+
 | Option | Reason |
 | --- | --- |
 | `target: ESNext` | Emit modern JavaScript supported by pinned Bun |

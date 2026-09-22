@@ -7,6 +7,7 @@ import { ApplicationLifecycle } from "./lifecycle.js";
 import { Service } from "./service.js";
 import { Synchronization } from "./synchronization.js";
 import { RoleAdministration } from "./role-administration.js";
+import { VersionInformation } from "./version-information.js";
 
 /** Runtime guards keep dependency retrieval safe even for dynamically imported modules. */
 export const applicationKey = new ServiceKey(
@@ -37,4 +38,9 @@ export const gatewayKey = new ServiceKey(
 export const roleAdministrationKey = new ServiceKey(
   "role administration",
   (value): value is RoleAdministration => value instanceof RoleAdministration,
+);
+/** GitHub history is a read-only capability, independently replaceable in verification tools. */
+export const versionInformationKey = new ServiceKey(
+  "project version information",
+  (value): value is VersionInformation => value instanceof VersionInformation,
 );

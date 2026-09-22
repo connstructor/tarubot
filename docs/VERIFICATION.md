@@ -21,9 +21,11 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
-The current implementation passes **74 tests**: 38 unit, 11 contract, and 25 PostgreSQL integration tests (**308 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 39 paths across 18 root commands; runtime discovery includes 11 event modules.
+The current **1.7.0** implementation passes **82 tests**: 41 unit, 16 contract, and 25 PostgreSQL integration tests (**351 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 40 paths across 19 root commands; runtime discovery includes 11 event modules.
 
 Coverage includes repeat setup, server-manager boundaries, rank-derived officer access, explicit revocation precedence, indirect-delegation prevention, custom leader titles, complete responsibility-separated session messages, and scoped public replies. Layout regressions cover consecutive blocks, full-hierarchy readback rejecting interleaving, partial configurations, unrelated-role ordering, Discord's tied raw positions, effect activation, mutual exclusion with setup, configuration revision fencing, self-generated role-event convergence, and refresh child-job accounting. Role-selection tests cover canonical names across prefixes, explicit configured IDs, ambiguous/deleted bindings, and SDK-backed reuse/renaming without recreating roles or changing permissions.
+
+Version-command coverage verifies ordinary-user access, count bounds, compiled manifest identity, canonical commit links, verified-signature badges, Unicode/Markdown embed limits, shared request caching, and version availability during GitHub rate limits, transport errors, and malformed responses.
 
 The Nodestone submodule integration passed the explicit HEAD-update workflow, local builds, and both runtime image builds with frozen-lockfile installation. A fresh `--recurse-submodules` clone independently passed frozen installation, compilation, type checking, and all 38 unit/11 contract tests, leaving both repositories clean. Parser fingerprint tests cover absent initialization, changed source/manifest inputs, and Git-free Docker validation. The upstream checkout remained clean at its recorded commit. The deployed sidecar reported ready and current against both upstream repositories.
 
@@ -54,7 +56,7 @@ The supplied dump is a migration acceptance fixture, supplied to test containers
 | AC-20 | Lease fencing and durable-decision retry tests; operational process restart/recovery rehearsal |
 | AC-21 | Compiled-parser error fixtures, concurrency/spacing, actual transport cancellation and worker termination |
 | AC-22 | Clean Docker builds, Compose validation, PostgreSQL volume recreation and backup/restore rehearsal; live Discord reconnect smoke |
-| AC-23 | Exact 39 command-path inventory test across 18 root commands; explicit registration and test-guild permission/intent smoke |
+| AC-23 | Exact 40 command-path inventory test across 19 root commands; explicit registration and test-guild permission/intent smoke |
 
 ## Live Discord gate
 

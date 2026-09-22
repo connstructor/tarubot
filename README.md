@@ -107,6 +107,7 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 
 ## Daily use
 
+- `/version [commits]` shows the running SemVer and recent commits from GitHub (`main`): five by default, up to ten, with linked IDs/titles and ✅ for verified signatures. History is cached for up to five minutes; version output remains available during GitHub outages. See [CHANGELOG.md](CHANGELOG.md) for the versioned development milestones.
 - `/claim` resolves an ID/profile URL or an exact full-name/world match. Put its proof token in the public biography, then use `/verify`. Tokens expire after 30 minutes by default.
 - `/characters`, `/main`, and `/nickname` manage local identity preferences. Existing-link operations use stored IDs and work during Lodestone outages.
 - Imported users select `/main character:ID` and `/nickname enabled:true` explicitly to opt in to nicknames.
