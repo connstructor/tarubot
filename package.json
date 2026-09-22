@@ -44,7 +44,7 @@
     "@types/pg": "8.23.1",
     "axios": "1.20.0",
     "lodestone-css-selectors": "git+https://github.com/xivapi/lodestone-css-selectors.git#HEAD",
-    "nodestone-upstream": "git+https://github.com/xivapi/nodestone.git#HEAD",
+    "nodestone-upstream": "file:vendor/nodestone",
     "typescript": "7.0.2"
   }
 }

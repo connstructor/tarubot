@@ -1,13 +1,28 @@
-/** Compile lockfile-resolved upstream HEAD sources into a traceable isolated Bun ESM worker. */
+/** Compile the pinned submodule and lockfile-resolved selectors into an isolated Bun ESM worker. */
 import { transform } from "../sidecar/transforms.js";
 import { fileURLToPath } from "node:url";
 import { lockedRevisions, revisionsSchema, upstreams } from "../sidecar/upstreams.js";
+import { nodestoneDirectory, nodestoneRevision, nodestoneSourceHash } from "./nodestone-source.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const revisions = revisionsSchema.parse(
   await Bun.file(`${root}sidecar/upstream-revisions.json`).json(),
 );
 const locked = lockedRevisions(Bun.JSONC.parse(await Bun.file(`${root}bun.lock`).text()));
+const parser = revisions["nodestone-upstream"];
+if (!parser || parser.sourceHash !== (await nodestoneSourceHash(root)))
+  throw new Error(
+    "Nodestone source differs from the tested metadata. Run bun run nodestone:update.",
+  );
+// Git is available in a checkout; image builds instead validate the exact source fingerprint.
+if (
+  (await Bun.file(`${root}${nodestoneDirectory}/.git`).exists()) &&
+  parser.revision !== (await nodestoneRevision(root))
+)
+  throw new Error(
+    "Nodestone submodule revision differs from its metadata. Run bun run nodestone:update.",
+  );
+locked["nodestone-upstream"] = parser.revision;
 for (const upstream of upstreams) {
   const revision = revisions[upstream.package];
   const lock = locked[upstream.package];
@@ -32,10 +47,10 @@ const result = await Bun.build({
       setup(build) {
         // Both imports must share one Axios instance so the bounded transport adapter is effective.
         build.onResolve({ filter: /^nodestone-upstream$/ }, () => ({
-          path: `${root}node_modules/nodestone-upstream/src/index.ts`,
+          path: `${root}${nodestoneDirectory}/src/index.ts`,
         }));
         build.onResolve({ filter: /^axios$/ }, () => ({ path: Bun.resolveSync("axios", root) }));
-        build.onLoad({ filter: /nodestone-upstream\/src\/.*\.ts$/ }, async ({ path }) => ({
+        build.onLoad({ filter: /vendor\/nodestone\/src\/.*\.ts$/ }, async ({ path }) => ({
           contents: transform(path, await Bun.file(path).text()),
           loader: "ts",
         }));

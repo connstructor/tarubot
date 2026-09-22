@@ -1,6 +1,7 @@
 # Repository workflow
 
 - Work within this repository. Use Bun for installation, scripts, tests, and builds.
+- Initialize `vendor/nodestone` with `git submodule update --init --recursive` before installing/building. Advance it through `bun run nodestone:update`; commit its pointer, lockfile, and revision metadata together after verification.
 - Keep commands, gateway events, and components in their existing discoverable modules. Add explanatory comments to first-party code, tooling, and tests.
 - Run the checks appropriate to each change. `bun run typecheck`, `bun run lint`, `bun run format:check`, and `bun run build` cover source quality. `bun run test:unit` and `bun run test:contract` cover local behavior; `bun run test:docker` runs the complete suite with disposable PostgreSQL and the locally supplied `tarubot_backup.sql` fixture.
 - Do not edit migrations already applied to a running database; add a migration for schema changes.

@@ -21,9 +21,11 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
-The current setup/rank/startup-plan/public-response/role-layout implementation passes **73 tests**: 37 unit, 11 contract, and 25 PostgreSQL integration tests (**302 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 39 paths across 18 root commands; runtime discovery includes 11 event modules.
+The current implementation passes **74 tests**: 38 unit, 11 contract, and 25 PostgreSQL integration tests (**308 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 39 paths across 18 root commands; runtime discovery includes 11 event modules.
 
 Coverage includes repeat setup, server-manager boundaries, rank-derived officer access, explicit revocation precedence, indirect-delegation prevention, custom leader titles, complete responsibility-separated session messages, and scoped public replies. Layout regressions cover consecutive blocks, full-hierarchy readback rejecting interleaving, partial configurations, unrelated-role ordering, Discord's tied raw positions, effect activation, mutual exclusion with setup, configuration revision fencing, self-generated role-event convergence, and refresh child-job accounting. Role-selection tests cover canonical names across prefixes, explicit configured IDs, ambiguous/deleted bindings, and SDK-backed reuse/renaming without recreating roles or changing permissions.
+
+The Nodestone submodule integration passed the explicit HEAD-update workflow, local builds, and both runtime image builds with frozen-lockfile installation. Parser fingerprint tests cover absent initialization, changed source/manifest inputs, and Git-free Docker validation. The upstream checkout remained clean at its recorded commit.
 
 - `tests/unit`: module discovery/lifecycle contracts, exact IDs/money, access precedence, Unicode-safe nicknames, departure timing, command inventory, SQL decoding, and snapshot completeness validation.
 - `tests/contract`: the compiled pinned Nodestone parsers, all four operations, entity/Unicode normalization, ID agreement, zero/unknown distinctions, complete roster acquisition, malformed roots, transport failures/retry metadata, request concurrency/spacing, and cancellation.

@@ -4,20 +4,22 @@
 
 The owner selected a Docker sidecar after the published `@xivapi/nodestone@0.2.8` distribution failed its import gate: its declared `lib/index.js` and `types/index.d.ts` files are absent. The preceding published release imports, but has parser/URL behaviors incompatible with the required contract.
 
-The package manifest follows **HEAD** of both `xivapi/nodestone` and `xivapi/lodestone-css-selectors`. Selectors are tracked independently because Lodestone CSS changes may require a selector update without a Nodestone code release. The initially verified revisions were:
+Nodestone is the **`vendor/nodestone` Git submodule** from `xivapi/nodestone`; the parent repository pins its tested commit. The manifest's `nodestone-upstream` alias points to that local checkout. The update workflow advances the submodule to upstream **HEAD**. Selectors remain an independent `#HEAD` Git dependency on `xivapi/lodestone-css-selectors`, because Lodestone CSS changes may require a selector update without a Nodestone code release. The initially verified revisions were:
 
 - Nodestone: `xivapi/nodestone@5b7eec64008ba40175ac0ff24f7f44ee1093f77e`.
 - Selectors: `xivapi/lodestone-css-selectors@1e9dd659b5d518150f2a793139b3f7167d739e9b`.
 
-`bun.lock` records the resolved dependency snapshot, while `sidecar/upstream-revisions.json` records its full commit identities. These files are refreshed by `bun run nodestone:update`; ordinary builds remain reproducible from that checked snapshot. `scripts/build-sidecar.ts` verifies the metadata against the lockfile and bundles the four parser classes and selector assets into the worker. TaruBot uses the HTTP adapter in `src/infrastructure/nodestone/client.ts`.
+Initialize a checkout with `git submodule update --init --recursive` **before `bun install` or Docker builds**. Fresh clones can use `git clone --recurse-submodules REPOSITORY_URL`. The Docker build copies the initialized submodule and compiles directly from its `src/` directory.
+
+`bun.lock` records the local dependency graph and selector revision, while `sidecar/upstream-revisions.json` records both full commit identities and a SHA-256 fingerprint of the parser's manifest/source files. The build checks the submodule commit when Git metadata is available, and always checks its source fingerprint, including inside Docker where repository metadata is excluded. These checks prevent a stale or different parser checkout from being mislabeled. `scripts/build-sidecar.ts` bundles the four parser classes and selector assets into the worker; TaruBot uses the HTTP adapter in `src/infrastructure/nodestone/client.ts`.
 
 ### Keeping selectors current
 
 ```sh
-# Read-only check: nonzero exit status means the lockfile is behind upstream HEAD.
+# Read-only check: nonzero exit status means the checkout or selector lock is behind HEAD.
 bun run nodestone:check
 
-# Resolve current HEAD, update the lock/build metadata, compile, and run compatibility tests.
+# Advance the submodule and selectors, update metadata, and verify build/parser contracts.
 bun run nodestone:update
 
 # Perform the same update checks, rebuild the sidecar image, and deploy it.
@@ -26,7 +28,7 @@ bun run nodestone:update --deploy
 
 The running sidecar checks upstream at startup and hourly by default. `/health` includes a cached `upstream` status (`checking`, `current`, `update_available`, or `unavailable`) and deployed/latest commits for each repository. Changes are reported in structured logs. Health probes themselves make no upstream requests, and GitHub availability does not disable otherwise working parsing.
 
-The monitor **detects** updates; the update-and-deploy command **installs** them. Schedule that command from the project directory in your deployment environment for automatic roll-forward. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit updated lock/build metadata with the corresponding tested source changes.
+The monitor **detects** updates; the update-and-deploy command **installs** them. Schedule that command from the project directory in your deployment environment for automatic roll-forward. The updater refuses to overwrite a dirty submodule. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit the updated **submodule pointer**, lockfile, and build metadata together after verification.
 
 `sidecar/transforms.ts` contains checked, narrow source-compatibility changes. Each targeted replacement must match exactly once, so an upstream change fails the build for review:
 

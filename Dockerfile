@@ -2,6 +2,8 @@
 FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
+# The local dependency and parser bundle both use the initialized, parent-pinned submodule.
+COPY vendor/nodestone ./vendor/nodestone
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build && bun run typecheck && bun run test:unit && bun run test:contract
@@ -10,6 +12,8 @@ RUN bun run build && bun run typecheck && bun run test:unit && bun run test:cont
 FROM oven/bun:1.4.2 AS dependencies
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
+# Bun resolves the local dev-package manifest even when installing only runtime dependencies.
+COPY vendor/nodestone/package.json ./vendor/nodestone/package.json
 RUN bun install --frozen-lockfile --production
 
 # Both services execute compiled ESM as a non-root user.

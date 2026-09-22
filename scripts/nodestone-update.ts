@@ -1,7 +1,14 @@
 /** Refresh both upstream HEAD dependencies, verify their contracts, and optionally redeploy. */
 import { fileURLToPath } from "node:url";
+import { mkdir } from "node:fs/promises";
 import { latestRevision, lockedRevisions, upstreams } from "../sidecar/upstreams.js";
 import { json } from "../src/domain/values.js";
+import {
+  nodestoneDirectory,
+  nodestoneRevision,
+  nodestoneSourceHash,
+  requireCleanNodestone,
+} from "./nodestone-source.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
@@ -27,17 +34,21 @@ async function run(command: string[]): Promise<void> {
 }
 
 if (args.includes("--update")) {
-  // Floating manifest references are advanced explicitly; normal builds install their tested lock.
-  await run([
-    process.execPath,
-    "update",
-    "--no-cache",
-    ...upstreams.map((upstream) => upstream.package),
-  ]);
+  // Fresh clones also keep Bun's temporary and dependency caches inside the project.
+  await Promise.all(
+    ["tmp", "bun"].map((name) => mkdir(`${root}.cache/${name}`, { recursive: true })),
+  );
+  // Preserve local parser work; only the explicit update command advances the submodule to HEAD.
+  if (await Bun.file(`${root}${nodestoneDirectory}/.git`).exists())
+    await requireCleanNodestone(root);
+  else await run(["git", "submodule", "update", "--init", "--recursive", "--", nodestoneDirectory]);
+  await run(["git", "submodule", "update", "--remote", "--checkout", "--", nodestoneDirectory]);
+  await run([process.execPath, "update", "--no-cache", "lodestone-css-selectors"]);
 }
 const locked = lockedRevisions(
   Bun.JSONC.parse(await Bun.file(new URL("../bun.lock", import.meta.url)).text()),
 );
+locked["nodestone-upstream"] = await nodestoneRevision(root);
 const results = await Promise.all(
   upstreams.map(async (upstream) => {
     const latest = await latestRevision(upstream.repository, AbortSignal.timeout(30000));
@@ -55,13 +66,26 @@ if (results.some((result) => !result.current)) {
   process.exitCode = 1;
   if (args.includes("--update"))
     throw new Error(
-      "The lockfile did not resolve current upstream HEAD. Retry the update before deployment.",
+      "The submodule or selector lockfile did not resolve current upstream HEAD. Retry before deployment.",
     );
 } else if (args.includes("--update")) {
   // Full revisions identify exactly what a deployed sidecar contains, without freezing its source policy.
+  const sourceHash = await nodestoneSourceHash(root);
   await Bun.write(
     new URL("../sidecar/upstream-revisions.json", import.meta.url),
-    `${json(Object.fromEntries(results.map((result) => [result.package, { repository: result.repository, revision: result.latest }])), 2)}\n`,
+    `${json(
+      Object.fromEntries(
+        results.map((result) => [
+          result.package,
+          {
+            repository: result.repository,
+            revision: result.latest,
+            ...(result.package === "nodestone-upstream" ? { sourceHash } : {}),
+          },
+        ]),
+      ),
+      2,
+    )}\n`,
   );
   await run([process.execPath, "run", "build"]);
   await run([process.execPath, "run", "typecheck"]);

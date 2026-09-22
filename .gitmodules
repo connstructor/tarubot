@@ -1,0 +1,4 @@
+# The initialized checkout supplies the parser source for local and Docker builds.
+[submodule "vendor/nodestone"]
+	path = vendor/nodestone
+	url = https://github.com/xivapi/nodestone.git

@@ -11,7 +11,7 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 | Discord.js | 14.27.0 |
 | PostgreSQL | 18.4 |
 
-The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar. Its source dependencies follow upstream HEAD; each checked build records its exact resolved code and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
+The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
 
 The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
 
@@ -32,9 +32,10 @@ See [MODULES.md](docs/MODULES.md) for complete command/event/component examples 
 
 ## Install and check
 
-Run these commands from this directory:
+Clone with `git clone --recurse-submodules REPOSITORY_URL`, or initialize the submodule in an existing checkout before installing dependencies. Run these commands from this directory:
 
 ```sh
+git submodule update --init --recursive
 bun install --frozen-lockfile
 bun run build
 bun run typecheck
@@ -146,4 +147,5 @@ The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs,
 - `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
 - `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
 - `sidecar`: Nodestone worker isolation, source compatibility transformations, and transport controls.
+- `vendor/nodestone`: upstream parser Git submodule, required for local and Docker builds.
 - `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.
