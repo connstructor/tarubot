@@ -60,6 +60,9 @@ The first layout checked priority but allowed interleaving and retained newly cr
 - Live readback verified adjacent managed positions **4, 3, 2, 1**, all with separate member-list display enabled. DevBot remains at position 6 and the other bot at position 5, above the whole block.
 - Follow-up layout job `4ccba9e7-65de-4772-ab80-e7bfe60467db` succeeded with empty hoist/position deltas. Readiness showed zero pending work and zero degraded FCs. The sole blocked effect remained the expected guild-owner nickname update.
 - Startup posted message `1552008870069538898` with the corrected role-reuse/consecutive-hierarchy plan and all three responsibility sections. The submodule-built Nodestone sidecar was healthy and reported both upstream revisions current.
+- The owner's subsequent `/config validate` confirmed revision 9, all seven configured role/channel capabilities available, both effect switches enabled, and no roster acquisition error.
+- The owner ran `/nickname enabled:false`, clearing the expected nickname block. Persisted nickname management, restoration, pending-write, and successful-write flags are all false.
+- Refresh run `df8fa3fa-9688-4994-9435-58e32a3b59d5` reused the valid `17:29:12.810Z` roster and completed all **seven jobs**: guild enumeration, five human reconciliations, and role layout. The human status snapshot caught layout still running; database readback confirmed it succeeded at `2026-09-22T17:57:35.080124Z`, on its first attempt with empty hoist/position deltas. Every run job succeeded, and no queued, running, blocked, failed, or disabled guild-scoped work remained.
 
 Higher positions take priority. The current verified layout is:
 
@@ -84,7 +87,7 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 
 ## Human interaction checks
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. The current plan asks testers to confirm the corrected role list and visible member grouping. See `test-plans/current.json` and the latest plan in `#chat`.
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out, leaving no outstanding guild work. The current plan asks testers to confirm the corrected role list and visible member grouping. See `test-plans/current.json` and the latest plan in `#chat`.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 
