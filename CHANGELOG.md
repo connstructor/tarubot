@@ -1,8 +1,8 @@
 # Version history
 
-The current application version is **1.7.0**, with `package.json` as the source of truth. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.7.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
 
-## 1.7.0 — Version and GitHub history command
+## 2.7.0 — Version and GitHub history command
 
 - Add `/version [commits]` for any human guild member; show five commits by default, up to ten.
 - Show the installed SemVer, linked short commit IDs, and commit titles.
@@ -15,15 +15,15 @@ These numbers are assigned now to the completed work stages to establish a meani
 
 | Version | Completed milestone |
 | --- | --- |
-| 1.0.0 | Core bot: ownership, membership, nicknames, guest workflow, ledger, PostgreSQL import/recovery, and containers |
-| 1.1.0 | Dynamically discovered commands, events, components, and typed service injection |
-| 1.2.0 | Independent Nodestone/selector HEAD tracking and checked update workflow |
-| 1.3.0 | Role setup, officer/leader rank projection, explicit officer overrides, and startup test plans |
-| 1.4.0 | Public development-guild interaction replies |
-| 1.5.0 | Automatic role grouping and hierarchy reconciliation |
-| 1.5.1 | Correct consecutive role blocks and reuse of existing Member/Guest role IDs |
-| 1.6.0 | Nodestone submodule-backed builds, source fingerprints, and clean-clone verification |
-| 1.7.0 | Installed-version and verified GitHub commit-history command |
+| 2.0.0 | Core rewrite: ownership, membership, nicknames, guest workflow, ledger, PostgreSQL import/recovery, and containers |
+| 2.1.0 | Dynamically discovered commands, events, components, and typed service injection |
+| 2.2.0 | Independent Nodestone/selector HEAD tracking and checked update workflow |
+| 2.3.0 | Role setup, officer/leader rank projection, explicit officer overrides, and startup test plans |
+| 2.4.0 | Public development-guild interaction replies |
+| 2.5.0 | Automatic role grouping and hierarchy reconciliation |
+| 2.5.1 | Correct consecutive role blocks and reuse of existing Member/Guest role IDs |
+| 2.6.0 | Nodestone submodule-backed builds, source fingerprints, and clean-clone verification |
+| 2.7.0 | Installed-version and verified GitHub commit-history command |
 
 ## Increment policy
 

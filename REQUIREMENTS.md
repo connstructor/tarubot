@@ -8,6 +8,8 @@
 
 The owner requested `/version [commits]` for any guild user. It displays the installed SemVer and the latest requested number of GitHub commit IDs, links, and titles from `connstructor/tarubot`; show ✅ next to an ID only when GitHub confirms its signature is valid and verified. Default to five commits and bound requests to ten. Record versioned development milestones and retain local version output when GitHub is unavailable.
 
+This implementation is a complete rewrite of TaruBot and uses major version **2**. The current version is **2.7.0**, incorporating the completed development milestones documented in `CHANGELOG.md`.
+
 The owner requested non-ephemeral output in the development server so other testers can observe the session. `PUBLIC_TEST_RESPONSES` overrides response visibility for the configured test guild, including command/component success and error replies. Operation authorization and other guilds' default presentation policy remain independently enforced.
 
 The owner additionally requested a development startup announcement in `#chat`, containing the current session's actions grouped by human tester, coding assistant, and bot. The owner requested `/setup` to create/reuse Member, Guest, Officer, and FC Leader roles; the Officer role grants bot-only officer-command access. An optional configured in-game FC rank may derive Officer eligibility from accepted roster evidence. Explicit officer grants/revocations and changes to this authority mapping require a server manager with Manage Roles. This is a specific extension of the original rank-mapping scope, not a general arbitrary role-mapping system.

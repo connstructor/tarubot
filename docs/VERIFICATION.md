@@ -21,7 +21,7 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
-The current **1.7.0** implementation passes **82 tests**: 41 unit, 16 contract, and 25 PostgreSQL integration tests (**351 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 40 paths across 19 root commands; runtime discovery includes 11 event modules.
+The current **2.7.0** implementation passes **82 tests**: 41 unit, 16 contract, and 25 PostgreSQL integration tests (**351 assertions** in the full container run on 2026-09-22). Strict type checking, lint, formatting, and the compiled build also passed. The command inventory contains 40 paths across 19 root commands; runtime discovery includes 11 event modules.
 
 Coverage includes repeat setup, server-manager boundaries, rank-derived officer access, explicit revocation precedence, indirect-delegation prevention, custom leader titles, complete responsibility-separated session messages, and scoped public replies. Layout regressions cover consecutive blocks, full-hierarchy readback rejecting interleaving, partial configurations, unrelated-role ordering, Discord's tied raw positions, effect activation, mutual exclusion with setup, configuration revision fencing, self-generated role-event convergence, and refresh child-job accounting. Role-selection tests cover canonical names across prefixes, explicit configured IDs, ambiguous/deleted bindings, and SDK-backed reuse/renaming without recreating roles or changing permissions.
 
