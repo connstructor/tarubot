@@ -5,6 +5,7 @@
 - Keep commands, gateway events, and components in their existing discoverable modules. Add explanatory comments to first-party code, tooling, and tests.
 - Run the checks appropriate to each change. `bun run typecheck`, `bun run lint`, `bun run format:check`, and `bun run build` cover source quality. `bun run test:unit` and `bun run test:contract` cover local behavior; `bun run test:docker` runs the complete suite with disposable PostgreSQL and the locally supplied `tarubot_backup.sql` fixture.
 - Do not edit migrations already applied to a running database; add a migration for schema changes.
+- Use Drizzle ORM and `src/infrastructure/postgres/schema.ts` for application persistence. Bind transaction work with `orm(client)`; keep state, audit, and outbox writes on that client. Numbered SQL migrations remain the schema authority; raw SQL is reserved for migration/control statements, session locks, probes, and catalog-based restore verification. See `docs/PERSISTENCE.md` for exact-value and query conventions.
 - Normal Compose deployments pull GHCR images. DevBot adds `-f docker-compose.devbot.yml` and uses database `tarubot_dev`; append `-f docker-compose.build.yml` for local source builds and editable test plans. Update `test-plans/current.json` before starting a new development test session.
 
 ## Versioning

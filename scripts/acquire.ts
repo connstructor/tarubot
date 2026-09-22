@@ -6,30 +6,36 @@ import { Service } from "../src/application/service.js";
 import { Synchronization } from "../src/application/synchronization.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
 import { Nodestone } from "../src/infrastructure/nodestone/client.js";
-import { enqueue, type Job } from "../src/jobs/queue.js";
+import { enqueue } from "../src/jobs/queue.js";
 import { id, json } from "../src/domain/values.js";
+import { and, eq, gt, ne, sql } from "drizzle-orm";
+import * as t from "../src/infrastructure/postgres/schema.js";
 
 const config = configuration();
 const guild = id(process.argv[2]);
 const db = new Database(config.DATABASE_URL);
 try {
   await db.schema();
-  const fc = (
-    await db.query<{ fc_id: string | null }>("SELECT fc_id FROM guilds WHERE id=$1 AND active", [
-      guild,
-    ])
-  )[0]?.fc_id;
+  const [configured] = await db.orm
+    .select({ fc_id: t.guilds.fc_id })
+    .from(t.guilds)
+    .where(and(eq(t.guilds.id, guild), eq(t.guilds.active, true)));
+  const fc = configured?.fc_id;
   if (!fc) throw new Error("Guild has no linked FC.");
   const key = await enqueue(db.pool, "roster", `roster:${fc}`, { fcId: fc });
   // Reuse the same deduplicated job and lease fence as the background worker.
   const token = randomUUID();
-  const job = (
-    await db.query<Job>(
-      "UPDATE jobs SET status='running',lease_token=$2,lease_until=now()+interval '6 minutes',attempts=attempts+1 WHERE id=$1 AND status<>'running' RETURNING *",
-      [key, token],
-    )
-  )[0];
-  if (!job) throw new Error("Another worker owns this refresh; use /sync status.");
+  const [job] = await db.orm
+    .update(t.jobs)
+    .set({
+      status: "running",
+      lease_token: token,
+      lease_until: sql`now()+interval '6 minutes'`,
+      attempts: sql`${t.jobs.attempts}+1`,
+    })
+    .where(and(eq(t.jobs.id, key), ne(t.jobs.status, "running")))
+    .returning();
+  if (!job?.lease_token) throw new Error("Another worker owns this refresh; use /sync status.");
   const service = new Service(
     // Constructing the gateway supplies the port contract; this acquisition never logs into Discord.
     db,
@@ -38,18 +44,24 @@ try {
     config,
   );
   const sync = new Synchronization(service);
-  const result = await sync.roster(job, async () => {
+  const result = await sync.roster({ ...job, lease_token: job.lease_token }, async () => {
     // Even a one-shot operator must relinquish results after losing work ownership.
-    const rows = await db.query(
-      "SELECT id FROM jobs WHERE id=$1 AND lease_token=$2 AND lease_until>now()",
-      [key, token],
-    );
+    const rows = await db.orm
+      .select({ id: t.jobs.id })
+      .from(t.jobs)
+      .where(
+        and(eq(t.jobs.id, key), eq(t.jobs.lease_token, token), gt(t.jobs.lease_until, sql`now()`)),
+      );
     if (!rows.length) throw new Error("Acquisition lease expired");
   });
-  await db.query(
-    "UPDATE jobs SET status='succeeded',lease_until=NULL,result=$3 WHERE id=$1 AND lease_token=$2",
-    [key, token, json(result)],
-  );
+  await db.orm
+    .update(t.jobs)
+    .set({
+      status: "succeeded",
+      lease_until: null,
+      result: result === null ? sql`'null'::jsonb` : result,
+    })
+    .where(and(eq(t.jobs.id, key), eq(t.jobs.lease_token, token)));
   console.log(json(result));
 } finally {
   await db.close();

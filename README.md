@@ -9,6 +9,7 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 | Bun | 1.4.2 |
 | TypeScript | 7.0.2 |
 | Discord.js | 14.27.0 |
+| Drizzle ORM / node-postgres | 0.45.3 / 8.23.0 |
 | PostgreSQL | 18.4 |
 
 The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
@@ -33,6 +34,10 @@ Add a `*.command.ts` under `src/commands/`, a `*.event.ts` under `src/events/`, 
 See [MODULES.md](docs/MODULES.md) for complete command/event/component examples and service injection, and [CONFIGURATION.md](docs/CONFIGURATION.md) for configuration-code commentary.
 
 See [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) for the remaining requirements-backed implementation, live acceptance, and production-delivery work. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
+
+## Persistence
+
+Drizzle ORM provides typed table mappings and queries over the existing node-postgres pool. Transactional decisions, audit, and outbox writes share one checked-out client; external IDs, bigint money, and UTC instants retain their exact representations. Numbered, checksum-verified SQL migrations own the schema and PostgreSQL constraints/triggers. See [PERSISTENCE.md](docs/PERSISTENCE.md) for schema changes, transaction binding, JSON handling, and the limited raw-SQL boundary.
 
 ## Development install and check
 
@@ -167,7 +172,7 @@ The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs,
 - `src/bot`: reusable module discovery, contracts, service injection, and interaction dispatch.
 - `src/commands`, `src/events`, `src/components`: independently loaded feature adapters.
 - `src/discord`: Discord effects, shared option builders, selectors, and reply presentation.
-- `src/infrastructure`: PostgreSQL and typed Nodestone HTTP adaptation.
+- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, plus typed Nodestone HTTP adaptation.
 - `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
 - `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
 - `sidecar`: Nodestone worker isolation, source compatibility transformations, and transport controls.

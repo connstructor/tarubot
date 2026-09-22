@@ -7,11 +7,27 @@ import {
   type AccessFacts,
   type Actor,
 } from "../domain/policy.js";
-import { Failure, json, nickname, normalized } from "../domain/values.js";
+import { Failure, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
-import { ensureUser } from "../infrastructure/postgres/database.js";
+import { ensureUser, orm } from "../infrastructure/postgres/database.js";
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  getTableColumns,
+  gt,
+  isNull,
+  lt,
+  lte,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
+import * as t from "../infrastructure/postgres/schema.js";
 import { enqueue, layoutGuildRoles, reconcileUser, type Job } from "../jobs/queue.js";
-import type { GuildRecord, MemberView, UserRecord } from "./records.js";
+import type { GuildRecord, MemberView } from "./records.js";
 import type { Service } from "./service.js";
 
 /** Evidence publication and Discord delivery have distinct transactions, timestamps, and failures. */
@@ -23,14 +39,13 @@ export class Synchronization {
     if (force) authorize(actor, actor.guildId, "officer");
     const guild = await this.app.guild(actor);
     if (!guild.fc_id) throw new Failure("setup", "Link an FC first.");
-    const fc = (
-      await this.app.db.query<{
-        last_successful_roster_at: Date | null;
-        last_attempt_at: Date | null;
-      }>("SELECT last_successful_roster_at,last_attempt_at FROM free_companies WHERE id=$1", [
-        guild.fc_id,
-      ])
-    )[0];
+    const [fc] = await this.app.db.orm
+      .select({
+        last_successful_roster_at: t.freeCompanies.last_successful_roster_at,
+        last_attempt_at: t.freeCompanies.last_attempt_at,
+      })
+      .from(t.freeCompanies)
+      .where(eq(t.freeCompanies.id, guild.fc_id));
     const fresh =
       fc?.last_successful_roster_at &&
       Date.now() - fc.last_successful_roster_at.getTime() <
@@ -49,14 +64,12 @@ export class Synchronization {
               cooldown,
             )
           : await enqueue(client, "reconcile.guild", `guild:${guild.id}`, {}, guild.id);
-      const run = (
-        await client.query<{ id: string }>(
-          "INSERT INTO sync_runs(guild_id,requester_id,job_id) VALUES($1,$2,$3) RETURNING id",
-          [guild.id, actor.userId, job],
-        )
-      ).rows[0];
-      if (run)
-        await client.query("INSERT INTO sync_run_jobs(run_id,job_id) VALUES($1,$2)", [run.id, job]);
+      const db = orm(client);
+      const [run] = await db
+        .insert(t.syncRuns)
+        .values({ guild_id: guild.id, requester_id: actor.userId, job_id: job })
+        .returning({ id: t.syncRuns.id });
+      if (run) await db.insert(t.syncRunJobs).values({ run_id: run.id, job_id: job });
       return {
         runId: run?.id,
         status: "queued",
@@ -80,76 +93,95 @@ export class Synchronization {
           )
         ).rows[0]?.locked ?? false;
       if (!locked) throw new Failure("cooldown", "Refresh is already running.", 60);
-      const linked = await connection.query("SELECT id FROM guilds WHERE fc_id=$1 AND active", [
-        fcId,
-      ]);
-      if (!linked.rowCount) return { skipped: "FC no longer linked" };
-      const allowed = await connection.query(
-        "UPDATE free_companies SET last_attempt_at=now() WHERE id=$1 AND (last_attempt_at IS NULL OR last_attempt_at<=now()-interval '60 seconds') RETURNING id",
-        [fcId],
-      );
-      if (!allowed.rowCount) throw new Failure("cooldown", "FC refresh cooldown.", 60);
+      const session = orm(connection);
+      const linked = await session
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)));
+      if (!linked.length) return { skipped: "FC no longer linked" };
+      const allowed = await session
+        .update(t.freeCompanies)
+        .set({ last_attempt_at: sql`now()` })
+        .where(
+          and(
+            eq(t.freeCompanies.id, fcId),
+            or(
+              isNull(t.freeCompanies.last_attempt_at),
+              lte(t.freeCompanies.last_attempt_at, sql`now()-interval '60 seconds'`),
+            ),
+          ),
+        )
+        .returning({ id: t.freeCompanies.id });
+      if (!allowed.length) throw new Failure("cooldown", "FC refresh cooldown.", 60);
       const roster = await this.app.lodestone.roster(fcId);
       await guard();
       const result = await this.app.db.transaction(async (client) => {
-        const lease = await client.query(
-          "SELECT id FROM jobs WHERE id=$1 AND lease_token=$2 AND lease_until>now() FOR UPDATE",
-          [job.id, job.lease_token],
-        );
-        if (!lease.rowCount) throw new Failure("superseded", "Expired acquisition lease.");
-        await this.app.storeCompany(client, roster.company);
-        const snapshot = (
-          await client.query<{ id: string }>(
-            "INSERT INTO roster_snapshots(fc_id,started_at,observed_at,member_count,evidence) VALUES($1,$2,$3,$4,$5) RETURNING id",
-            [
-              fcId,
-              roster.startedAt,
-              roster.observedAt,
-              roster.members.length,
-              json({
-                pages: roster.pages,
-                identityRechecked: true,
-                countRechecked: true,
-                uniqueIds: true,
-              }),
-            ],
+        const db = orm(client);
+        const lease = await db
+          .select({ id: t.jobs.id })
+          .from(t.jobs)
+          .where(
+            and(
+              eq(t.jobs.id, job.id),
+              eq(t.jobs.lease_token, job.lease_token),
+              gt(t.jobs.lease_until, sql`now()`),
+            ),
           )
-        ).rows[0];
+          .for("update");
+        if (!lease.length) throw new Failure("superseded", "Expired acquisition lease.");
+        await this.app.storeCompany(client, roster.company);
+        const [snapshot] = await db
+          .insert(t.rosterSnapshots)
+          .values({
+            fc_id: fcId,
+            started_at: roster.startedAt,
+            observed_at: roster.observedAt,
+            member_count: roster.members.length,
+            evidence: {
+              pages: roster.pages,
+              identityRechecked: true,
+              countRechecked: true,
+              uniqueIds: true,
+            },
+          })
+          .returning({ id: t.rosterSnapshots.id });
         if (!snapshot) throw new Error("Missing snapshot");
         for (const member of roster.members) {
           await this.app.storeCharacter(client, member, false);
-          await client.query(
-            "INSERT INTO roster_members(snapshot_id,character_id,fc_rank_name,fc_rank_key,is_fc_leader) VALUES($1,$2,$3,$4,$5)",
-            [
-              snapshot.id,
-              member.id,
-              member.fcRankName ?? null,
-              member.fcRankName ? normalized(member.fcRankName) : null,
-              member.isFcLeader ?? null,
-            ],
-          );
+          await db.insert(t.rosterMembers).values({
+            snapshot_id: snapshot.id,
+            character_id: member.id,
+            fc_rank_name: member.fcRankName ?? null,
+            fc_rank_key: member.fcRankName ? normalized(member.fcRankName) : null,
+            is_fc_leader: member.isFcLeader ?? null,
+          });
         }
-        const guilds = (
-          await client.query<GuildRecord>(
-            "SELECT * FROM guilds WHERE fc_id=$1 AND active FOR SHARE",
-            [fcId],
-          )
-        ).rows;
+        const guilds = await db
+          .select()
+          .from(t.guilds)
+          .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)))
+          .for("share");
         const present = new Set(roster.members.map((member) => member.id));
         let confirmation = false;
         for (const guild of guilds) {
-          const links = (
-            await client.query<{
-              id: string;
-              user_id: string;
-              character_id: string;
-              state: "present" | "missing" | "absent" | null;
-              first_absence_at: Date | null;
-            }>(
-              "SELECT l.id,l.user_id,l.character_id,m.state,m.first_absence_at FROM links l LEFT JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id AND m.fc_id=$2 WHERE l.guild_id=$1 AND l.active",
-              [guild.id, fcId],
+          const links = await db
+            .select({
+              id: t.links.id,
+              user_id: t.links.user_id,
+              character_id: t.links.character_id,
+              state: t.membership.state,
+              first_absence_at: t.membership.first_absence_at,
+            })
+            .from(t.links)
+            .leftJoin(
+              t.membership,
+              and(
+                eq(t.membership.guild_id, t.links.guild_id),
+                eq(t.membership.character_id, t.links.character_id),
+                eq(t.membership.fc_id, fcId),
+              ),
             )
-          ).rows;
+            .where(and(eq(t.links.guild_id, guild.id), eq(t.links.active, true)));
           let departures = 0;
           for (const link of links) {
             const transition = departure(
@@ -164,22 +196,44 @@ export class Synchronization {
               (link.state === "missing" || link.state === "present")
             )
               departures++;
-            await client.query(
-              "INSERT INTO membership(guild_id,fc_id,character_id,state,first_absence_at,snapshot_id,confirmed_snapshot_id) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $4='present' THEN $6::uuid ELSE NULL END) ON CONFLICT(guild_id,fc_id,character_id) DO UPDATE SET state=$4,first_absence_at=$5,snapshot_id=$6,confirmed_snapshot_id=CASE WHEN $4='present' THEN $6::uuid ELSE membership.confirmed_snapshot_id END",
-              [
-                guild.id,
-                fcId,
-                link.character_id,
-                transition.state,
-                transition.firstAbsence,
-                snapshot.id,
-              ],
-            );
+            const observation = {
+              state: transition.state,
+              first_absence_at: transition.firstAbsence,
+              snapshot_id: snapshot.id,
+            };
+            await db
+              .insert(t.membership)
+              .values({
+                guild_id: guild.id,
+                fc_id: fcId,
+                character_id: link.character_id,
+                ...observation,
+                confirmed_snapshot_id: transition.state === "present" ? snapshot.id : null,
+              })
+              .onConflictDoUpdate({
+                target: [t.membership.guild_id, t.membership.fc_id, t.membership.character_id],
+                set: {
+                  ...observation,
+                  confirmed_snapshot_id:
+                    transition.state === "present"
+                      ? snapshot.id
+                      : t.membership.confirmed_snapshot_id,
+                },
+              });
             if (present.has(link.character_id))
-              await client.query(
-                "INSERT INTO membership_history(guild_id,user_id,fc_id,link_id,snapshot_id,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(link_id,fc_id) DO NOTHING",
-                [guild.id, link.user_id, fcId, link.id, snapshot.id, roster.observedAt],
-              );
+              await db
+                .insert(t.membershipHistory)
+                .values({
+                  guild_id: guild.id,
+                  user_id: link.user_id,
+                  fc_id: fcId,
+                  link_id: link.id,
+                  snapshot_id: snapshot.id,
+                  observed_at: roster.observedAt,
+                })
+                .onConflictDoNothing({
+                  target: [t.membershipHistory.link_id, t.membershipHistory.fc_id],
+                });
           }
           const reconciliation = await enqueue(
             client,
@@ -188,10 +242,18 @@ export class Synchronization {
             { snapshotId: snapshot.id },
             guild.id,
           );
-          await client.query(
-            "INSERT INTO sync_run_jobs(run_id,job_id) SELECT id,$3 FROM sync_runs WHERE guild_id=$1 AND job_id=$2 ON CONFLICT DO NOTHING",
-            [guild.id, job.id, reconciliation],
-          );
+          await db
+            .insert(t.syncRunJobs)
+            .select(
+              db
+                .select({
+                  run_id: t.syncRuns.id,
+                  job_id: sql<string>`${reconciliation}::uuid`.as("job_id"),
+                })
+                .from(t.syncRuns)
+                .where(and(eq(t.syncRuns.guild_id, guild.id), eq(t.syncRuns.job_id, job.id))),
+            )
+            .onConflictDoNothing();
           await enqueue(
             client,
             "officer.notify",
@@ -204,10 +266,10 @@ export class Synchronization {
             5,
           );
         }
-        await client.query(
-          "UPDATE free_companies SET last_successful_roster_at=$2,last_error=NULL WHERE id=$1",
-          [fcId, roster.observedAt],
-        );
+        await db
+          .update(t.freeCompanies)
+          .set({ last_successful_roster_at: roster.observedAt, last_error: null })
+          .where(eq(t.freeCompanies.id, fcId));
         if (confirmation)
           await enqueue(client, "roster.confirm", `confirm:${fcId}`, { fcId }, null, null, 60);
         return { snapshotId: snapshot.id, count: roster.members.length, pages: roster.pages };
@@ -215,14 +277,14 @@ export class Synchronization {
       return result;
     } catch (error) {
       if (!(error instanceof Failure && ["cooldown", "superseded"].includes(error.code))) {
-        await this.app.db.query("UPDATE free_companies SET last_error=$2 WHERE id=$1", [
-          fcId,
-          error instanceof Failure ? error.code : "acquisition_failed",
-        ]);
-        const guilds = await this.app.db.query<{ id: string }>(
-          "SELECT id FROM guilds WHERE fc_id=$1 AND active",
-          [fcId],
-        );
+        await this.app.db.orm
+          .update(t.freeCompanies)
+          .set({ last_error: error instanceof Failure ? error.code : "acquisition_failed" })
+          .where(eq(t.freeCompanies.id, fcId));
+        const guilds = await this.app.db.orm
+          .select({ id: t.guilds.id })
+          .from(t.guilds)
+          .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)));
         for (const guild of guilds)
           await enqueue(
             this.app.db.pool,
@@ -248,79 +310,184 @@ export class Synchronization {
   }
   /** Evaluate links not yet observed, requesting early acquisition when fresh evidence is absent. */
   async seedFreshLink(guild: GuildRecord, user: string): Promise<void> {
-    if (!guild.fc_id) return;
+    const fcId = guild.fc_id;
+    if (!fcId) return;
     await this.app.db.transaction(async (client) => {
-      const current = await client.query(
-        "SELECT id FROM guilds WHERE id=$1 AND fc_id=$2 AND revision=$3 FOR SHARE",
-        [guild.id, guild.fc_id, guild.revision],
-      );
-      if (!current.rowCount)
+      const db = orm(client);
+      const current = await db
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(
+          and(
+            eq(t.guilds.id, guild.id),
+            eq(t.guilds.fc_id, fcId),
+            eq(t.guilds.revision, guild.revision),
+          ),
+        )
+        .for("share");
+      if (!current.length)
         throw new Failure("superseded", "Configuration changed while evaluating a new link.");
-      const snapshot = (
-        await client.query<{ id: string; observed_at: Date }>(
-          "SELECT id,observed_at FROM roster_snapshots WHERE fc_id=$1 AND observed_at>now()-$2*interval '1 second' ORDER BY observed_at DESC LIMIT 1",
-          [guild.fc_id, this.app.config.ROSTER_INTERVAL_SECONDS],
+      const [snapshot] = await db
+        .select({ id: t.rosterSnapshots.id, observed_at: t.rosterSnapshots.observed_at })
+        .from(t.rosterSnapshots)
+        .where(
+          and(
+            eq(t.rosterSnapshots.fc_id, fcId),
+            gt(
+              t.rosterSnapshots.observed_at,
+              sql`now()-${this.app.config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
+            ),
+          ),
         )
-      ).rows[0];
-      const links = (
-        await client.query<{ id: string; character_id: string }>(
-          "SELECT l.id,l.character_id FROM links l LEFT JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id AND m.fc_id=$3 WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active AND m.character_id IS NULL",
-          [guild.id, user, guild.fc_id],
+        .orderBy(desc(t.rosterSnapshots.observed_at))
+        .limit(1);
+      const links = await db
+        .select({ id: t.links.id, character_id: t.links.character_id })
+        .from(t.links)
+        .leftJoin(
+          t.membership,
+          and(
+            eq(t.membership.guild_id, t.links.guild_id),
+            eq(t.membership.character_id, t.links.character_id),
+            eq(t.membership.fc_id, fcId),
+          ),
         )
-      ).rows;
+        .where(
+          and(
+            eq(t.links.guild_id, guild.id),
+            eq(t.links.user_id, user),
+            eq(t.links.active, true),
+            isNull(t.membership.character_id),
+          ),
+        );
       if (!snapshot) {
-        if (links.length)
-          await enqueue(client, "roster", `roster:${guild.fc_id}`, { fcId: guild.fc_id });
+        if (links.length) await enqueue(client, "roster", `roster:${fcId}`, { fcId });
         return;
       }
       for (const link of links) {
-        const found = await client.query(
-          "SELECT character_id FROM roster_members WHERE snapshot_id=$1 AND character_id=$2",
-          [snapshot.id, link.character_id],
-        );
-        await client.query(
-          "INSERT INTO membership(guild_id,fc_id,character_id,state,snapshot_id,confirmed_snapshot_id) VALUES($1,$2,$3,$4,$5,CASE WHEN $4='present' THEN $5::uuid ELSE NULL END) ON CONFLICT DO NOTHING",
-          [
-            guild.id,
-            guild.fc_id,
-            link.character_id,
-            found.rowCount ? "present" : "absent",
-            snapshot.id,
-          ],
-        );
-        if (found.rowCount)
-          await client.query(
-            "INSERT INTO membership_history(guild_id,user_id,fc_id,link_id,snapshot_id,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
-            [guild.id, user, guild.fc_id, link.id, snapshot.id, snapshot.observed_at],
+        const found = await db
+          .select({ character_id: t.rosterMembers.character_id })
+          .from(t.rosterMembers)
+          .where(
+            and(
+              eq(t.rosterMembers.snapshot_id, snapshot.id),
+              eq(t.rosterMembers.character_id, link.character_id),
+            ),
           );
+        await db
+          .insert(t.membership)
+          .values({
+            guild_id: guild.id,
+            fc_id: fcId,
+            character_id: link.character_id,
+            state: found.length ? "present" : "absent",
+            snapshot_id: snapshot.id,
+            confirmed_snapshot_id: found.length ? snapshot.id : null,
+          })
+          .onConflictDoNothing();
+        if (found.length)
+          await db
+            .insert(t.membershipHistory)
+            .values({
+              guild_id: guild.id,
+              user_id: user,
+              fc_id: fcId,
+              link_id: link.id,
+              snapshot_id: snapshot.id,
+              observed_at: snapshot.observed_at,
+            })
+            .onConflictDoNothing();
       }
     });
   }
   /** Assemble policy facts without granting authority to manually assigned Discord roles. */
   async facts(guild: GuildRecord, member: MemberView): Promise<AccessFacts> {
-    const row = (
-      await this.app.db.query<{ links: bigint; confirmed: bigint; unknown: bigint }>(
-        "SELECT count(*) AS links,count(*) FILTER(WHERE m.state IN ('present','missing')) AS confirmed,count(*) FILTER(WHERE m.state IS NULL) AS unknown FROM links l LEFT JOIN membership m ON m.guild_id=l.guild_id AND m.character_id=l.character_id AND m.fc_id=$3 WHERE l.guild_id=$1 AND l.user_id=$2 AND l.active",
-        [guild.id, member.id, guild.fc_id],
+    const db = this.app.db.orm;
+    const [row] = await db
+      .select({
+        confirmed:
+          sql<bigint>`count(*) FILTER(WHERE ${t.membership.state} IN ('present','missing'))`.mapWith(
+            BigInt,
+          ),
+        unknown: sql<bigint>`count(*) FILTER(WHERE ${t.membership.state} IS NULL)`.mapWith(BigInt),
+      })
+      .from(t.links)
+      .leftJoin(
+        t.membership,
+        and(
+          eq(t.membership.guild_id, t.links.guild_id),
+          eq(t.membership.character_id, t.links.character_id),
+          guild.fc_id ? eq(t.membership.fc_id, guild.fc_id) : sql`false`,
+        ),
       )
-    )[0];
-    const state = (
-      await this.app.db.query<{
-        former: boolean;
-        grant: boolean;
-        revoked: boolean;
-        fresh: boolean;
-        local_loss: boolean;
-      }>(
-        `SELECT
-      EXISTS(SELECT 1 FROM guild_users WHERE guild_id=$1 AND user_id=$2 AND local_member_loss) AS local_loss,
-      EXISTS(SELECT 1 FROM membership_history WHERE guild_id=$1 AND user_id=$2 AND fc_id=$3) AS former,
-      EXISTS(SELECT 1 FROM guest_grants WHERE guild_id=$1 AND user_id=$2) AS grant,
-      EXISTS(SELECT 1 FROM guest_state WHERE guild_id=$1 AND user_id=$2 AND revoked) AS revoked,
-      EXISTS(SELECT 1 FROM free_companies WHERE id=$3 AND last_successful_roster_at>now()-$4*interval '1 second') AS fresh`,
-        [guild.id, member.id, guild.fc_id, this.app.config.ROSTER_INTERVAL_SECONDS],
-      )
-    )[0];
+      .where(
+        and(
+          eq(t.links.guild_id, guild.id),
+          eq(t.links.user_id, member.id),
+          eq(t.links.active, true),
+        ),
+      );
+    const [state] = await db
+      .select({
+        local_loss: exists(
+          db
+            .select({ user_id: t.guildUsers.user_id })
+            .from(t.guildUsers)
+            .where(
+              and(
+                eq(t.guildUsers.guild_id, guild.id),
+                eq(t.guildUsers.user_id, member.id),
+                eq(t.guildUsers.local_member_loss, true),
+              ),
+            ),
+        ).mapWith(Boolean),
+        former: exists(
+          db
+            .select({ id: t.membershipHistory.id })
+            .from(t.membershipHistory)
+            .where(
+              and(
+                eq(t.membershipHistory.guild_id, guild.id),
+                eq(t.membershipHistory.user_id, member.id),
+                guild.fc_id ? eq(t.membershipHistory.fc_id, guild.fc_id) : sql`false`,
+              ),
+            ),
+        ).mapWith(Boolean),
+        grant: exists(
+          db
+            .select({ id: t.guestGrants.id })
+            .from(t.guestGrants)
+            .where(and(eq(t.guestGrants.guild_id, guild.id), eq(t.guestGrants.user_id, member.id))),
+        ).mapWith(Boolean),
+        revoked: exists(
+          db
+            .select({ user_id: t.guestState.user_id })
+            .from(t.guestState)
+            .where(
+              and(
+                eq(t.guestState.guild_id, guild.id),
+                eq(t.guestState.user_id, member.id),
+                eq(t.guestState.revoked, true),
+              ),
+            ),
+        ).mapWith(Boolean),
+        fresh: exists(
+          db
+            .select({ id: t.freeCompanies.id })
+            .from(t.freeCompanies)
+            .where(
+              and(
+                guild.fc_id ? eq(t.freeCompanies.id, guild.fc_id) : sql`false`,
+                gt(
+                  t.freeCompanies.last_successful_roster_at,
+                  sql`now()-${this.app.config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
+                ),
+              ),
+            ),
+        ).mapWith(Boolean),
+      })
+      .from(t.guilds)
+      .where(eq(t.guilds.id, guild.id));
     if (!state || !row) throw new Error("Missing access facts");
     return {
       ...state,
@@ -339,31 +506,56 @@ export class Synchronization {
   async guild(guildId: string, parentJob: string): Promise<unknown> {
     const members = await this.app.discord.members(guildId);
     await this.app.db.transaction(async (client) => {
+      const db = orm(client);
+      // Each requesting run tracks all child work, including coalesced role-layout jobs.
+      const attach = async (child: string) => {
+        await db
+          .insert(t.syncRunJobs)
+          .select(
+            db
+              .select({ run_id: t.syncRuns.id, job_id: sql<string>`${child}::uuid`.as("job_id") })
+              .from(t.syncRuns)
+              .innerJoin(t.syncRunJobs, eq(t.syncRunJobs.run_id, t.syncRuns.id))
+              .where(and(eq(t.syncRuns.guild_id, guildId), eq(t.syncRunJobs.job_id, parentJob))),
+          )
+          .onConflictDoNothing();
+      };
       const layout = await layoutGuildRoles(client, guildId);
-      await client.query(
-        "INSERT INTO sync_run_jobs(run_id,job_id) SELECT r.id,$3 FROM sync_runs r JOIN sync_run_jobs p ON p.run_id=r.id WHERE r.guild_id=$1 AND p.job_id=$2 ON CONFLICT DO NOTHING",
-        [guildId, parentJob, layout],
-      );
+      await attach(layout);
       for (const member of members) {
         if (member.bot) continue;
         await ensureUser(client, guildId, member.id, member.joinedAt);
         const child = await reconcileUser(client, guildId, member.id);
-        await client.query(
-          "INSERT INTO sync_run_jobs(run_id,job_id) SELECT r.id,$3 FROM sync_runs r JOIN sync_run_jobs p ON p.run_id=r.id WHERE r.guild_id=$1 AND p.job_id=$2 ON CONFLICT DO NOTHING",
-          [guildId, parentJob, child],
-        );
+        await attach(child);
       }
       const ids = members.filter((member) => !member.bot).map((member) => member.id);
-      await client.query(
-        "UPDATE guild_users SET present=false WHERE guild_id=$1 AND NOT(user_id::text=ANY($2::text[]))",
-        [guildId, ids],
-      );
-      const cancelled = (
-        await client.query<{ id: string; user_id: string }>(
-          "UPDATE guest_applications a SET state='cancelled',decided_at=now() WHERE guild_id=$1 AND state='pending' AND NOT EXISTS(SELECT 1 FROM guild_users u WHERE u.guild_id=a.guild_id AND u.user_id=a.user_id AND u.present AND u.joined_at=a.joined_at) RETURNING id,user_id",
-          [guildId],
+      await db
+        .update(t.guildUsers)
+        .set({ present: false })
+        .where(and(eq(t.guildUsers.guild_id, guildId), notInArray(t.guildUsers.user_id, ids)));
+      const cancelled = await db
+        .update(t.guestApplications)
+        .set({ state: "cancelled", decided_at: sql`now()` })
+        .where(
+          and(
+            eq(t.guestApplications.guild_id, guildId),
+            eq(t.guestApplications.state, "pending"),
+            notExists(
+              db
+                .select({ user_id: t.guildUsers.user_id })
+                .from(t.guildUsers)
+                .where(
+                  and(
+                    eq(t.guildUsers.guild_id, t.guestApplications.guild_id),
+                    eq(t.guildUsers.user_id, t.guestApplications.user_id),
+                    eq(t.guildUsers.present, true),
+                    eq(t.guildUsers.joined_at, t.guestApplications.joined_at),
+                  ),
+                ),
+            ),
+          ),
         )
-      ).rows;
+        .returning({ id: t.guestApplications.id, user_id: t.guestApplications.user_id });
       for (const application of cancelled)
         await enqueue(
           client,
@@ -373,10 +565,22 @@ export class Synchronization {
           guildId,
           application.user_id,
         );
-      await client.query(
-        "UPDATE sync_runs r SET enumeration_completed_at=now(),status='reconciling' WHERE guild_id=$1 AND EXISTS(SELECT 1 FROM sync_run_jobs p WHERE p.run_id=r.id AND p.job_id=$2)",
-        [guildId, parentJob],
-      );
+      await db
+        .update(t.syncRuns)
+        .set({ enumeration_completed_at: sql`now()`, status: "reconciling" })
+        .where(
+          and(
+            eq(t.syncRuns.guild_id, guildId),
+            exists(
+              db
+                .select({ run_id: t.syncRunJobs.run_id })
+                .from(t.syncRunJobs)
+                .where(
+                  and(eq(t.syncRunJobs.run_id, t.syncRuns.id), eq(t.syncRunJobs.job_id, parentJob)),
+                ),
+            ),
+          ),
+        );
     });
     return {
       enumerationComplete: true,
@@ -398,11 +602,11 @@ export class Synchronization {
           )
         ).rows[0]?.locked ?? false;
       if (!locked) throw new Failure("busy", "User reconciliation is already running.");
-      const guild = (
-        await this.app.db.query<GuildRecord>("SELECT * FROM guilds WHERE id=$1 AND active", [
-          job.guild_id,
-        ])
-      )[0];
+      const db = this.app.db.orm;
+      const [guild] = await db
+        .select()
+        .from(t.guilds)
+        .where(and(eq(t.guilds.id, job.guild_id), eq(t.guilds.active, true)));
       if (!guild) return { skipped: "guild inactive" };
       const member = await this.app.discord.member(guild.id, job.user_id);
       if (!member || member.bot) return { skipped: "user absent or bot" };
@@ -425,10 +629,10 @@ export class Synchronization {
         member.roles.includes(guild.leader_role_id ?? ""),
         rank.fresh,
       );
-      const retired = await this.app.db.query<{ role_id: string }>(
-        "SELECT role_id FROM retired_roles WHERE guild_id=$1",
-        [guild.id],
-      );
+      const retired = await db
+        .select({ role_id: t.retiredRoles.role_id })
+        .from(t.retiredRoles)
+        .where(eq(t.retiredRoles.guild_id, guild.id));
       const add: string[] = [];
       const remove = retired
         .map((row) => row.role_id)
@@ -444,12 +648,11 @@ export class Synchronization {
         if (!wanted && member.roles.includes(role)) remove.push(role);
       }
       if (preview) {
-        const preferences = (
-          await this.app.db.query<UserRecord & { name: string | null }>(
-            "SELECT u.*,c.name FROM guild_users u LEFT JOIN characters c ON c.id=u.primary_character_id WHERE u.guild_id=$1 AND u.user_id=$2",
-            [guild.id, member.id],
-          )
-        )[0];
+        const [preferences] = await db
+          .select({ ...getTableColumns(t.guildUsers), name: t.characters.name })
+          .from(t.guildUsers)
+          .leftJoin(t.characters, eq(t.characters.id, t.guildUsers.primary_character_id))
+          .where(and(eq(t.guildUsers.guild_id, guild.id), eq(t.guildUsers.user_id, member.id)));
         let target = member.nickname;
         if (preferences) {
           const ownPending =
@@ -486,11 +689,10 @@ export class Synchronization {
       if (!guild.effects_enabled || !this.app.config.ENABLE_EFFECTS)
         throw new Failure("disabled", "Effects are disabled pending activation.");
       await guard();
-      const current = (
-        await this.app.db.query<{ revision: bigint }>("SELECT revision FROM guilds WHERE id=$1", [
-          guild.id,
-        ])
-      )[0];
+      const [current] = await db
+        .select({ revision: t.guilds.revision })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guild.id));
       if (current?.revision !== guild.revision)
         throw new Failure("superseded", "Configuration changed.");
       let roleError: unknown;
@@ -506,22 +708,33 @@ export class Synchronization {
       } catch (error) {
         nicknameError = error;
       }
-      await this.app.db.query(
-        "UPDATE jobs SET result=$3 WHERE id=$1 AND lease_token=$2 AND lease_until>now()",
-        [
-          job.id,
-          job.lease_token,
-          json({
+      await db
+        .update(t.jobs)
+        .set({
+          result: {
             roles: { status: roleError ? "pending_or_blocked" : "applied", add, remove },
             nickname: { status: nicknameError ? "pending_or_blocked" : "applied" },
-          }),
-        ],
-      );
-      if (desired.member) {
-        const apps = await this.app.db.query<{ id: string }>(
-          "UPDATE guest_applications SET state='superseded',decided_at=now() WHERE guild_id=$1 AND user_id=$2 AND state='pending' RETURNING id",
-          [guild.id, member.id],
+          },
+        })
+        .where(
+          and(
+            eq(t.jobs.id, job.id),
+            eq(t.jobs.lease_token, job.lease_token),
+            gt(t.jobs.lease_until, sql`now()`),
+          ),
         );
+      if (desired.member) {
+        const apps = await db
+          .update(t.guestApplications)
+          .set({ state: "superseded", decided_at: sql`now()` })
+          .where(
+            and(
+              eq(t.guestApplications.guild_id, guild.id),
+              eq(t.guestApplications.user_id, member.id),
+              eq(t.guestApplications.state, "pending"),
+            ),
+          )
+          .returning({ id: t.guestApplications.id });
         for (const app of apps)
           await enqueue(
             this.app.db.pool,
@@ -553,21 +766,18 @@ export class Synchronization {
   ): Promise<void> {
     const current = await this.app.discord.member(guild.id, member.id);
     if (!current || current.bot) return;
-    const user = (
-      await this.app.db.query<UserRecord>(
-        "SELECT * FROM guild_users WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id],
-      )
-    )[0];
+    const db = this.app.db.orm;
+    const scope = and(eq(t.guildUsers.guild_id, guild.id), eq(t.guildUsers.user_id, member.id));
+    const [user] = await db.select().from(t.guildUsers).where(scope);
     if (!user) return;
     const ownPending = user.nickname_pending && current.nickname === user.nickname_expected;
     const expected = user.nickname_written ? user.nickname_last : user.nickname_before;
     const independent = user.nickname_baseline_set && current.nickname !== expected && !ownPending;
     const suspend = async () => {
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_suspended=true,nickname_enabled=false,nickname_pending=false WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({ nickname_suspended: true, nickname_enabled: false, nickname_pending: false })
+        .where(scope);
     };
     if (user.nickname_restore) {
       let restored = ownPending && current.nickname === user.nickname_before;
@@ -578,10 +788,15 @@ export class Synchronization {
         !independent &&
         current.nickname !== user.nickname_before
       ) {
-        await this.app.db.query(
-          "UPDATE guild_users SET nickname_pending=true,nickname_expected=nickname_before,nickname_last=$3,nickname_written=true WHERE guild_id=$1 AND user_id=$2",
-          [guild.id, member.id, current.nickname],
-        );
+        await db
+          .update(t.guildUsers)
+          .set({
+            nickname_pending: true,
+            nickname_expected: t.guildUsers.nickname_before,
+            nickname_last: current.nickname,
+            nickname_written: true,
+          })
+          .where(scope);
         await guard();
         restored = await this.app.discord.nickname(
           guild.id,
@@ -592,10 +807,16 @@ export class Synchronization {
         changed = !restored;
       }
       if (changed) await suspend();
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_restore=false,nickname_baseline_set=false,nickname_pending=false,nickname_written=false,nickname_last=CASE WHEN $3 THEN nickname_before ELSE nickname_last END WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id, restored],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({
+          nickname_restore: false,
+          nickname_baseline_set: false,
+          nickname_pending: false,
+          nickname_written: false,
+          nickname_last: restored ? t.guildUsers.nickname_before : t.guildUsers.nickname_last,
+        })
+        .where(scope);
       return;
     }
     if (!user.nickname_enabled || user.nickname_suspended || !user.primary_character_id) return;
@@ -604,49 +825,72 @@ export class Synchronization {
       return;
     }
     if (ownPending)
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_last=$3,nickname_written=true,nickname_pending=false WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id, current.nickname],
+      await db
+        .update(t.guildUsers)
+        .set({ nickname_last: current.nickname, nickname_written: true, nickname_pending: false })
+        .where(scope);
+    const [character] = await db
+      .select({ name: t.characters.name })
+      .from(t.characters)
+      .innerJoin(t.links, eq(t.links.character_id, t.characters.id))
+      .where(
+        and(
+          eq(t.characters.id, user.primary_character_id),
+          eq(t.links.guild_id, guild.id),
+          eq(t.links.user_id, member.id),
+          eq(t.links.active, true),
+        ),
       );
-    const character = (
-      await this.app.db.query<{ name: string }>(
-        "SELECT c.name FROM characters c JOIN links l ON l.character_id=c.id WHERE c.id=$1 AND l.guild_id=$2 AND l.user_id=$3 AND l.active",
-        [user.primary_character_id, guild.id, member.id],
-      )
-    )[0];
     if (!character) return;
     const target = nickname(character.name);
     if (!user.nickname_baseline_set)
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_before=$3,nickname_baseline_set=true,nickname_written=false WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id, current.nickname],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({
+          nickname_before: current.nickname,
+          nickname_baseline_set: true,
+          nickname_written: false,
+        })
+        .where(scope);
     if (current.nickname !== target) {
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_pending=true,nickname_expected=$3 WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id, target],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({ nickname_pending: true, nickname_expected: target })
+        .where(scope);
       await guard();
       if (!(await this.app.discord.nickname(guild.id, member.id, target, current.nickname))) {
         await suspend();
         return;
       }
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_last=$3,nickname_written=true,nickname_pending=false WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id, target],
-      );
-    } else
-      await this.app.db.query(
-        "UPDATE guild_users SET nickname_pending=false WHERE guild_id=$1 AND user_id=$2",
-        [guild.id, member.id],
-      );
+      await db
+        .update(t.guildUsers)
+        .set({ nickname_last: target, nickname_written: true, nickname_pending: false })
+        .where(scope);
+    } else await db.update(t.guildUsers).set({ nickname_pending: false }).where(scope);
   }
   /** Startup catch-up and jittered scheduling fetch only actively needed FCs/profiles. */
   async schedule(): Promise<void> {
-    const companies = await this.app.db.query<{ id: string }>(
-      "SELECT f.id FROM free_companies f WHERE EXISTS(SELECT 1 FROM guilds g WHERE g.fc_id=f.id AND g.active) AND (f.last_successful_roster_at IS NULL OR f.last_successful_roster_at<now()-$1*interval '1 second')",
-      [this.app.config.ROSTER_INTERVAL_SECONDS],
-    );
+    const db = this.app.db.orm;
+    const companies = await db
+      .select({ id: t.freeCompanies.id })
+      .from(t.freeCompanies)
+      .where(
+        and(
+          exists(
+            db
+              .select({ id: t.guilds.id })
+              .from(t.guilds)
+              .where(and(eq(t.guilds.fc_id, t.freeCompanies.id), eq(t.guilds.active, true))),
+          ),
+          or(
+            isNull(t.freeCompanies.last_successful_roster_at),
+            lt(
+              t.freeCompanies.last_successful_roster_at,
+              sql`now()-${this.app.config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
+            ),
+          ),
+        ),
+      );
     for (const fc of companies)
       await enqueue(
         this.app.db.pool,
@@ -657,17 +901,50 @@ export class Synchronization {
         null,
         Math.random() * 30,
       );
-    const characters = await this.app.db.query<{ id: string }>(
-      "SELECT c.id FROM characters c WHERE (c.profile_at IS NULL OR c.profile_at<now()-$1*interval '1 second') AND EXISTS(SELECT 1 FROM links l JOIN guild_users u ON u.guild_id=l.guild_id AND u.user_id=l.user_id JOIN guilds g ON g.id=l.guild_id WHERE l.character_id=c.id AND l.active AND u.present AND g.active) LIMIT 100",
-      [this.app.config.PROFILE_INTERVAL_SECONDS],
-    );
+    const characters = await db
+      .select({ id: t.characters.id })
+      .from(t.characters)
+      .where(
+        and(
+          or(
+            isNull(t.characters.profile_at),
+            lt(
+              t.characters.profile_at,
+              sql`now()-${this.app.config.PROFILE_INTERVAL_SECONDS}*interval '1 second'`,
+            ),
+          ),
+          exists(
+            db
+              .select({ id: t.links.id })
+              .from(t.links)
+              .innerJoin(
+                t.guildUsers,
+                and(
+                  eq(t.guildUsers.guild_id, t.links.guild_id),
+                  eq(t.guildUsers.user_id, t.links.user_id),
+                ),
+              )
+              .innerJoin(t.guilds, eq(t.guilds.id, t.links.guild_id))
+              .where(
+                and(
+                  eq(t.links.character_id, t.characters.id),
+                  eq(t.links.active, true),
+                  eq(t.guildUsers.present, true),
+                  eq(t.guilds.active, true),
+                ),
+              ),
+          ),
+        ),
+      )
+      .limit(100);
     for (const character of characters)
       await enqueue(this.app.db.pool, "profile", `profile:${character.id}`, {
         characterId: character.id,
       });
-    await this.app.db.query("DELETE FROM challenges WHERE expires_at<now()-interval '7 days'");
-    await this.app.db.query(
-      "UPDATE jobs SET status='queued',due_at=now()+interval '5 minutes',attempts=0 WHERE status='blocked' AND due_at<now()-interval '5 minutes'",
-    );
+    await db.delete(t.challenges).where(lt(t.challenges.expires_at, sql`now()-interval '7 days'`));
+    await db
+      .update(t.jobs)
+      .set({ status: "queued", due_at: sql`now()+interval '5 minutes'`, attempts: 0 })
+      .where(and(eq(t.jobs.status, "blocked"), lt(t.jobs.due_at, sql`now()-interval '5 minutes'`)));
   }
 }

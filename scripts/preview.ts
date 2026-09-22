@@ -8,6 +8,8 @@ import { Synchronization } from "../src/application/synchronization.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
 import { Nodestone } from "../src/infrastructure/nodestone/client.js";
 import { id, json } from "../src/domain/values.js";
+import { and, eq, gt, sql } from "drizzle-orm";
+import * as t from "../src/infrastructure/postgres/schema.js";
 
 const config = configuration();
 const guild = id(process.argv[2]);
@@ -15,10 +17,19 @@ const db = new Database(config.DATABASE_URL);
 const gateway = new DiscordGateway();
 try {
   await db.schema();
-  const fresh = await db.query(
-    "SELECT g.id FROM guilds g JOIN free_companies f ON f.id=g.fc_id WHERE g.id=$1 AND f.last_successful_roster_at>now()-$2*interval '1 second'",
-    [guild, config.ROSTER_INTERVAL_SECONDS],
-  );
+  const fresh = await db.orm
+    .select({ id: t.guilds.id })
+    .from(t.guilds)
+    .innerJoin(t.freeCompanies, eq(t.freeCompanies.id, t.guilds.fc_id))
+    .where(
+      and(
+        eq(t.guilds.id, guild),
+        gt(
+          t.freeCompanies.last_successful_roster_at,
+          sql`now()-${config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
+        ),
+      ),
+    );
   if (!fresh.length)
     throw new Error("Acquire a fresh complete roster first with roster:acquire GUILD_ID.");
   await gateway.client.login(config.DISCORD_TOKEN);

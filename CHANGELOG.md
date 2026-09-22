@@ -1,6 +1,15 @@
 # Version history
 
-The current application version is **2.8.4**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.9.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.9.0 — Drizzle persistence
+
+- Map the existing PostgreSQL schema with Drizzle ORM and use typed queries for application persistence.
+- Preserve exact external IDs, bigint money, UTC timestamps, and database-enforced invariants.
+- Bind ORM operations to the same connection as transactional decisions and PostgreSQL locks.
+- Retain the applied SQL migrations and explicit PostgreSQL-specific control statements.
+- Convert roster/rank projection, role setup, gateway observations, work leases/outbox, capability metrics, import, and maintenance commands to the shared ORM boundary.
+- Derive persisted record contracts from the mapped schema and verify mapping parity, scalar JSON, transaction isolation/rollback, and concurrent queue fencing against PostgreSQL.
 
 ## 2.8.4 — Dependabot maintenance
 
@@ -67,6 +76,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.8.2 | CodeQL merge-gate integration and AGPL-3.0 licensing |
 | 2.8.3 | Non-cancelling release publication and exact registry version tags |
 | 2.8.4 | Weekly Bun dependency-update pull requests |
+| 2.9.0 | Typed Drizzle persistence with exact-value, transaction, and queue regression coverage |
 
 ## Increment policy
 

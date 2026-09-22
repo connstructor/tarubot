@@ -5,7 +5,8 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The full automated suite passed **85 tests / 366 assertions** with both supplied and synthetic migration inputs.
+- The 2.9.0 full automated suite passed **90 tests / 621 assertions** with both supplied and synthetic migration inputs.
+- Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
 - Nodestone submodule builds, dependency-update checks, clean-clone installation, containers, fixture import, and an earlier backup/restore rehearsal have passed.
@@ -15,7 +16,7 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 
 | Priority | Open item | Requirement / evidence |
 | --- | --- | --- |
-| P1 | Implement the newly requested lobby security model: no-access-role users see only the lobby; Members/Guests cannot see it; staff can; ordinary channels of every type are role-gated. Reuse or create at least one officer-only room, and automatically qualify verified non-FC users for Guest while respecting revocation. | Owner-requested onboarding expansion, agreed after the initial delivery review; implementation follows the CI/CD work. |
+| P1 | Implement the newly requested lobby security model: no-access-role users see only the lobby; Members/Guests cannot see it; staff can; ordinary channels of every type are role-gated. Reuse or create at least one officer-only room, and automatically qualify verified non-FC users for Guest while respecting revocation. | Owner-requested onboarding expansion; resume the saved partial implementation after the separate Drizzle foundation PR. |
 | P1 | Complete officer operational notifications: aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices, with per-guild/run throttling. | **OPS-11, DB-07**. `Synchronization.roster` currently emits roster acceptance/degraded messages; general queue failures go to logs/status through `Queue` and `src/main.ts`. |
 | P1 | Complete operational telemetry: application/job duration, queue age, retry context, and consistent guild/FC/run context. | **OPS-10**. Current reporting has operation IDs, result/error categories, queue counts, and roster age, but does not cover all required measurements. |
 | P2 | Harden and rehearse coalescing/backoff for bursts of role events and complete member enumeration. | **SYNC-02, SYNC-14–17**. Live role changes produced transient gateway rate-limit errors before recovering; exercise this at representative guild size. |
@@ -45,9 +46,11 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
-2. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
-3. Least-privilege and interruption/recovery rehearsal.
-4. Production capture, import preview, and coordinated cutover.
+1. Merge/publish the verified Drizzle foundation and run the 2.9.0 DevBot persistence smoke plan.
+2. Complete and verify lobby/officer-channel security and registered non-FC Guest eligibility.
+3. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
+4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
+5. Least-privilege and interruption/recovery rehearsal.
+6. Production capture, import preview, and coordinated cutover.
 
-PR validation, required CodeQL security/code-quality analysis, and post-merge GHCR publication are defined in `.github/workflows/ci.yml`, `codeql.yml`, and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. First publication and registry deployment follow merge of the passing CI/CD PR. This automation complements the live acceptance and cutover work above.
+PR validation, required CodeQL security/code-quality analysis, and post-merge GHCR publication are defined in `.github/workflows/ci.yml`, `codeql.yml`, and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. Publication and pull-only DevBot deployment were verified for 2.8.3; subsequent releases follow the same checked PR/publication/deployment flow. This automation complements the live acceptance and cutover work above.

@@ -407,7 +407,7 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 ## 10. Persistence, transactions, and durable effects
 
-**DB-01.** PostgreSQL is the runtime database. Manage its schema through explicit versioned migrations. Use foreign keys, unique constraints, appropriate indexes, and parameterized SQL/a typed query layer. Application startup checks the required schema version.
+**DB-01.** PostgreSQL is the runtime database. Use Drizzle ORM for typed application persistence over the node-postgres driver, with table mappings and inferred record types maintained alongside explicit versioned SQL migrations. The migrations own foreign keys, unique constraints, indexes, domains, and triggers; already-applied migrations are immutable. Bind ORM work inside an application transaction to its exact checked-out client. Retain narrowly scoped parameterized PostgreSQL control/locking SQL and catalog-based restore verification. Application startup checks the required schema version and checksum.
 
 The physical schema may use different names, but it must represent these logical records and constraints:
 
