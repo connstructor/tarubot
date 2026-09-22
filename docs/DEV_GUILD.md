@@ -50,18 +50,27 @@ The Compose service is named `tarubot`; its actual Discord identity comes from t
 - Layout job `7c5d1498-2db8-4caa-abfb-0a90d241b829` coalesced its role-event echoes and succeeded after two passes. Follow-up job `1ad404bb-6dd9-41c2-a367-340a0faf6657` succeeded with empty hoist/position deltas, confirming convergence.
 - The startup role events briefly rate-limited complete member enumeration. Durable retries recovered: job `b43dcbaf-9755-400c-a3d3-20acb6fc34d7` completed all five humans. Final readiness showed zero pending work and zero degraded FCs; the only blocked effect was the expected guild-owner nickname update.
 
-### Verified role layout
+### Consecutive block and original-role reuse correction
 
-Read back after the 2026-09-22 role-layout deployment. Higher positions take priority; DevBot's own role is at position 8.
+The first layout checked priority but allowed interleaving and retained newly created duplicates. The owner requested one consecutive block and reuse of the original Member/Guest roles. The corrected deployment was verified on 2026-09-22:
+
+- Guild configuration revision **9** binds Member to `1042089882677420172` and Guest to `1042089887798677545`. Setup reused all four IDs with `created: false`, renaming the two original roles to the requested DevBot-prefixed names.
+- Original Member and Guest permissions remain exactly `1071698529857`; their existing IDs and Discord references were retained. Both verified FC members (`669230721168179200` and `725369723964882976`) hold the original Member role; the owner also retains FC Leader.
+- Removed the obsolete roles `1551979199554912286` and `1551979205183406210` only after confirming their setup-creation audit records, retired bindings, zero holders in a complete seven-member enumeration, and zero channel references. Both removals were audited.
+- Live readback verified adjacent managed positions **4, 3, 2, 1**, all with separate member-list display enabled. DevBot remains at position 6 and the other bot at position 5, above the whole block.
+- Follow-up layout job `4ccba9e7-65de-4772-ab80-e7bfe60467db` succeeded with empty hoist/position deltas. Readiness showed zero pending work and zero degraded FCs. The sole blocked effect remained the expected guild-owner nickname update.
+- Startup posted message `1552008870069538898` with the corrected role-reuse/consecutive-hierarchy plan and all three responsibility sections. The submodule-built Nodestone sidecar was healthy and reported both upstream revisions current.
+
+Higher positions take priority. The current verified layout is:
 
 | Managed role | ID | Position | Separate member-list display |
 | --- | --- | --- | --- |
-| DevBot FC Leader | `1551979217087103137` | 7 | Enabled |
-| DevBot Officer | `1551979211391115405` | 5 | Enabled |
-| DevBot Member | `1551979199554912286` | 3 | Enabled |
-| DevBot Guest | `1551979205183406210` | 1 | Enabled |
+| DevBot FC Leader | `1551979217087103137` | 4 | Enabled |
+| DevBot Officer | `1551979211391115405` | 3 | Enabled |
+| DevBot Member | `1042089882677420172` | 2 | Enabled |
+| DevBot Guest | `1042089887798677545` | 1 | Enabled |
 
-Unrelated roles remain interleaved in their existing relative order. The latest session announcement is [available in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1551994024498303009).
+The managed block is uninterrupted, and unrelated roles retain their relative order. The latest session announcement is [available in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1552008870069538898).
 
 Repeat the scoped probes with:
 
@@ -75,7 +84,7 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 
 ## Human interaction checks
 
-Setup, idempotent role reuse, resource validation, complete cached reconciliation, and Shion Tsuji's real profile-token verification have passed. Member and FC Leader delivery, role order, and hoist flags are confirmed by Discord readback. The current plan asks testers to confirm the visible member-list grouping and prepares non-owner nickname testing. See `test-plans/current.json` and the latest plan in `#chat`.
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. The current plan asks testers to confirm the corrected role list and visible member grouping. See `test-plans/current.json` and the latest plan in `#chat`.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 
