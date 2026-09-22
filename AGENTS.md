@@ -7,6 +7,12 @@
 - Do not edit migrations already applied to a running database; add a migration for schema changes.
 - DevBot uses `docker compose -f docker-compose.yml -f docker-compose.devbot.yml ...` and database `tarubot_dev`. Update `test-plans/current.json` before starting a new development test session.
 
+## Versioning
+
+Every coherent change set must increment the SemVer in `package.json`. This applies to source, configuration, tooling, tests, documentation, and maintenance work. Use a major increment for incompatible changes, a minor increment for backward-compatible features, and a patch increment for compatible fixes or maintenance. Group related edits under one version increment rather than incrementing separately for each file.
+
+Update `CHANGELOG.md` in the same commit, regenerate `bun.lock` when affected, and synchronize version references such as the current startup test plan. Build and deploy the new version when updating the running bot. The current implementation is the major-version-2 rewrite.
+
 ## Git history
 
 The owner requests frequent local commits to track changes and iterations. Commit each coherent, verified change or milestone rather than accumulating the entire session. Use concise imperative messages that explain the change; preserve actual chronology rather than inventing historical phases.

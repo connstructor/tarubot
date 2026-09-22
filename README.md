@@ -30,6 +30,8 @@ Add a `*.command.ts` under `src/commands/`, a `*.event.ts` under `src/events/`, 
 
 See [MODULES.md](docs/MODULES.md) for complete command/event/component examples and service injection, and [CONFIGURATION.md](docs/CONFIGURATION.md) for configuration-code commentary.
 
+See [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) for the remaining requirements-backed implementation, live acceptance, and production-delivery work. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
+
 ## Install and check
 
 Clone with `git clone --recurse-submodules REPOSITORY_URL`, or initialize the submodule in an existing checkout before installing dependencies. Run these commands from this directory:
@@ -59,11 +61,30 @@ The integration suite recreates that test database's `public` schema. Tests use 
 ## Discord setup
 
 1. Create a development Discord application and install it in the test guild. Production cutover reuses the existing production application.
-2. Enable **Server Members Intent**. The application uses `Guilds` and `GuildMembers` gateway intents.
-3. Install with the `bot` and `applications.commands` scopes.
-4. Grant the bot **Manage Roles**, **Manage Nicknames** when nicknames are enabled, and **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in configured channels. Keep bot **Administrator** disabled.
-5. Place its role above the member and guest roles and the members whose nicknames it will manage. Member/guest roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles.
-6. Officers use effective **Manage Server** permission. Selecting/clearing access roles also requires **Manage Roles**; selection respects the officer's role hierarchy.
+2. Install with the `bot` and `applications.commands` scopes.
+3. Enable **Server Members Intent** in the Discord Developer Portal and grant the permissions listed below.
+
+### Gateway intents
+
+| Intent | Reason required |
+| --- | --- |
+| `Guilds` | Receive guild, role, and channel lifecycle updates and maintain the guild context needed by commands and managed-role checks. |
+| `GuildMembers` — **Server Members Intent** (privileged) | Fetch complete member lists and observe joins, departures, role changes, and nickname changes for reconciliation. |
+
+### Bot permissions
+
+Grant the guild-level management permissions and the channel permissions in each configured destination.
+
+| Permission | Reason required |
+| --- | --- |
+| **Manage Roles** | Create or reuse, rename, arrange, and display managed roles separately; assign and remove Member, Guest, Officer, and FC Leader roles during reconciliation. |
+| **Manage Nicknames** | Apply and restore character-based nicknames when users enable nickname management. |
+| **View Channel** | Access configured ledger, officer-notification, guest-review, and development test-plan channels. |
+| **Send Messages** | Deliver ledger and officer notifications, guest review messages, and startup test plans. |
+| **Embed Links** | Render startup-plan and `/version` embeds and other embedded bot responses. |
+| **Read Message History** | Find existing bot-owned messages for notification deduplication and guest-review updates or repair. |
+
+Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Member/guest roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles. See [SETUP.md](docs/SETUP.md) for officer authorization, role-selection authority, and server-manager requirements.
 
 All commands are guild-only. Responses use the declared privacy defaults, with public replies enabled for the observed DevBot test guild through `PUBLIC_TEST_RESPONSES`. Review/ledger/officer messages go to their configured destinations. Notifications default to no parsed mentions.
 

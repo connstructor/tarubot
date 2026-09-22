@@ -85,9 +85,17 @@ bun dist/scripts/discord-smoke.js --member-role 1042089882677420172 --guest-role
 
 Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the temporary bot-owned message test in `#dev`.
 
+## Version-command delivery
+
+- Guild registration now exposes **19 root commands / 40 paths**, including `/version`. Its default member permissions are unrestricted; the optional `commits` integer is bounded from 1 through 10.
+- Human `/version` responses `1552029009527709747` and `1552029149059620865` were read back in `#chat`, showing `TaruBot v2.7.0`, four commit fields, and public message flags `0` for the guild owner.
+- The running maintenance build reports **2.7.1** from its compiled manifest. Live GitHub retrieval returned the published `main` history with canonical links and valid verified-signature metadata. The 2.7.0 count-1/count-10 service probes returned one and six available commits respectively; the 2.7.1 default-count probe returned five. Rendering placed ✅ next to verified commit IDs.
+- Startup announcement `1552030590482776246` contains the current 2.7.1 version/history test plan with all three responsibility sections. Readiness confirmed database/Discord connectivity, enabled effects/public development replies, zero pending/blocked work, and zero degraded FCs.
+- History is fetched from GitHub and shared in an in-memory cache for up to five minutes. The installed version comes from the compiled package manifest. Ordinary non-officer invocation, count-boundary UI checks, and link/badge visual confirmation remain in the current plan.
+
 ## Human interaction checks
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out, leaving no outstanding guild work. The current plan asks testers to confirm the corrected role list and visible member grouping. See `test-plans/current.json` and the latest plan in `#chat`.
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out, leaving no outstanding guild work. The current plan focuses on `/version` access, history counts, links, and verified-signature badges. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for the remaining acceptance work.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 
