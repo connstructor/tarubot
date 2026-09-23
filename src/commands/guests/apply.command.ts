@@ -1,13 +1,9 @@
 /** Submit or retrieve a caller's durable application for their current join context. */
-import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { guestApplicationModal } from "../../discord/guest-application.js";
 
 export default defineCommand({
-  data: command("apply", "Submit a persistent guest application"),
-  requires: [applicationKey],
-  async execute({ actor, services }) {
-    return dataReply(await services.get(applicationKey).apply(actor));
-  },
+  data: command("apply", "Apply for officer-reviewed Guest access without a verified character"),
+  modal: guestApplicationModal,
 });

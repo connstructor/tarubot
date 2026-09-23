@@ -1,14 +1,15 @@
 # Delivery backlog
 
-Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and recorded DevBot sessions on 2026-09-22. GitHub had no open issues or pull requests when reviewed; this document records the remaining delivery work.
+Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and recorded DevBot sessions through 2026-09-23. This document records the remaining delivery work.
 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.11.1 full automated suite passed **115 tests / 1,109 assertions** with both supplied and synthetic migration inputs, including a large-guild REST request-budget regression.
+- The 2.12.0 full automated suite passed **127 tests / 1,196 assertions** with both supplied and synthetic migration inputs, including guest-form acknowledgement/persistence/review and large-guild REST request-budget regressions.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
-- Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. Live onboarding verification is the next session.
-- DevBot 2.10.1 was deployed after a backup/restore comparison and migration rehearsal. Administrator is now off, the separate officer-chat was created and managed successfully, and compiled 2.10.2 preflight passed with the configured community-updates channel/category excluded. Full human visibility verification remains.
+- Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. DevBot's 2.11.1 setup enabled onboarding at revision 10; its 11-channel access job succeeded with community resources excluded.
+- DevBot 2.11.1 runs published images following a stopped-writer backup. Administrator remains off, all four existing roles and officer-chat were reused, and the lobby was created. Full human visibility verification remains.
+- The 2.12.0 source adds a two-question `/apply` modal for unverified visitors, durable answer review, and migration 004. Verified non-FC Guest eligibility remains automatic. Its deployment and integrated human form/approval session remain to be completed.
 - The App Platform spec creates an inline PostgreSQL 18 dev database, with private parser routing and provider-CA TLS support. Offline doctl validation and deployment/TLS invariants passed; account-backed creation and operational rehearsal remain to be performed by the operator.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
@@ -29,8 +30,8 @@ These paths have implementation and automated coverage. The remaining work is to
 
 | Area | Remaining checks | Requirements |
 | --- | --- | --- |
-| Lobby onboarding | Deploy the community-scope fix, run `/setup officers:#officer-chat`, verify community resources remain outside policy, and exercise visibility, drift, restart, and visitor revocation with non-owner/non-Administrator users. Migration 003 and command registration are already deployed on DevBot. | **ACCESS-01–05**; `test-plans/current.json` |
-| Guest applications | `/apply`; approve/deny via commands and buttons; original buttons after restart; deleted review-message repair; blocked DMs; deny/reapply cooldown; grant/revoke/rejoin; visible delivery outcomes. | **GUEST-01–09, AC-12–13** |
+| Lobby onboarding | Setup/access job succeeded on 2.11.1. Exercise visibility, drift, restart, and visitor revocation with non-owner/non-Administrator users; retain excluded community policy. | **ACCESS-01–05**; `docs/DEV_GUILD.md` |
+| Guest applications | Deploy 2.12.0/migration 004, choose officer-chat as the review destination, submit the unverified-visitor `/apply` modal, and approve/deny through buttons/commands. Exercise original buttons after restart, deleted review-message repair, blocked DMs, duplicate/stale forms, denial cooldown, grant/revoke/rejoin, and visible delivery outcomes. | **GUEST-01–09, AC-12–13**; `test-plans/current.json` |
 | Ledger | Initialize the isolated DevBot account; deposit/withdraw/adjust; balance/history pagination; ordinary-member versus officer authorization; blocked notification and retry without a second financial mutation; historical account access after unlink/relink. | **LEDGER-01–11, AC-15–17** |
 | Character workflows | By-name/world search and selection, private autocomplete, officer assignment, offline local unassignment, multiple characters, primary selection, and expired/replaced proof through actual interactions. | **CHAR-01–05, VERIFY-01–06, AC-03–06** |
 | Nicknames | Non-owner writes, primary changes, manual-override suspension, re-enable baseline, restoration, and imported-user opt-in. Record the happy path explicitly even where a normal write may already have occurred during claim testing. | **NICK-01–06, AC-14** |
@@ -50,9 +51,9 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Merge/publish the verified 2.11.1 release and update DevBot; migration 003 is already installed. App Platform deployment is a separate operator-run workflow.
-2. Run the DevBot lobby/staff/registered-visitor session, including retained persistence and least-privilege visibility checks.
-3. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
+1. Complete the 2.12.0 PR/check/publication workflow, then back up and migrate DevBot to schema 004 with matching images. App Platform deployment is a separate operator-run workflow.
+2. Run the unverified-visitor form/approval session in officer-chat, including restart/rejoin and retained automatic registered-visitor access.
+3. Finish the lobby visibility and ledger end-to-end sessions, while completing operational alerting/telemetry.
 4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
 5. Least-privilege and interruption/recovery rehearsal.
 6. Production capture, import preview, and coordinated cutover.

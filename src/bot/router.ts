@@ -21,7 +21,7 @@ export class InteractionRouter {
       context.services.require(module.requires);
   }
 
-  /** Defer before network/database work and consistently distinguish failures from success. */
+  /** Defer before remote work, or open a synchronous form as the initial acknowledgement. */
   async handle(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
       await this.autocomplete(interaction);
@@ -39,8 +39,10 @@ export class InteractionRouter {
     const ephemeral =
       !interaction.isChatInputCommand() ||
       this.commands.get(interaction.commandName)?.ephemeral !== false;
-    await interaction.deferReply(
-      replyAcknowledgement(interaction.guildId, ephemeral, this.context.publicResponseGuildId),
+    const acknowledgement = replyAcknowledgement(
+      interaction.guildId,
+      ephemeral,
+      this.context.publicResponseGuildId,
     );
     try {
       if (!interaction.guildId || interaction.user.bot)
@@ -52,12 +54,22 @@ export class InteractionRouter {
           "input",
           "Unknown or obsolete interaction. Ask an officer to redeploy commands.",
         );
+      if (interaction.isChatInputCommand()) {
+        const command = this.commands.get(interaction.commandName);
+        if (command?.modal) {
+          // No authority or state change is granted by opening a form. Its separate submission
+          // follows the normal fresh-actor path below; Discord forbids showing a modal after defer.
+          await interaction.showModal(command.modal(interaction));
+          return;
+        }
+      }
+      await interaction.deferReply(acknowledgement);
       const actor = await this.context.resolveActor(interaction.guildId, interaction.user.id);
       authorize(actor, interaction.guildId, module.access);
       // Separate lookups retain precise interaction types without casting a handler union.
       if (interaction.isChatInputCommand()) {
         const command = this.commands.get(interaction.commandName);
-        if (!command) throw new Error("Command disappeared from immutable registry");
+        if (!command?.execute) throw new Error("Command disappeared from immutable registry");
         await interaction.editReply({
           allowedMentions: { parse: [] },
           ...(await command.execute({ ...this.context, actor, interaction })),
@@ -76,10 +88,12 @@ export class InteractionRouter {
         error instanceof z.ZodError
           ? "Invalid input or unexpected external data. Check the selected values and try again."
           : message(error);
-      await interaction.editReply({
+      const response = {
         content: `${explanation.slice(0, 1700)}\nOperation: ${interaction.id}`,
-        allowedMentions: { parse: [] },
-      });
+        allowedMentions: { parse: [] as const },
+      };
+      if (interaction.deferred || interaction.replied) await interaction.editReply(response);
+      else await interaction.reply({ ...acknowledgement, ...response });
     }
   }
 

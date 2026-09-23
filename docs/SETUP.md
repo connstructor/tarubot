@@ -21,7 +21,7 @@ Unset officer-notification and guest-review destinations default to the selected
 ```text
 /config ledger channel:#dev
 /config officer_notifications channel:#dev
-/config guest_applications channel:#dev
+/config guest_applications channel:#officer-chat
 /config validate
 ```
 
@@ -61,6 +61,18 @@ Channel create/update/delete events coalesce `channels.access` work without enum
 In onboarding-enabled guilds, an **active trusted ownership link** establishes registration. Accepted fresh FC evidence still determines Member status. A registered owner whose linked characters are not eligible for the linked FC receives Guest automatically; if no FC is linked, registration is sufficient locally. Imported trusted ownership and authorized assignment are trusted links as well as profile-token verification. A profile's FC hint never establishes membership.
 
 Automatic Guest is derived, not inserted as an irrevocable manual grant. Explicit Guest revocation suppresses it across restarts/rejoins, and removing the final active link removes this basis for access. Independent manual/approved/imported grants and former-member eligibility retain their existing rules. FC Member eligibility takes precedence even when Guest is revoked. Unknown/stale roster evidence cannot create a new automatic grant; an already-held Guest role can be preserved while accepted evidence is stale. `/guest status` reports `verifiedGuestEligible` separately, and `/apply` explains when existing eligibility should be repaired by reconciliation instead.
+
+## Unverified visitor applications
+
+Visitors without an active trusted character link use `/apply` in the lobby. It opens a modal with two required answers, each 10–300 characters: **Introduce yourself** and **Why join this server?** The second prompt asks how they found the community or who invited them. Officers review these answers for spam before deciding; submitting or reopening the form grants no access.
+
+Choose a staff-only destination with `/config guest_applications channel:#officer-chat`. Setup preserves an existing configured destination, so changing the officer-room binding alone does not move reviews. Each submitted application retains its review channel and original answers. Command confirmations, status replies, and decision acknowledgements omit the answers, including when public development replies are enabled.
+
+The review contains the applicant ID, submission time, outcome, answer fields, and persistent **Approve / Deny** buttons. Officers can also use `/guest approve` or `/guest deny` with the application ID; the deny command accepts a reason. An approved decision queues Guest-role delivery and an outcome DM. A denied application grants nothing and enforces the configured `GUEST_COOLDOWN_SECONDS` before reapplication (one day by default); a failed DM does not undo the decision. `/guest status` separates application outcome from delivery status.
+
+Forms bind to the invoking user, guild, and join time. Leaving/rejoining requires opening a new form. Repeated submissions during the same pending application return that application without replacing the answers. Restarts preserve answers and buttons; missing review messages are recreated from the stored record when review work is retried. Older applications without answers remain reviewable and are labeled as legacy submissions.
+
+Trusted verified/imported/assigned links continue through character/FC eligibility rather than this manual application path, including while roster evidence is uncertain. Verification before an officer decision supersedes the application without creating an independent manual grant. Existing grants, explicit officer grant/revoke operations, automatic registered-visitor Guest access, and FC Member precedence retain their policy.
 
 ## Member-list grouping and role hierarchy
 
@@ -102,5 +114,7 @@ Member and Guest eligibility use the established ownership, membership, applicat
 ## Migration
 
 The role/rank feature introduced `002_setup_and_ranks.sql`; **2.10.0 adds `003_guild_access.sql`** for channel bindings, the opt-in flag, and recovery snapshots. Stop the application writer, back up its database, and run the normal explicit migration command with the new image before starting it. Refresh the slash-command registration for the new `/setup` options and permissions.
+
+**2.12.0 adds `004_guest_application_form.sql`** for guest introduction/interest answers. Follow the same stopped-writer backup/migration procedure using matching images, then register the updated `/apply` definition. Existing applications, grants, decisions, channels, and visibility snapshots are preserved; only new submissions require form answers.
 
 Existing guilds migrate with `access_policy_enabled=false`. Their visibility and registered-visitor behavior are enabled only by a manager running `/setup`. Imported guild activation still requires its persisted effects flag and the process-wide `ENABLE_EFFECTS` flag. Original migrations remain immutable; Drizzle mappings and the startup checksum advance together.
