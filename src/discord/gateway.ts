@@ -37,7 +37,16 @@ export class DiscordGateway implements DiscordPort {
   });
   /** Copy mutable SDK state into the small snapshot consumed by application policy. */
   private view(member: GuildMember): MemberView {
-    if (!member.joinedAt) throw new Failure("incomplete", "Guild join context is unavailable.");
+    if (!member.joinedAt)
+      throw new Failure(
+        "incomplete",
+        "Discord didn't include your join details. Try again in a moment.",
+        0,
+        {
+          kind: "discord",
+          what: "join_context",
+        },
+      );
     return {
       id: member.id,
       guildId: member.guild.id,
@@ -53,7 +62,12 @@ export class DiscordGateway implements DiscordPort {
     await guild.roles.fetch();
     const member = await guild.members.fetch({ user: userId, force: true });
     if (member.user.bot)
-      throw new Failure("forbidden", "Bot accounts cannot invoke these operations.");
+      throw new Failure(
+        "forbidden",
+        "TaruBot commands work only inside the server, for human members.",
+        0,
+        { kind: "scope", scope: "human" },
+      );
     return {
       guildId,
       userId,
@@ -85,10 +99,15 @@ export class DiscordGateway implements DiscordPort {
     }
     throw new Failure(
       "incomplete",
-      "Discord member enumeration changed or did not complete. Retry the snapshot.",
+      "Discord didn't return the complete member list. Try again in a minute.",
+      0,
+      { kind: "discord", what: "member_list" },
     );
   }
-  /** Access roles must be assignable, nonadministrative, and below the applicable hierarchies. */
+  /**
+   * Access roles must be assignable, nonadministrative, and below the applicable hierarchies.
+   * Every refusal names the role in its detail, so replies and job diagnostics can point at it.
+   */
   async validateRole(
     guildId: string,
     roleId: string,
@@ -98,6 +117,7 @@ export class DiscordGateway implements DiscordPort {
     const guild = await this.client.guilds.fetch({ guild: guildId, force: true });
     const role = (await guild.roles.fetch()).get(roleId);
     const bot = await guild.members.fetchMe({ force: true });
+    const affected = { kind: "resource", resource: "role", id: roleId } as const;
     if (
       !role ||
       role.guild.id !== guildId ||
@@ -105,7 +125,12 @@ export class DiscordGateway implements DiscordPort {
       role.managed ||
       bot.roles.botRole?.id === role.id
     )
-      throw new Failure("blocked", "Select an existing, ordinary guild access role.");
+      throw new Failure(
+        "blocked",
+        "Pick an ordinary role: not @everyone, not a bot or integration role, and not TaruBot's own role.",
+        0,
+        affected,
+      );
     if (
       role.permissions.has(PermissionFlagsBits.Administrator, false) ||
       role.permissions.has(PermissionFlagsBits.ManageGuild, false) ||
@@ -113,27 +138,42 @@ export class DiscordGateway implements DiscordPort {
     )
       throw new Failure(
         "blocked",
-        "Access roles must not grant Administrator, Manage Server, or Manage Roles.",
+        `Access roles can't have Administrator, Manage Server or Manage Roles. Remove those from <@&${roleId}> or pick another role.`,
+        0,
+        affected,
       );
     if (channelAccess && role.permissions.has(PermissionFlagsBits.ManageChannels, false))
-      throw new Failure("blocked", "Onboarding access roles must not grant Manage Channels.");
+      throw new Failure(
+        "blocked",
+        "With onboarding on, access roles can't have Manage Channels.",
+        0,
+        affected,
+      );
     if (
       !bot.permissions.has(PermissionFlagsBits.ManageRoles) ||
       bot.roles.highest.comparePositionTo(role) <= 0
     )
       throw new Failure(
         "blocked",
-        "Give the bot Manage Roles and place its role above the configured access role.",
+        `TaruBot can't manage <@&${roleId}>. Its own role must be above that role, and it needs Manage Roles.`,
+        0,
+        affected,
       );
     if (actorId) {
       const actor = await guild.members.fetch({ user: actorId, force: true });
-      if (
-        !actor.permissions.has(PermissionFlagsBits.ManageRoles) ||
-        (guild.ownerId !== actorId && actor.roles.highest.comparePositionTo(role) <= 0)
-      )
+      if (!actor.permissions.has(PermissionFlagsBits.ManageRoles))
         throw new Failure(
           "forbidden",
-          "Your highest role must be above the selected role, and Manage Roles is required.",
+          "Choosing access roles needs Discord's Manage Roles permission.",
+          0,
+          { kind: "scope", scope: "manage_roles" },
+        );
+      if (guild.ownerId !== actorId && actor.roles.highest.comparePositionTo(role) <= 0)
+        throw new Failure(
+          "forbidden",
+          `Your highest Discord role must be above <@&${roleId}> to select it (the server owner is exempt). Ask someone higher in the role list, or move the role lower.`,
+          0,
+          { kind: "scope", scope: "hierarchy" },
         );
     }
   }
@@ -183,7 +223,12 @@ export class DiscordGateway implements DiscordPort {
     const hoisted: string[] = [];
     for (const roleId of priority) {
       const role = roles.get(roleId);
-      if (!role) throw new Failure("blocked", "A configured role was deleted before layout.");
+      if (!role)
+        throw new Failure("blocked", "A configured role was deleted before layout.", 0, {
+          kind: "resource",
+          resource: "role",
+          id: roleId,
+        });
       if (!role.hoist) {
         await guard();
         await role.setHoist(true, "TaruBot managed-role member-list grouping");
@@ -256,7 +301,9 @@ export class DiscordGateway implements DiscordPort {
     )
       throw new Failure(
         "blocked",
-        "Choose a text channel in this guild where the bot can view, send, embed links, and read message history.",
+        `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
+        0,
+        { kind: "resource", resource: "channel", id: channelId },
       );
   }
   /** REST deltas touch only requested role IDs; retry observes any partially applied transition. */
@@ -274,7 +321,12 @@ export class DiscordGateway implements DiscordPort {
         !bot.permissions.has(PermissionFlagsBits.ManageRoles) ||
         bot.roles.highest.comparePositionTo(role) <= 0
       )
-        throw new Failure("blocked", "A current or retired access role is above the bot's role.");
+        throw new Failure(
+          "blocked",
+          "A current or retired access role is above the bot's role.",
+          0,
+          { kind: "resource", resource: "role", id: roleId },
+        );
       await member.roles.remove(roleId, "TaruBot access reconciliation");
     }
     for (const roleId of add) {
@@ -313,7 +365,11 @@ export class DiscordGateway implements DiscordPort {
     await this.validateChannel(guildId, channelId);
     const channel = await this.client.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText)
-      throw new Failure("blocked", "Text channel unavailable.");
+      throw new Failure("blocked", "Text channel unavailable.", 0, {
+        kind: "resource",
+        resource: "channel",
+        id: channelId,
+      });
     const components = application ? [this.controls(application)] : [];
     const nonce = BigInt(
       // A short decimal nonce fits Discord's limit while identifying the same durable effect.
@@ -350,7 +406,11 @@ export class DiscordGateway implements DiscordPort {
     await this.validateChannel(application.guild_id, application.channel_id);
     const channel = await this.client.channels.fetch(application.channel_id);
     if (!channel || channel.type !== ChannelType.GuildText)
-      throw new Failure("blocked", "Review channel unavailable.");
+      throw new Failure("blocked", "Review channel unavailable.", 0, {
+        kind: "resource",
+        resource: "channel",
+        id: application.channel_id,
+      });
     if (application.message_id) {
       try {
         const message = await channel.messages.fetch(application.message_id);

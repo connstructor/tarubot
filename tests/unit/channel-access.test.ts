@@ -190,17 +190,25 @@ test("ambiguous rooms, insufficient authority, dangerous roles and superseded wr
   const fixture = discordAccessFixture();
   try {
     const lobby = fixture.add("lobby");
-    fixture.add("lobby");
-    await expect(fixture.port.prepare("100", "301", fixture.bindings, null, null)).rejects.toThrow(
-      "Several channels",
-    );
-    await expect(fixture.port.check("100", "400")).rejects.toMatchObject({ code: "forbidden" });
+    const twin = fixture.add("lobby");
+    // Same-named rooms are ambiguous, and the detail lists both so the reply can name them.
+    await expect(
+      fixture.port.prepare("100", "301", fixture.bindings, null, null),
+    ).rejects.toMatchObject({
+      code: "ambiguous",
+      detail: { kind: "matches", resource: "channel", name: "lobby", ids: [lobby.id, twin.id] },
+    });
+    await expect(fixture.port.check("100", "400")).rejects.toMatchObject({
+      code: "forbidden",
+      detail: { kind: "scope", scope: "manager" },
+    });
     const role = fixture.roles.find((role) => role.id === "201");
     if (!role) throw new Error("Missing member role");
     role.permissions = String(P.ManageChannels);
-    await expect(fixture.port.snapshot("100", fixture.bindings)).rejects.toThrow(
-      "server-management",
-    );
+    await expect(fixture.port.snapshot("100", fixture.bindings)).rejects.toMatchObject({
+      code: "blocked",
+      detail: { kind: "resource", resource: "role", id: "201" },
+    });
     role.permissions = "0";
     await expect(
       fixture.port.channel("100", lobby.id, fixture.bindings, "lobby", async () => {
@@ -379,11 +387,16 @@ test("missing community metadata blocks changes instead of guessing a protected 
   const fixture = discordAccessFixture();
   try {
     fixture.community.updatesChannelId = "9999";
-    await expect(fixture.port.prepare("100", "301", fixture.bindings, null, null)).rejects.toThrow(
-      "metadata is unavailable",
-    );
-    await expect(fixture.port.restrictEveryone("100", async () => {})).rejects.toThrow(
-      "metadata is unavailable",
+    // Blocked, naming the community channel Discord did not return.
+    const missing = {
+      code: "blocked",
+      detail: { kind: "resource", resource: "channel", id: "9999" },
+    };
+    await expect(
+      fixture.port.prepare("100", "301", fixture.bindings, null, null),
+    ).rejects.toMatchObject(missing);
+    await expect(fixture.port.restrictEveryone("100", async () => {})).rejects.toMatchObject(
+      missing,
     );
     expect(fixture.writes).toEqual([]);
   } finally {

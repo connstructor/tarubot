@@ -52,8 +52,6 @@ export const FAILURE_CATEGORY = {
   initialized: "conflict",
   uninitialized: "conflict",
   insufficient_funds: "conflict",
-  // Superseded by insufficient_funds; removed once its remaining throw site is recoded.
-  funds: "conflict",
   // State changed while the request ran (revision fences, superseded work, out-of-date controls).
   conflict: "stale",
   superseded: "stale",
@@ -61,8 +59,6 @@ export const FAILURE_CATEGORY = {
   expired: "stale",
   // Try again later: a proof not yet visible, cooldowns, contention and shutdown.
   pending_proof: "wait",
-  // Superseded by pending_proof; removed once its remaining throw site is recoded.
-  pending: "wait",
   cooldown: "wait",
   rate_limited: "wait",
   busy: "wait",
@@ -198,11 +194,12 @@ export type FailureDetail =
     }
   /** The character is already linked to another Discord user, identified by `owner`. */
   | { readonly kind: "ownership"; readonly character: FailureCharacter; readonly owner: string }
-  /** A search by `name` matched several candidates, listed by ID. */
+  /** A search by `name` (and, for characters, `world`) matched several candidates, by ID. */
   | {
       readonly kind: "matches";
       readonly resource: "character" | "role" | "channel";
       readonly name: string;
+      readonly world?: string;
       readonly ids: readonly string[];
     }
   /** What went out of date: a button or command, a submitted form, a review post, or join data. */

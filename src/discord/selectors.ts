@@ -1,12 +1,77 @@
-/** Character/user selectors shared by the character command modules. */
+/**
+ * Option parsers and the character selector shared by command modules. Every malformed option
+ * becomes Failure('input') with an option detail, so commands never call bare z.parse and a
+ * remaining ZodError can only mean unexpected external data.
+ */
 import type { ChatInputCommandInteraction } from "discord.js";
 import { z } from "zod";
 import type { Service } from "../application/service.js";
 import type { CharacterIdentity } from "../infrastructure/nodestone/client.js";
-import { Failure, id, lodestoneId } from "../domain/values.js";
+import { Failure, idSchema, lodestoneId, sequenceCursor } from "../domain/values.js";
 
-/** User IDs remain usable after a member leaves the server; mentions are presentation sugar. */
-export const userId = (value: string): string => id(/^<@!?([0-9]+)>$/.exec(value)?.[1] ?? value);
+/** Longest Lodestone search inputs the sidecar accepts (its request schema's bounds). */
+const MAX_NAME = 100;
+const MAX_WORLD = 80;
+
+/**
+ * User IDs remain usable after a member leaves the server; mentions are presentation sugar. The
+ * option is free text, not autocomplete, so the failure asks for an ID or mention rather than a
+ * suggestion.
+ */
+export function userId(value: string, option = "member"): string {
+  const candidate = /^<@!?([0-9]+)>$/.exec(value.trim())?.[1] ?? value.trim();
+  if (!idSchema.safeParse(candidate).success)
+    throw new Failure(
+      "input",
+      "Paste a Discord user ID or @mention, for example 123456789012345678.",
+      0,
+      { kind: "option", option },
+    );
+  return candidate;
+}
+
+/** Where each kind of UUID option comes from: its option name and where to copy a valid one. */
+const UUID_OPTIONS = {
+  application: {
+    option: "application",
+    message:
+      "That isn't a valid application ID. Pick one from the suggestions, or copy it from /guest status.",
+  },
+  entry: {
+    option: "entry",
+    message: "That isn't a valid entry ID. Copy it from /ledger history.",
+  },
+  run: {
+    option: "run_id",
+    message: "That isn't a valid run ID. Copy it from your /refresh reply.",
+  },
+} as const;
+
+/** Parse an application, ledger entry or sync run UUID option. */
+export function uuid(value: string, kind: keyof typeof UUID_OPTIONS): string {
+  const parsed = z.uuid().safeParse(value.trim());
+  const { option, message } = UUID_OPTIONS[kind];
+  if (!parsed.success) throw new Failure("input", message, 0, { kind: "option", option });
+  return parsed.data;
+}
+
+/**
+ * Validate a /ledger history `before` option early; the service parses it again at its own
+ * boundary. Returns the canonical decimal entry number, or null for the newest page.
+ */
+export function cursor(value: string | null): string | null {
+  return value === null ? null : sequenceCursor(value.trim()).toString();
+}
+
+/** Bound a search input to what the Lodestone sidecar accepts, naming the offending option. */
+function searchText(value: string, max: number, option: string): string {
+  if (value.length > max)
+    throw new Failure("input", "Names can be up to 100 characters and worlds up to 80.", 0, {
+      kind: "option",
+      option,
+    });
+  return value;
+}
 
 /** Resolve exactly one selector form, including complete paginated exact-match searches. */
 export async function resolveCharacter(
@@ -22,27 +87,42 @@ export async function resolveCharacter(
     if (forename !== null || surname !== null || world !== null)
       throw new Failure(
         "input",
-        "Use either a character ID/URL or the complete name/world selector.",
+        "Use either character: (ID or Lodestone link) or forename + surname + world, not both.",
+        0,
+        { kind: "option", option: "character" },
       );
     return app.lodestone.profile(lodestoneId(selector, "character"));
   }
   if (!forename?.trim() || !surname?.trim() || !world?.trim())
     throw new Failure(
       "input",
-      "Supply a character ID/URL, or all of forename, surname, and world.",
+      "Add a character ID or Lodestone link, or all three of forename, surname and world.",
+      0,
+      { kind: "option", option: "character" },
     );
-  const name = z.string().max(100).parse(`${forename.trim()} ${surname.trim()}`);
-  const server = z.string().max(80).parse(world.trim());
+  const name = searchText(`${forename.trim()} ${surname.trim()}`, MAX_NAME, "forename");
+  const server = searchText(world.trim(), MAX_WORLD, "world");
   const matches = await app.lodestone.search(name, server);
   if (!matches.length)
-    throw new Failure("not_found", "The complete search found no exact name/world match.");
+    throw new Failure(
+      "not_found",
+      "The Lodestone has no character with that exact name on that world.",
+      0,
+      { kind: "resource", resource: "character", name, world: server },
+    );
   if (matches.length !== 1)
+    // The detail carries every match's ID; the reply lists as many as fit.
     throw new Failure(
       "ambiguous",
-      `${matches.length} exact matches were found. Repeat the command with an explicit character ID or profile URL. IDs (up to 25 shown): ${matches
-        .slice(0, 25)
-        .map((value) => value.id)
-        .join(", ")}`,
+      `${matches.length} characters with that name were found. Run the command again with the right one's ID or Lodestone link.`,
+      0,
+      {
+        kind: "matches",
+        resource: "character",
+        name,
+        world: server,
+        ids: matches.map((value) => value.id),
+      },
     );
   const found = matches[0];
   if (!found) throw new Error("Missing match");

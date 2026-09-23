@@ -155,3 +155,22 @@ test("setup creates missing roles with the guild's role-layout display setting",
     await gateway.client.destroy();
   }
 });
+
+test("an ambiguous role selection is code ambiguous and lists every matching role", () => {
+  // The reply builds its "Choose which role to use" card from the detail, not the message text.
+  const roles = [
+    { id: "201", name: "Member" },
+    { id: "202", name: "DevBot Member" },
+  ];
+  let thrown: unknown;
+  try {
+    existingRoleId(roles, "DevBot Member", "Member", null);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(Failure);
+  expect(thrown).toMatchObject({
+    code: "ambiguous",
+    detail: { kind: "matches", resource: "role", name: "Member", ids: ["201", "202"] },
+  });
+});

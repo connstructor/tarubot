@@ -15,7 +15,11 @@ export default defineCommand({
     return dataReply(
       await services
         .get(applicationKey)
-        .unclaim(actor, actor.userId, id(interaction.options.getString("character", true))),
+        .unclaim(
+          actor,
+          actor.userId,
+          id(interaction.options.getString("character", true), "character"),
+        ),
     );
   },
   autocomplete: (context) => completeCharacter(context),

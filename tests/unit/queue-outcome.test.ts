@@ -154,9 +154,10 @@ test("the catalog's waiting codes keep their 2.12.3 job outcomes", () => {
 test("renamed interactive codes retry or fail inside a job exactly like the codes they replace", () => {
   // Interactive refinements should never be thrown by a job, but if one is, the queue must treat
   // it as the code it replaced: an ordinary retry, then a terminal failure at the attempt limit.
+  // The retired codes funds and pending were ordinary codes too, so input stands in for them.
   const renamed: readonly (readonly [FailureCode, FailureCode])[] = [
-    ["insufficient_funds", "funds"],
-    ["pending_proof", "pending"],
+    ["insufficient_funds", "input"],
+    ["pending_proof", "input"],
     ["not_found", "input"],
     ["ambiguous", "conflict"],
     ["stale", "input"],

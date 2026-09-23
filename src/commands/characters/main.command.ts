@@ -15,7 +15,11 @@ export default defineCommand({
     return dataReply(
       await services
         .get(applicationKey)
-        .preferences(actor, id(interaction.options.getString("character", true)), null),
+        .preferences(
+          actor,
+          id(interaction.options.getString("character", true), "character"),
+          null,
+        ),
     );
   },
   autocomplete: (context) => completeCharacter(context),

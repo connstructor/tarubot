@@ -2,8 +2,50 @@
 import { decode } from "html-entities";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import type { FailureDetail } from "../../domain/failures.js";
 import { Failure, id, normalized } from "../../domain/values.js";
 import { responseSchema, type ParseRequest } from "./protocol.js";
+
+/**
+ * Which Lodestone page an operation reads, so a failure's reply can say "Character not found"
+ * rather than "Free Company not found". Searches look for characters; members pages belong to an FC.
+ */
+function resourceOf(input: ParseRequest): FailureDetail {
+  return {
+    kind: "resource",
+    resource:
+      input.operation === "profile" || input.operation === "search" ? "character" : "freecompany",
+    ...(input.operation === "search" ? { name: input.name, world: input.world } : { id: input.id }),
+  };
+}
+/** Codes that describe the requested Lodestone page and so carry its resource detail. */
+const RESOURCE_CODES: ReadonlySet<string> = new Set([
+  "not_found",
+  "unavailable",
+  "incomplete",
+  "invalid_response",
+]);
+/**
+ * The approved not-found wording per page. It names only public Lodestone IDs, never a typed
+ * search name, because the message also reaches logs and job diagnostics.
+ */
+function notFoundMessage(input: ParseRequest): string {
+  if (input.operation === "search")
+    return "The Lodestone has no character with that exact name on that world.";
+  return input.operation === "profile"
+    ? `The Lodestone has no character with ID ${input.id}.`
+    : `The Lodestone has no Free Company with ID ${input.id}.`;
+}
+/**
+ * Attach the operation's resource to a detail-less failure; retry timing is unchanged. The
+ * sidecar's generic not-found text becomes the page-specific wording; other messages are kept,
+ * because officers see them as the diagnostic.
+ */
+function withResource(failure: Failure, input: ParseRequest): Failure {
+  if (failure.detail || !RESOURCE_CODES.has(failure.code)) return failure;
+  const message = failure.code === "not_found" ? notFoundMessage(input) : failure.message;
+  return new Failure(failure.code, message, failure.retryAfter, resourceOf(input));
+}
 
 const object = z.record(z.string(), z.unknown());
 const limitsSchema = z
@@ -209,11 +251,22 @@ export class Nodestone {
   stop(): void {
     this.shutdown.abort();
   }
-  /** Stream-bound responses and retry only transport/rate-limit failures with shared cancellation. */
+  /**
+   * Stream-bound responses and retry only transport/rate-limit failures with shared cancellation.
+   * A not-found, outage, incomplete or invalid failure names the page the operation read.
+   */
   async request(
     input: ParseRequest,
     signal: AbortSignal = AbortSignal.timeout(this.limits.LODESTONE_JOB_TIMEOUT_MS),
   ): Promise<unknown> {
+    try {
+      return await this.attempts(input, signal);
+    } catch (error) {
+      throw error instanceof Failure ? withResource(error, input) : error;
+    }
+  }
+  /** The retry loop behind request(); its failures gain their resource detail there. */
+  private async attempts(input: ParseRequest, signal: AbortSignal): Promise<unknown> {
     signal = AbortSignal.any([signal, this.shutdown.signal]);
     for (let attempt = 0; attempt < this.limits.LODESTONE_ATTEMPTS; attempt++) {
       try {
@@ -291,14 +344,20 @@ export class Nodestone {
     const existing = this.profiles.get(key);
     if (existing) return existing;
     if (this.profiles.size >= 1000)
-      throw new Failure("rate_limited", "Too many pending profile requests. Retry shortly.", 1);
+      throw new Failure(
+        "rate_limited",
+        "TaruBot is handling many Lodestone lookups. Try again in a few seconds.",
+        1,
+      );
     const pending = this.request({ operation: "profile", id: id(characterId), biography }).then(
       (raw) => {
         const result = character(raw, characterId);
         if (biography && result.biography === undefined)
           throw new Failure(
             "invalid_response",
-            "The biography selector was unavailable. Your challenge remains pending.",
+            "TaruBot couldn't read the biography section of the Lodestone page. Your token is still valid; try again in a few minutes.",
+            0,
+            { kind: "resource", resource: "biography", id: characterId },
           );
         return result;
       },

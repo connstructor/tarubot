@@ -36,6 +36,7 @@ import {
   grandfatherReport,
   overlayPlannedGrant,
 } from "../src/domain/grandfathering.js";
+import { guestApplicationsOpen } from "../src/domain/guest-application.js";
 import { managedRoleOrder } from "../src/domain/role-layout.js";
 import { Failure, id, json, message } from "../src/domain/values.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
@@ -225,7 +226,8 @@ if (import.meta.main) {
           previewedAt: new Date().toISOString(),
           enumeratedAt: enumeratedAt.toISOString(),
           enumerationComplete: true,
-          guestApplications: row.guest_application_channel_id ? "open" : "closed",
+          // The same rule /apply enforces: a review channel and a Guest role.
+          guestApplications: guestApplicationsOpen(row) ? "open" : "closed",
           onboarding: row.access_policy_enabled,
           roleLayout: {
             enabled: row.role_layout_enabled,

@@ -45,7 +45,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     if (!bot.permissions.has(required))
       throw new Failure(
         "blocked",
-        "Give the bot Manage Channels, Manage Roles, View Channel, Send Messages, Read Message History, Embed Links, and Attach Files before securing the server.",
+        "Give the TaruBot role Manage Channels, Manage Roles, View Channel, Send Messages, Read Message History, Embed Links and Attach Files.",
       );
     if (
       guild.roles.everyone.permissions.any(
@@ -55,7 +55,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     )
       throw new Failure(
         "blocked",
-        "Remove server-management permissions from @everyone before enabling onboarding.",
+        "Remove Administrator, Manage Server, Manage Roles and Manage Channels from @everyone first.",
       );
     if (
       !bot.roles.cache.some(
@@ -65,7 +65,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     )
       throw new Failure(
         "blocked",
-        "Grant View Channel to the bot's own role before removing the @everyone default.",
+        "Give the TaruBot role View Channel before onboarding hides channels from @everyone.",
       );
     return { guild, bot };
   }
@@ -77,7 +77,9 @@ export class DiscordGuildAccess implements GuildAccessPort {
     if (!member.permissions.has([P.ManageGuild, P.ManageRoles, P.ManageChannels]))
       throw new Failure(
         "forbidden",
-        "Manage Server, Manage Roles, and Manage Channels are required to enable onboarding.",
+        "Setting up onboarding needs Manage Server, Manage Roles and Manage Channels.",
+        0,
+        { kind: "scope", scope: "manager" },
       );
   }
 
@@ -87,6 +89,14 @@ export class DiscordGuildAccess implements GuildAccessPort {
     bot: GuildMember,
     bindings: AccessRoles,
   ): Record<keyof AccessRoles, Role> {
+    // One approved wording for both checks; the detail names the role for the Affected field.
+    const unusable = (id: string) =>
+      new Failure(
+        "blocked",
+        "Each access role must be an ordinary role below TaruBot without management permissions. Run /setup again to repair.",
+        0,
+        { kind: "resource", resource: "role", id },
+      );
     const get = (id: string): Role => {
       const role = guild.roles.cache.get(id);
       if (
@@ -95,20 +105,14 @@ export class DiscordGuildAccess implements GuildAccessPort {
         role.managed ||
         bot.roles.highest.comparePositionTo(role) <= 0
       )
-        throw new Failure(
-          "blocked",
-          "Onboarding needs existing ordinary roles below the bot. Run /setup to repair the bindings.",
-        );
+        throw unusable(id);
       if (
         role.permissions.any(
           [P.Administrator, P.ManageGuild, P.ManageRoles, P.ManageChannels],
           false,
         )
       )
-        throw new Failure(
-          "blocked",
-          "Onboarding access roles must not grant server-management permissions.",
-        );
+        throw unusable(id);
       return role;
     };
     return {
@@ -130,7 +134,9 @@ export class DiscordGuildAccess implements GuildAccessPort {
       if (!updates)
         throw new Failure(
           "blocked",
-          "Community-updates metadata is unavailable; cannot determine the protected channel scope.",
+          "Discord didn't return the Community Updates channel or its category. Check that TaruBot can see them, then retry.",
+          0,
+          { kind: "resource", resource: "channel", id: guild.publicUpdatesChannelId },
         );
       excluded.add(updates.id);
       if (updates.parentId) excluded.add(updates.parentId);
@@ -138,7 +144,12 @@ export class DiscordGuildAccess implements GuildAccessPort {
     const preserveEveryoneView = [...excluded].some((id) => {
       const channel = channels.find((channel) => channel.id === id);
       if (!channel)
-        throw new Failure("blocked", "The community-updates parent category is unavailable.");
+        throw new Failure(
+          "blocked",
+          "Discord didn't return the Community Updates channel or its category. Check that TaruBot can see them, then retry.",
+          0,
+          { kind: "resource", resource: "channel", id },
+        );
       const everyone = channel.permissionOverwrites.cache.get(guild.id);
       // Without an explicit everyone View override, changing the guild default changes this area too.
       return (
@@ -207,13 +218,17 @@ export class DiscordGuildAccess implements GuildAccessPort {
     if (current.excluded.has(channelId))
       throw new Failure(
         "blocked",
-        "The community-updates channel and its parent category are reserved. Select a separate officer-chat channel.",
+        "The Community Updates channel and its category are reserved. Choose a different officer channel.",
+        0,
+        { kind: "resource", resource: "channel", id: channelId },
       );
     const channel = current.guild.channels.cache.get(channelId);
     if (!scope.channelIds.has(channelId) || !channel || channel.isThread())
       throw new Failure(
         "blocked",
         "An onboarding channel was deleted or is unavailable. Run /setup to repair it.",
+        0,
+        { kind: "resource", resource: "channel", id: channelId },
       );
     return channel;
   }
@@ -234,7 +249,9 @@ export class DiscordGuildAccess implements GuildAccessPort {
       if (!channel.permissionsFor(bot).has([P.ViewChannel, P.ManageChannels, P.ManageRoles]))
         throw new Failure(
           "blocked",
-          `The bot needs View Channel, Manage Channels, and Manage Roles in channel ${channel.id}.`,
+          `TaruBot needs View Channel, Manage Channels and Manage Roles in <#${channel.id}>.`,
+          0,
+          { kind: "resource", resource: "channel", id: channel.id },
         );
       channels.push({
         id: channel.id,
@@ -288,21 +305,26 @@ export class DiscordGuildAccess implements GuildAccessPort {
         if (before.excludedChannelIds.includes(configured))
           throw new Failure(
             "input",
-            "The community-updates channel and its parent are reserved. Choose a separate officer-chat channel.",
+            "The Community Updates channel and its category are reserved. Choose a different officer channel.",
+            0,
+            { kind: "option", option: "officers" },
           );
         const known = before.channels.find((channel) => channel.id === configured);
         if (known) {
           if (known.type !== ChannelType.GuildText)
-            throw new Failure("input", "Lobby and officer rooms must be guild text channels.");
+            throw new Failure("input", "The lobby and officer rooms must be text channels.");
           return known;
         }
       }
       for (const name of names) {
         const matches = candidates.filter((channel) => normalized(channel.name) === name);
+        // Guessing between same-named rooms could expose the wrong one, so the manager picks.
         if (matches.length > 1)
           throw new Failure(
-            "conflict",
-            `Several channels match ${name}; select one explicitly in /setup.`,
+            "ambiguous",
+            `More than one channel is named #${name}, so TaruBot didn't guess. Pick the right one in /setup.`,
+            0,
+            { kind: "matches", resource: "channel", name, ids: matches.map((room) => room.id) },
           );
         if (matches[0]) return matches[0];
       }
@@ -323,13 +345,20 @@ export class DiscordGuildAccess implements GuildAccessPort {
       if (!existingOfficers && privateRooms.length === 1) existingOfficers = privateRooms[0];
       else if (!existingOfficers && privateRooms.length > 1)
         throw new Failure(
-          "conflict",
-          "Several private rooms could be the officer channel; select officers in /setup.",
+          "ambiguous",
+          "Several private channels could be the officer room. Pick one with /setup officers:.",
+          0,
+          {
+            kind: "matches",
+            resource: "channel",
+            name: "officer room",
+            ids: privateRooms.map((room) => room.id),
+          },
         );
       existingOfficers ??= pick(null, officerNames);
     }
     if (existingLobby && existingLobby.id === existingOfficers?.id)
-      throw new Failure("input", "Lobby and officer channels must be different.");
+      throw new Failure("input", "The lobby and officer rooms must be different channels.");
     const ensure = async (
       existing: AccessChannel | undefined,
       name: string,

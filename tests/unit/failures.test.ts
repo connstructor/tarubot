@@ -43,13 +43,11 @@ const EXPECTED: Record<FailureCode, FailureCategory> = {
   initialized: "conflict",
   uninitialized: "conflict",
   insufficient_funds: "conflict",
-  funds: "conflict",
   conflict: "stale",
   superseded: "stale",
   stale: "stale",
   expired: "stale",
   pending_proof: "wait",
-  pending: "wait",
   cooldown: "wait",
   rate_limited: "wait",
   busy: "wait",
@@ -82,7 +80,7 @@ describe("catalog", () => {
       expect(["info", "warn", "error"]).toContain(FAILURE_LEVEL[category]);
   });
 
-  test("the codes introduced for 2.14.0 are catalogued alongside the ones they replace", () => {
+  test("the codes introduced for 2.14.0 replace the ones no site throws any more", () => {
     for (const code of [
       "pending_proof",
       "insufficient_funds",
@@ -91,6 +89,9 @@ describe("catalog", () => {
       "unexpected",
     ])
       expect(Object.hasOwn(FAILURE_CATEGORY, code)).toBe(true);
+    // Every throw site was recoded, so the superseded codes left the catalog.
+    for (const code of ["funds", "pending"])
+      expect(Object.hasOwn(FAILURE_CATEGORY, code)).toBe(false);
   });
 });
 

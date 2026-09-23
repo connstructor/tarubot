@@ -116,7 +116,10 @@ export default defineCommand({
       const rank = options.getString("rank");
       const clear = options.getBoolean("clear") === true;
       if ((rank !== null) === clear)
-        throw new Failure("input", "Supply exactly one rank or clear:true.");
+        throw new Failure("input", "Give a rank name or set clear:true, not both.", 0, {
+          kind: "option",
+          option: "rank",
+        });
       return dataReply(await app.configureOfficerRank(actor, rank));
     }
     if (sub === "role_layout")
@@ -124,7 +127,14 @@ export default defineCommand({
     const value =
       group === "roles" ? options.getRole("role")?.id : options.getChannel("channel")?.id;
     const clear = options.getBoolean("clear") === true;
-    if (!!value === clear) throw new Failure("input", "Supply exactly one value or clear:true.");
+    // Exactly one of the resource and clear:true; the wording names the resource kind.
+    if (!!value === clear)
+      throw new Failure(
+        "input",
+        `Choose a ${group === "roles" ? "role" : "channel"} or set clear:true, not both.`,
+        0,
+        { kind: "option", option: group === "roles" ? "role" : "channel" },
+      );
     const field =
       group === "roles"
         ? `${sub}_role_id`

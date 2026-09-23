@@ -288,7 +288,7 @@ test("modal submissions defer, resolve a fresh actor and enforce user/guild/type
     ]) {
       await router.handle(fixture.submit(forged));
       expect(fixture.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("Reopen /apply"),
+        content: expect.stringContaining("This form belongs to someone else"),
       });
     }
     expect(executions).toBe(1);
@@ -318,7 +318,7 @@ test("officer component authorization still happens after fresh lookup, before a
     expect(executions).toBe(0);
     expect(fixture.requests[0]?.body).toMatchObject({ data: { flags: MessageFlags.Ephemeral } });
     expect(fixture.requests.at(-1)?.body).toMatchObject({
-      content: expect.stringContaining("not authorized"),
+      content: expect.stringContaining("Only FC officers"),
     });
   } finally {
     await fixture.close();

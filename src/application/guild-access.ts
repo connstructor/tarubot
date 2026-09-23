@@ -133,23 +133,28 @@ export class GuildAccess {
       await currentGuard();
       const session = await this.discord.begin(guildId, roles);
       const snapshot = session.snapshot;
+      // Each refusal names the room it concerns, so a reply can point at the channel.
       const validateRooms = (value: AccessSnapshot): void => {
-        if (value.excludedChannelIds.includes(lobby) || value.excludedChannelIds.includes(officers))
+        const reserved = [lobby, officers].find((id) => value.excludedChannelIds.includes(id));
+        if (reserved)
           throw new Failure(
             "blocked",
             "An onboarding binding now targets a reserved community channel. Run /setup with a separate officer-chat channel.",
+            0,
+            { kind: "resource", resource: "channel", id: reserved },
           );
-        if (
-          !value.channels.some(
-            (channel) => channel.id === lobby && channel.type === ChannelType.GuildText,
-          ) ||
-          !value.channels.some(
-            (channel) => channel.id === officers && channel.type === ChannelType.GuildText,
-          )
-        )
+        const missing = [lobby, officers].find(
+          (id) =>
+            !value.channels.some(
+              (channel) => channel.id === id && channel.type === ChannelType.GuildText,
+            ),
+        );
+        if (missing)
           throw new Failure(
             "blocked",
             "An onboarding room is missing. Run /setup to recreate or select it.",
+            0,
+            { kind: "resource", resource: "channel", id: missing },
           );
       };
       validateRooms(snapshot);

@@ -15,7 +15,7 @@ export default defineCommand({
     return dataReply(
       await services
         .get(applicationKey)
-        .verify(actor, id(interaction.options.getString("character", true))),
+        .verify(actor, id(interaction.options.getString("character", true), "character")),
     );
   },
   autocomplete: (context) => completeCharacter(context, "verify"),

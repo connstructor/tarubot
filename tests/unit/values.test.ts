@@ -29,7 +29,9 @@ test("typed names, mentions and spaced IDs fail validation instead of throwing S
 
 test("out-of-range IDs are rejected without losing precision", () => {
   expect(idSchema.safeParse((MAX_ID + 1n).toString()).success).toBe(false);
-  expect(() => id("99999999999999999999")).toThrow("Expected a lossless positive decimal ID.");
+  expect(() => id("99999999999999999999")).toThrow(
+    "That ID isn't valid. Pick a suggestion, or paste the numeric ID (for example 123456789012345678).",
+  );
 });
 
 test("note() names the option it checks in the approved message", () => {
@@ -38,7 +40,7 @@ test("note() names the option it checks in the approved message", () => {
   expect(() => note("", "reason")).toThrow("Add a reason of 1–1,000 characters.");
   expect(() => note("x".repeat(1_001), "rank")).toThrow("Add a rank of 1–1,000 characters.");
   expect(() => note("bad\0text", "reason")).toThrow(
-    "Use valid Unicode text without NUL characters.",
+    "The reason contains characters that can't be saved. Retype it and try again.",
   );
   try {
     note("");

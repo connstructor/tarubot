@@ -23,7 +23,7 @@ export default defineCommand({
         .unclaim(
           actor,
           userId(interaction.options.getString("member", true)),
-          id(interaction.options.getString("character", true)),
+          id(interaction.options.getString("character", true), "character"),
           interaction.options.getString("reason", true),
         ),
     );

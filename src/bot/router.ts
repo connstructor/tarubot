@@ -56,13 +56,26 @@ export class InteractionRouter {
     );
     try {
       if (!interaction.guildId || interaction.user.bot)
-        throw new Failure("forbidden", "Commands are available to human guild members only.");
+        throw new Failure(
+          "forbidden",
+          "TaruBot commands work only inside the server, for human members.",
+          0,
+          { kind: "scope", scope: "human" },
+        );
       if (!this.context.allowsGuild(interaction.guildId))
-        throw new Failure("forbidden", "This instance is restricted to its configured test guild.");
+        throw new Failure(
+          "forbidden",
+          "This copy of TaruBot is a test instance and only works in its test server.",
+          0,
+          { kind: "scope", scope: "test_guild" },
+        );
+      // A command or custom ID this release does not define comes from an older (or newer) one.
       if (!module)
         throw new Failure(
-          "input",
-          "Unknown or obsolete interaction. Ask an officer to redeploy commands.",
+          "stale",
+          "This button or command is from an older version of TaruBot. Use the current command. If it keeps happening, ask a server manager to redeploy the commands.",
+          0,
+          { kind: "stale", what: "control" },
         );
       if (interaction.isChatInputCommand()) {
         const command = this.commands.get(interaction.commandName);

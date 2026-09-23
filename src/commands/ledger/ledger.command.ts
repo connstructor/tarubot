@@ -1,10 +1,10 @@
 /** Ledger presentation and selection; exact accounting and authorization stay transactional. */
-import { z } from "zod";
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
 import { dataReply } from "../../discord/replies.js";
-import { id } from "../../domain/values.js";
+import { cursor, uuid } from "../../discord/selectors.js";
+import { lodestoneId } from "../../domain/values.js";
 
 const data = command("ledger", "Exact, human-maintained FC gil ledger");
 for (const name of ["deposit", "withdraw"])
@@ -58,8 +58,11 @@ export default defineCommand({
       return dataReply(
         await app.ledgerRead(
           actor,
-          options.getString("fc_id") ? id(options.getString("fc_id", true)) : null,
-          options.getString("before"),
+          // Free text, so an FC ID or Lodestone link is accepted and a typo is an input failure.
+          options.getString("fc_id")
+            ? lodestoneId(options.getString("fc_id", true), "freecompany")
+            : null,
+          cursor(options.getString("before")),
           sub === "history",
         ),
       );
@@ -76,7 +79,7 @@ export default defineCommand({
         amount,
         options.getString("note", true),
         interaction.id,
-        correction ? z.uuid().parse(correction) : null,
+        correction ? uuid(correction, "entry") : null,
       ),
     );
   },

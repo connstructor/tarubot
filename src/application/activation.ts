@@ -13,6 +13,7 @@ import {
   planDifference,
   type ReviewedPlan,
 } from "../domain/grandfathering.js";
+import { guestApplicationsOpen } from "../domain/guest-application.js";
 import { Failure } from "../domain/values.js";
 import { audit, type Database, type Orm, orm } from "../infrastructure/postgres/database.js";
 import * as t from "../infrastructure/postgres/schema.js";
@@ -169,7 +170,8 @@ export async function activateGuild(
         planChecksum,
         granted,
       },
-      guestApplications: row.guest_application_channel_id ? "open" : "closed",
+      // The same rule /apply enforces: a review channel and a Guest role.
+      guestApplications: guestApplicationsOpen(row) ? "open" : "closed",
       onboarding: row.access_policy_enabled,
       roleLayout: row.role_layout_enabled ? "enabled" : "disabled",
     });

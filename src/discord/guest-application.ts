@@ -24,8 +24,14 @@ export function guestApplicationModal(interaction: ChatInputCommandInteraction):
     : interaction.inRawGuild()
       ? Date.parse(interaction.member.joined_at ?? "")
       : null;
+  // Without the join time the form cannot be bound to this join; reopening /apply retries it.
   if (!interaction.guildId || !joined || !Number.isSafeInteger(joined))
-    throw new Failure("input", "Your join context is unavailable. Reopen /apply in the server.");
+    throw new Failure(
+      "stale",
+      "Discord didn't send your join details. Run /apply again from inside the server.",
+      0,
+      { kind: "stale", what: "join" },
+    );
   const field = (name: string, label: string, description: string) =>
     new LabelBuilder()
       .setLabel(label)
@@ -72,7 +78,12 @@ export function guestApplicationSubmission(
     interaction.guildId !== actor.guildId ||
     interaction.user.id !== actor.userId
   )
-    throw new Failure("input", "This form belongs to another user or server. Reopen /apply.");
+    throw new Failure(
+      "stale",
+      "This form belongs to someone else or to another server. Run /apply yourself.",
+      0,
+      { kind: "stale", what: "form" },
+    );
   return {
     joinedAt: new Date(Number(match[3])),
     introduction: interaction.fields.getTextInputValue("introduction"),

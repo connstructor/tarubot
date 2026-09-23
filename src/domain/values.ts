@@ -37,24 +37,60 @@ export class Failure extends Error {
   }
 }
 
-/** Numeric IDs are accepted only before any precision has been lost. */
-export function id(value: unknown): Id {
+/** The input failure's option detail, which lets the reply show that option's example. */
+const option = (name: string): FailureDetail => ({ kind: "option", option: name });
+
+/**
+ * Numeric IDs are accepted only before any precision has been lost. `name` is the command option
+ * the value came from, when it came from one; job payloads and upstream data pass none.
+ */
+export function id(value: unknown, name?: string): Id {
   const candidate =
     typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? String(value) : value;
   const result = idSchema.safeParse(candidate);
   if (!result.success)
-    throw new Failure("invalid_data", "Expected a lossless positive decimal ID.");
+    throw new Failure(
+      "invalid_data",
+      "That ID isn't valid. Pick a suggestion, or paste the numeric ID (for example 123456789012345678).",
+      0,
+      name === undefined ? undefined : option(name),
+    );
   return result.data;
 }
 
-/** Accept canonical IDs or exact regional profile URLs, preventing arbitrary URL acquisition. */
-export function lodestoneId(value: string, kind: "character" | "freecompany"): Id {
-  if (/^[0-9]+$/.test(value)) return id(value);
+/** Approved example links per profile kind, shown when an ID or link is malformed. */
+const PROFILE_EXAMPLE = {
+  character: "https://na.finalfantasyxiv.com/lodestone/character/99000001/",
+  freecompany: "https://na.finalfantasyxiv.com/lodestone/freecompany/9230000000000000001/",
+} as const;
+
+/**
+ * Accept canonical IDs or exact regional profile URLs, preventing arbitrary URL acquisition.
+ * `name` is the command option for the input failure's detail; it defaults to the kind's usual
+ * option (character: or fc_id:).
+ */
+export function lodestoneId(
+  value: string,
+  kind: "character" | "freecompany",
+  name: string = kind === "character" ? "character" : "fc_id",
+): Id {
+  const malformed = () =>
+    new Failure(
+      "input",
+      `Paste the numeric ID or a Lodestone profile link such as ${PROFILE_EXAMPLE[kind]}.`,
+      0,
+      option(name),
+    );
+  if (/^[0-9]+$/.test(value)) {
+    // A digits-only value that is still not a lossless ID gets the same approved wording.
+    if (!idSchema.safeParse(value).success) throw malformed();
+    return value;
+  }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Failure("input", "Use an ID or canonical Lodestone URL.");
+    throw malformed();
   }
   const match = new RegExp(`^/lodestone/${kind}/([1-9][0-9]*)/?$`).exec(url.pathname);
   if (
@@ -65,20 +101,32 @@ export function lodestoneId(value: string, kind: "character" | "freecompany"): I
     url.password ||
     url.search ||
     url.hash ||
-    !match?.[1]
+    !match?.[1] ||
+    !idSchema.safeParse(match[1]).success
   ) {
-    throw new Failure("input", "Use a canonical HTTPS Lodestone profile URL.");
+    throw malformed();
   }
-  return id(match[1]);
+  return match[1];
 }
 
 /** Parse large monetary input directly into bigint rather than through JavaScript numbers. */
 export function gil(value: unknown): bigint {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(value)) {
-    throw new Failure("input", "Balance must be a nonnegative decimal integer.");
+    throw new Failure(
+      "input",
+      "Enter the balance in whole gil, digits only, for example 10005000.",
+      0,
+      option("balance"),
+    );
   }
   const parsed = BigInt(value);
-  if (parsed > MAX_GIL) throw new Failure("input", "Balance exceeds the PostgreSQL bigint range.");
+  if (parsed > MAX_GIL)
+    throw new Failure(
+      "input",
+      "That balance is larger than the ledger can store (9,223,372,036,854,775,807 gil).",
+      0,
+      option("balance"),
+    );
   return parsed;
 }
 
@@ -88,21 +136,31 @@ export function gil(value: unknown): bigint {
  */
 export function sequenceCursor(value: unknown): bigint {
   if (typeof value !== "string" || !/^[1-9][0-9]{0,18}$/.test(value) || BigInt(value) > MAX_GIL)
-    throw new Failure("input", "Use an entry number from a previous page, such as 34.");
+    throw new Failure(
+      "input",
+      "Use an entry number from a previous page, such as 34.",
+      0,
+      option("before"),
+    );
   return BigInt(value);
 }
 
 /**
  * Enforce accepted UTF-16 length and PostgreSQL-compatible Unicode before a mutation. The label
  * names the option being checked (a ledger note, an officer's reason, or a rank name), so the
- * approved message reads correctly for each caller.
+ * approved message reads correctly for each caller, and it doubles as the option detail.
  */
 export function note(value: string, label: "note" | "reason" | "rank" = "note"): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 1_000)
-    throw new Failure("input", `Add a ${label} of 1–1,000 characters.`);
+    throw new Failure("input", `Add a ${label} of 1–1,000 characters.`, 0, option(label));
   if (!trimmed.isWellFormed() || trimmed.includes("\0"))
-    throw new Failure("input", "Use valid Unicode text without NUL characters.");
+    throw new Failure(
+      "input",
+      `The ${label} contains characters that can't be saved. Retype it and try again.`,
+      0,
+      option(label),
+    );
   return trimmed;
 }
 

@@ -10,6 +10,18 @@ export const GUEST_ANSWER_MAX = 300;
  */
 export const GUEST_APPLICATIONS_CLOSED =
   "Guest applications are not open in this server. Ask an officer about Guest access.";
+
+/**
+ * The one open-applications rule shared by /apply's pre-form check, Service.apply, activation and
+ * the preview tool: open only when both the review channel and the Guest role are configured. A
+ * review channel alone would let a visitor fill the form and then be refused at submission.
+ */
+export function guestApplicationsOpen(guild: {
+  readonly guest_application_channel_id: string | null;
+  readonly guest_role_id: string | null;
+}): boolean {
+  return guild.guest_application_channel_id !== null && guild.guest_role_id !== null;
+}
 const answer = z
   .string()
   .trim()
