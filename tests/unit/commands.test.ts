@@ -5,6 +5,7 @@ import { loadCommands } from "../../src/bot/discovery.js";
 import { applicationKey } from "../../src/application/keys.js";
 import { Service } from "../../src/application/service.js";
 import { Services } from "../../src/bot/services.js";
+import { Presented } from "../../src/discord/presenters/reply.js";
 import assignCommand from "../../src/commands/characters/assign.command.js";
 import charactersCommand from "../../src/commands/characters/characters.command.js";
 import configCommand from "../../src/commands/configuration/config.command.js";
@@ -17,6 +18,7 @@ import { cursor, userId, uuid } from "../../src/discord/selectors.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure, lodestoneId } from "../../src/domain/values.js";
 import { interactionFixture } from "../fixtures/interactions.js";
+import { configChange, layoutOn } from "../fixtures/replies/configuration.js";
 
 test("command inventory exactly matches the declared public surface", async () => {
   const commands = await loadCommands();
@@ -99,19 +101,21 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
   const calls: unknown[][] = [];
   const app: unknown = Object.create(Service.prototype);
   if (!(app instanceof Service)) throw new Error("Invalid application fixture");
-  // Only the recorded arguments matter here; the reply shape is covered by persistence tests.
+  // The stubs return typed catalog results, so each reply is the presenter's embed.
   app.configure = async (...args) => {
     calls.push(["configure", ...args.slice(1)]);
-    return { status: "saved" } as unknown as Awaited<ReturnType<Service["configure"]>>;
+    const [, field, value] = args;
+    return configChange(field, value);
   };
   app.configureRoleLayout = async (...args) => {
     calls.push(["configureRoleLayout", ...args.slice(1)]);
-    return { status: "saved" } as unknown as Awaited<ReturnType<Service["configureRoleLayout"]>>;
+    return layoutOn({ roleLayout: args[1] ? "enabled" : "disabled" });
   };
+  const replies: unknown[] = [];
   const fixture = interactionFixture();
   const actor: Actor = { guildId: "100", userId: "400", officer: true, manageRoles: true };
   const run = async (options: unknown[], resolved?: unknown) => {
-    await configCommand.execute?.({
+    const reply = await configCommand.execute?.({
       client: fixture.client,
       services: new Services().provide(applicationKey, app),
       allowsGuild: () => true,
@@ -123,6 +127,7 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
       viewer: viewerOf(actor, "1290000000000000001"),
       interaction: fixture.slash("config", options, resolved),
     });
+    replies.push(reply);
   };
   const S = ApplicationCommandOptionType;
   // Only the officer binding declares adopt_holders; role_layout's single boolean is required.
@@ -197,6 +202,24 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
       ["configure", "guest_role_id", "555", {}],
       ["configureRoleLayout", true],
       ["configureRoleLayout", false],
+    ]);
+    // Every reply is one presenter embed, never the JSON dump.
+    for (const reply of replies) {
+      expect(reply).toBeInstanceOf(Presented);
+      if (reply instanceof Presented) {
+        expect(reply.options.embeds).toHaveLength(1);
+        expect(reply.options.content).toBe("");
+      }
+    }
+    expect(
+      replies.map((reply) => (reply instanceof Presented ? reply.options.embeds[0]?.title : null)),
+    ).toEqual([
+      "Officer role set",
+      "Officer role set",
+      "Officer role set",
+      "Guest role set",
+      "Role layout turned on",
+      "Role layout turned off",
     ]);
   } finally {
     await fixture.close();

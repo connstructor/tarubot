@@ -6,7 +6,8 @@
  * ledger's View history opens a new reply while its pager re-reads each page in place as whoever
  * clicked. Check sync status opens the presser's own sync status as a new reply, the officer sync
  * and guest record details attach their JSON, and the review buttons answer with the decision
- * presenter's short form.
+ * presenter's short form. Run health check and Re-check re-run /config validate for the officer who
+ * clicked and replace their own view with the checklist.
  */
 import { afterEach, expect, test } from "bun:test";
 import { InteractionResponseType, MessageFlags } from "discord.js";
@@ -16,6 +17,7 @@ import { Service } from "../../src/application/service.js";
 import type { Component } from "../../src/bot/component.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
+import config from "../../src/components/config.component.js";
 import details from "../../src/components/details.component.js";
 import guestReview from "../../src/components/guest-review.component.js";
 import ledger from "../../src/components/ledger.component.js";
@@ -25,6 +27,7 @@ import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R } from "../fixtures/replies/characters.js";
+import { CONFIG_RESULTS as C } from "../fixtures/replies/configuration.js";
 import { APPLICATION_ID, decision, GUEST_RESULTS as G } from "../fixtures/replies/guests.js";
 import { LEDGER_FC, LEDGER_RESULTS as L, OLD_FC } from "../fixtures/replies/ledger.js";
 import { RUN_ID, SYNC_RESULTS as SR } from "../fixtures/replies/sync-utility.js";
@@ -565,6 +568,84 @@ test("a malformed review control is out of date and never reaches the service", 
     const before = fixture.requests.length;
     await router.handle(fixture.button(customId));
     expect(embedOf(fixture.requests.slice(before)[1]).title).toBe("This control is out of date");
+  }
+  expect(calls).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Run health check and Re-check
+
+/**
+ * A router over the real config component and a prototype-backed Service whose validate records
+ * each call and returns the approved problems report.
+ */
+function configHarness(actor: Actor) {
+  const fixture = interactionFixture();
+  open = fixture;
+  const calls: Call[] = [];
+  const app: unknown = Object.create(Service.prototype);
+  if (!(app instanceof Service)) throw new Error("Invalid application fixture");
+  Object.assign(app, {
+    validate: async (caller: Actor) => {
+      calls.push(["validate", caller.userId]);
+      return C.troubled;
+    },
+  });
+  const router = new InteractionRouter(
+    {
+      client: fixture.client,
+      services: new Services().provide(applicationKey, app),
+      allowsGuild: () => true,
+      isStopping: () => false,
+      resolveActor: async (guildId, userId) => ({ ...actor, guildId, userId }),
+      report: () => {},
+    },
+    new Map(),
+    new Map([[config.prefix, config]]),
+  );
+  return { fixture, calls, router };
+}
+
+test("Run health check replaces the officer's private /config show with the checklist", async () => {
+  const { fixture, calls, router } = configHarness(OFFICER);
+  await router.handle(fixture.button("config:validate", "123456789", { ephemeral: true }));
+  expect(callbackType(fixture.requests[0])).toBe(InteractionResponseType.DeferredMessageUpdate);
+  expect(calls).toEqual([["validate", "400"]]);
+  expect(fixture.requests[1]).toMatchObject({
+    method: "patch",
+    body: {
+      content: "",
+      embeds: [{ title: "Configuration health · 2 problems, 2 warnings" }],
+      components: [{ components: [{ label: "Re-check", custom_id: "config:validate" }] }],
+    },
+  });
+});
+
+test("Re-check on someone else's public view replies instead of editing it", async () => {
+  const { fixture, calls, router } = configHarness(OFFICER);
+  await router.handle(fixture.button("config:validate", "123456789", { ownerId: "401" }));
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+  expect(calls).toEqual([["validate", "400"]]);
+  expect(embedOf(fixture.requests[1]).title).toBe("Configuration health · 2 problems, 2 warnings");
+});
+
+test("members pressing Re-check are refused before validation runs", async () => {
+  const { fixture, calls, router } = configHarness(MEMBER);
+  await router.handle(fixture.button("config:validate", "123456789", { ephemeral: true }));
+  expect(calls).toEqual([]);
+  expect(embedOf(fixture.requests.at(-1)).title).toBe("Officers only");
+});
+
+test("a malformed config control is out of date and never validates", async () => {
+  const { fixture, calls, router } = configHarness(OFFICER);
+  for (const customId of ["config:validate:x", "config:show", "config"]) {
+    const before = fixture.requests.length;
+    await router.handle(fixture.button(customId, "123456789", { ephemeral: true }));
+    expect(embedOf(fixture.requests.slice(before).at(-1)).title).toBe(
+      "This control is out of date",
+    );
   }
   expect(calls).toEqual([]);
 });

@@ -111,9 +111,10 @@ export type DetailsTarget =
     : never;
 
 /**
- * 'Full details (JSON)' on officer read views only (the style guide's list): /config show and
- * validate, /sync status, another member's /guest status or /characters, and /ledger balance or
- * history. It opens a new reply with the JSON file.
+ * 'Full details (JSON)' on officer read views that summarize or cut records: /sync status,
+ * another member's /guest status or /characters, and /ledger balance or history. /config show and
+ * validate keep their approved button rows (their embeds are complete), so they don't offer it.
+ * It opens a new reply with the JSON file.
  */
 export function detailsButton(target: DetailsTarget): ButtonSpec {
   return {

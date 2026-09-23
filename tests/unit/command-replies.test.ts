@@ -1,21 +1,30 @@
 /**
- * Character, ledger, guest, synchronization and utility commands end to end at the module
- * boundary: the real option resolver parses raw payloads, prototype-backed Service stubs return
- * catalog results, and each command returns its presenter's single embed (no flags: the router
- * owns visibility; content only for the /claim token). Through the router, an ownership conflict
- * shows its current owner to an officer on /assign and to no member (owner decision O3), and
- * malformed ledger options are input failures that never reach the service.
+ * Character, ledger, guest, synchronization, utility and configuration commands end to end at the
+ * module boundary: the real option resolver parses raw payloads, prototype-backed Service and
+ * RoleAdministration stubs return catalog results, and each command returns its presenter's single
+ * embed (no flags: the router owns visibility; content only for the /claim token). Through the
+ * router, an ownership conflict shows its current owner to an officer on /assign and to no member
+ * (owner decision O3), and malformed ledger options and /config's exactly-one checks are input
+ * failures that never reach the service.
  */
 import { afterEach, expect, test } from "bun:test";
 import { ApplicationCommandOptionType } from "discord.js";
 import type { APIEmbed } from "discord.js";
-import { applicationKey, synchronizationKey } from "../../src/application/keys.js";
+import {
+  applicationKey,
+  roleAdministrationKey,
+  synchronizationKey,
+} from "../../src/application/keys.js";
+import { RoleAdministration } from "../../src/application/role-administration.js";
 import { Service } from "../../src/application/service.js";
 import { Synchronization } from "../../src/application/synchronization.js";
 import type { Command } from "../../src/bot/command.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
 import assignCommand from "../../src/commands/characters/assign.command.js";
+import configCommand from "../../src/commands/configuration/config.command.js";
+import officerCommand from "../../src/commands/configuration/officer.command.js";
+import setupCommand from "../../src/commands/configuration/setup.command.js";
 import charactersCommand from "../../src/commands/characters/characters.command.js";
 import claimCommand from "../../src/commands/characters/claim.command.js";
 import mainCommand from "../../src/commands/characters/main.command.js";
@@ -35,6 +44,13 @@ import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R, TARGET_ID, TOKEN } from "../fixtures/replies/characters.js";
+import {
+  CONFIG_FC,
+  CONFIG_RESULTS as C,
+  configChange,
+  OVERRIDE_USER,
+  override,
+} from "../fixtures/replies/configuration.js";
 import {
   ACTION_RESULTS as GA,
   APPLICATION_ID,
@@ -89,6 +105,11 @@ function stubService(results: Readonly<Record<string, unknown>>) {
     "guestAction",
     "decide",
     "syncStatus",
+    "validate",
+    "configure",
+    "unlinkCompany",
+    "configureOfficerRank",
+    "configureRoleLayout",
   ] as const)
     Object.assign(app, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
@@ -98,7 +119,11 @@ function stubService(results: Readonly<Record<string, unknown>>) {
         return result;
       },
     });
-  Object.assign(app, { lodestone: { profile: async () => IDENTITY } });
+  // /setup reads the test-guild setting for its default role prefix.
+  Object.assign(app, {
+    lodestone: { profile: async () => IDENTITY },
+    config: { TEST_GUILD_ID: undefined },
+  });
   return { app, calls };
 }
 
@@ -622,4 +647,210 @@ test("/refresh passes the service's refusals through to the failure presenter", 
     stubSynchronization(refused, []),
   ).catch((caught: unknown) => caught);
   expect(error).toBe(refused);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Configuration, setup and officer overrides
+
+/**
+ * A prototype-backed RoleAdministration whose setup and officer return `results[method]` (or
+ * throw it when it is an Error), recording each call in `calls` as the Service stub does.
+ */
+function stubAdministration(
+  results: Readonly<Record<string, unknown>>,
+  calls: Call[],
+): RoleAdministration {
+  const admin: unknown = Object.create(RoleAdministration.prototype);
+  if (!(admin instanceof RoleAdministration)) throw new Error("Invalid administration fixture");
+  for (const method of ["setup", "officer"] as const)
+    Object.assign(admin, {
+      [method]: async (actor: Actor, ...args: unknown[]) => {
+        calls.push([method, actor.userId, ...args]);
+        const result = results[method] ?? {};
+        if (result instanceof Error) throw result;
+        return result;
+      },
+    });
+  return admin;
+}
+
+/** Run a configuration command with the Service and RoleAdministration stubs. */
+async function runConfig(
+  command: Command,
+  options: unknown[],
+  actor: Actor,
+  results: Readonly<Record<string, unknown>>,
+) {
+  const { app, calls } = stubService(results);
+  await open?.close();
+  const fixture = interactionFixture();
+  open = fixture;
+  const result = await command.execute?.({
+    client: fixture.client,
+    services: new Services()
+      .provide(applicationKey, app)
+      .provide(roleAdministrationKey, stubAdministration(results, calls)),
+    allowsGuild: () => true,
+    isStopping: () => false,
+    report: () => {},
+    resolveActor: async () => actor,
+    actor,
+    viewer: viewerOf(actor, "1290000000000000001"),
+    interaction: fixture.slash(command.name, options),
+  });
+  return { result, calls };
+}
+
+/** A raw subcommand group payload. */
+const group = (name: string, options: unknown[]) => ({
+  type: S.SubcommandGroup,
+  name,
+  options,
+});
+
+/** Each configuration command path: options, actor, stubbed result, expected title and call. */
+const CONFIG_PATHS: readonly {
+  readonly command: Command;
+  readonly options: unknown[];
+  readonly actor: Actor;
+  readonly results: Record<string, unknown>;
+  readonly title: string;
+  readonly call: Call;
+}[] = [
+  {
+    command: configCommand,
+    options: [subcommand("show")],
+    actor: OFFICER,
+    results: { validate: C.healthy },
+    title: "Server configuration",
+    call: ["validate", "400"],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("validate")],
+    actor: OFFICER,
+    results: { validate: C.troubled },
+    title: "Configuration health · 2 problems, 2 warnings",
+    call: ["validate", "400"],
+  },
+  {
+    command: configCommand,
+    options: [group("fc", [subcommand("link", [text("fc_id", CONFIG_FC.id)])])],
+    actor: OFFICER,
+    results: { configure: C.linked },
+    title: "Free Company linked",
+    call: ["configure", "400", "fc_id", CONFIG_FC.id],
+  },
+  {
+    command: configCommand,
+    options: [group("fc", [subcommand("unlink", [text("fc_id", CONFIG_FC.id)])])],
+    actor: OFFICER,
+    results: { unlinkCompany: C.unlinked },
+    title: "Free Company unlinked",
+    call: ["unlinkCompany", "400", CONFIG_FC.id],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("ledger", [{ type: B, name: "clear", value: true }])],
+    actor: OFFICER,
+    results: { configure: configChange("ledger_channel_id", null) },
+    title: "Ledger channel cleared",
+    call: ["configure", "400", "ledger_channel_id", null, {}],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("officer_rank", [text("rank", "Officer")])],
+    actor: MANAGER,
+    results: { configureOfficerRank: C.rank },
+    title: "Officer rank set",
+    call: ["configureOfficerRank", "400", "Officer"],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("role_layout", [{ type: B, name: "enabled", value: true }])],
+    actor: MANAGER,
+    results: { configureRoleLayout: C.layoutOn },
+    title: "Role layout turned on",
+    call: ["configureRoleLayout", "400", true],
+  },
+  {
+    command: setupCommand,
+    options: [],
+    actor: MANAGER,
+    results: { setup: C.setup },
+    title: "Server setup complete",
+    call: ["setup", "400", "", null, null, { lobby: null, officers: null }],
+  },
+  {
+    command: officerCommand,
+    options: [
+      subcommand("grant", [text("member", `<@${OVERRIDE_USER}>`), text("reason", "New officer")]),
+    ],
+    actor: MANAGER,
+    results: { officer: C.granted },
+    title: "Officer access granted",
+    call: ["officer", "400", OVERRIDE_USER, true, "New officer"],
+  },
+  {
+    command: officerCommand,
+    options: [
+      subcommand("revoke", [text("member", OVERRIDE_USER), text("reason", "Stepped down")]),
+    ],
+    actor: MANAGER,
+    results: { officer: override({ status: "revoked" }) },
+    title: "Officer access revoked",
+    call: ["officer", "400", OVERRIDE_USER, false, "Stepped down"],
+  },
+];
+
+test("every configuration, setup and officer command returns its presenter's one embed", async () => {
+  for (const path of CONFIG_PATHS) {
+    const { result, calls } = await runConfig(path.command, path.options, path.actor, path.results);
+    if (!(result instanceof Presented)) throw new Error(`/${path.command.name} returned no reply`);
+    expect({ command: path.command.name, title: result.options.embeds[0]?.title }).toEqual({
+      command: path.command.name,
+      title: path.title,
+    });
+    expect(result.options.embeds).toHaveLength(1);
+    expect(result.options).not.toHaveProperty("flags");
+    expect(result.options.content).toBe("");
+    expect(calls).toEqual([path.call]);
+  }
+});
+
+test("/config's exactly-one checks are input failures that never reach the service", async () => {
+  const cases: [unknown[], string, string][] = [
+    [[subcommand("officer_rank")], "Give a rank name or set clear:true, not both.", "rank"],
+    [
+      [
+        subcommand("officer_rank", [
+          text("rank", "Officer"),
+          { type: B, name: "clear", value: true },
+        ]),
+      ],
+      "Give a rank name or set clear:true, not both.",
+      "rank",
+    ],
+    [
+      [group("roles", [subcommand("member")])],
+      "Choose a role or set clear:true, not both.",
+      "role",
+    ],
+    [[subcommand("ledger")], "Choose a channel or set clear:true, not both.", "channel"],
+  ];
+  // Every service method fails if reached, so only the command's own parse can refuse.
+  const reached = new Error("The service was reached with an unparsed option");
+  const unreachable = Object.fromEntries(
+    ["configure", "configureOfficerRank", "configureRoleLayout", "unlinkCompany", "validate"].map(
+      (method) => [method, reached],
+    ),
+  );
+  for (const [options, message, option] of cases) {
+    const error = await runConfig(configCommand, options, MANAGER, unreachable).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Failure);
+    expect(error).toMatchObject({ code: "input", message, detail: { kind: "option", option } });
+  }
 });

@@ -1,9 +1,12 @@
-/** Idempotent guild bootstrap, with a default DevBot prefix in development scope. */
+/**
+ * Idempotent guild bootstrap, with a default DevBot prefix in development scope. It answers with
+ * the setup summary (created or reused resources, next steps and Check sync status).
+ */
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { applicationKey, roleAdministrationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { setupReply } from "../../discord/presenters/configuration.js";
 import { lodestoneId } from "../../domain/values.js";
 
 export default defineCommand({
@@ -35,11 +38,11 @@ export default defineCommand({
     ),
   access: "officer",
   requires: [applicationKey, roleAdministrationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     const app = services.get(applicationKey);
     const options = interaction.options;
     const fc = options.getString("fc_id");
-    return dataReply(
+    return setupReply(
       await services
         .get(roleAdministrationKey)
         .setup(
@@ -52,6 +55,7 @@ export default defineCommand({
             officers: options.getChannel("officers")?.id ?? null,
           },
         ),
+      viewer,
     );
   },
 });

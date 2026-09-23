@@ -1,7 +1,8 @@
 /**
  * Cross-catalog consistency: one title and tone per (concept, audience) however a concept is
- * reached, the approved titles pinned per concept, the ' · ' section separator, and footer
- * vocabulary. Group workstreams add their catalogs to CATALOGS and their pins here.
+ * reached, the approved titles pinned per concept, the ' · ' section separator, footer vocabulary
+ * and where the health-check tokens may appear. Group workstreams add their catalogs to CATALOGS
+ * and their pins here.
  */
 import { describe, expect, test } from "bun:test";
 import type { Tone } from "../../src/discord/presenters/style.js";
@@ -200,11 +201,26 @@ describe("titles and footers", () => {
     }
   });
 
+  test("health-check tokens appear only in health checklists and approved /setup access", () => {
+    // [OK] [WARN] [FAIL] [OFF] [WAIT] belong to /config validate (configuration#7–#9); status views
+    // use the job markers. The one exception is /setup's approved Channel access line (#37).
+    const allowed = (key: string): boolean =>
+      key.startsWith("configuration/validate.") ||
+      /^configuration\/setup\.(?:created|reused)$/u.test(key);
+    for (const reply of CASES) {
+      const text = JSON.stringify(onlyEmbed(reply.render()));
+      expect({ key: reply.key, tokens: /\[(?:OK|WARN|FAIL|OFF|WAIT)\]/u.test(text) }).toEqual({
+        key: reply.key,
+        tokens: allowed(reply.key),
+      });
+    }
+  });
+
   test("success replies never say nothing changed, except read-only health checks", () => {
     for (const reply of CASES) {
-      if (reply.tone !== "success") continue;
-      // /config validate and Re-check are read-only, so their approved cards say so (C2).
-      if (reply.spec && /^configuration#[789]$/u.test(reply.spec)) continue;
+      // C2: the sentence comes from each concept's approved copy. /config validate and Re-check
+      // are read-only, so their cards say it on every verdict; change receipts never do.
+      if (reply.tone !== "success" || reply.readOnly) continue;
       expect({
         key: reply.key,
         said: onlyEmbed(reply.render()).description?.includes("Nothing was changed.") ?? false,

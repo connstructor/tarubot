@@ -7,7 +7,7 @@
 import type { EffectsMode, JobView, RosterEvidence } from "../../application/results.js";
 import { WAITING_CODES } from "../../domain/failures.js";
 import { isOfficer, type Viewer } from "./audience.js";
-import { andMore, code, plain, shortId, splitFields, when } from "./format.js";
+import { andMore, code, plain, restoreMentions, shortId, splitFields, when } from "./format.js";
 import type { FieldSpec } from "./reply.js";
 import { HOUSE_LIMITS, marker, type Marker } from "./style.js";
 
@@ -141,8 +141,6 @@ function memberLine(job: JobView, state: JobState, options: JobLineOptions): str
   }
 }
 
-/** Discord IDs complete inside an escaped diagnostic, restored as mentions (never pings). */
-const ESCAPED_MENTION = /\\<(#|@&|@)([1-9][0-9]{16,19})>/gu;
 /** A bare channel ID in an older diagnostic ('in channel 123…'), rendered as a mention. */
 const CHANNEL_ID = /\bchannel ([1-9][0-9]{16,19})\b/gu;
 
@@ -151,9 +149,7 @@ const CHANNEL_ID = /\bchannel ([1-9][0-9]{16,19})\b/gu;
  * channel, role and user mentions kept and bare channel IDs rendered as channel mentions.
  */
 function diagnostic(text: string): string {
-  return plain(text, HOUSE_LIMITS.diagnostic)
-    .replace(ESCAPED_MENTION, "<$1$2>")
-    .replace(CHANNEL_ID, "channel <#$1>");
+  return restoreMentions(plain(text, HOUSE_LIMITS.diagnostic)).replace(CHANNEL_ID, "channel <#$1>");
 }
 
 /**

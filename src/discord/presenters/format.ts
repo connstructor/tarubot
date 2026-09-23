@@ -194,6 +194,17 @@ export const mentionRole = (id: string): string => `<@&${decimalId(id)}>`;
 /** A channel mention; it shows the channel's name. */
 export const mentionChannel = (id: string): string => `<#${decimalId(id)}>`;
 
+/** A complete channel, role or user mention that plain() escaped, by its decimal ID. */
+const ESCAPED_MENTION = /\\<(#|@&|@)([1-9][0-9]{16,19})>/gu;
+
+/**
+ * Restore the complete mentions plain() escaped in trusted, bot-authored text: job diagnostics
+ * and Failure messages that name a role, channel or member by ID. They render as names and never
+ * ping (replies send allowedMentions {parse: []}). User-written text must never pass through here.
+ */
+export const restoreMentions = (escaped: string): string =>
+  escaped.replace(ESCAPED_MENTION, "<$1$2>");
+
 /**
  * Inline code for a trusted token (an ID, a command, a marker). Backticks and line breaks can't
  * be represented inside a code span, so they are a presenter bug rather than something to escape.

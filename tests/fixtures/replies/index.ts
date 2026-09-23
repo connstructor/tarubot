@@ -11,6 +11,7 @@ import type { Presented } from "../../../src/discord/presenters/reply.js";
 import type { Tone } from "../../../src/discord/presenters/style.js";
 import { expectHouseStyle } from "../replies.js";
 import { CHARACTER_CASES } from "./characters.js";
+import { CONFIG_CASES } from "./configuration.js";
 import { FAILURE_CASES } from "./failures.js";
 import { GUEST_CASES } from "./guests.js";
 import { LEDGER_CASES } from "./ledger.js";
@@ -36,6 +37,11 @@ export interface ReplyCase {
    * approved neutral cards; reply-consistency.test checks every one.
    */
   readonly noOp?: boolean;
+  /**
+   * A read-only check (/config validate and its Re-check): nothing is saved, so its approved copy
+   * says "Nothing was changed." even on success (C2). Change receipts never say it.
+   */
+  readonly readOnly?: boolean;
   readonly tone: Tone;
   readonly title: string;
   /** Whether the embed carries a timestamp, as the approved card's `timestamp` records. */
@@ -57,6 +63,7 @@ export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
   failures: FAILURE_CASES,
   characters: CHARACTER_CASES,
   ledger: LEDGER_CASES,
+  configuration: CONFIG_CASES,
   guests: GUEST_CASES,
   sync: SYNC_CASES,
   utility: UTILITY_CASES,

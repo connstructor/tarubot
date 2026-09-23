@@ -14,10 +14,7 @@ const ALLOWED = new Set(["src/discord/presenters/reply.ts", "src/components/deta
 
 /** Modules that still dump results as JSON through src/discord/replies.ts, until they migrate. */
 const PENDING = new Set([
-  "src/commands/configuration/config.command.ts",
-  "src/commands/configuration/officer.command.ts",
-  "src/commands/configuration/setup.command.ts",
-  // The legacy dump itself, deleted once nothing above imports it.
+  // The legacy dump itself: nothing imports it any more, and WS10 deletes it.
   "src/discord/replies.ts",
 ]);
 

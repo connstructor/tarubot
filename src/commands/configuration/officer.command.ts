@@ -1,9 +1,12 @@
-/** Explicit officer overrides are restricted to actual server managers with Manage Roles. */
+/**
+ * Explicit officer overrides are restricted to actual server managers with Manage Roles. The
+ * receipt names the member, what happens to their Officer role, and the audited reason.
+ */
 import { PermissionFlagsBits } from "discord.js";
 import { roleAdministrationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { officerOverrideReply } from "../../discord/presenters/configuration.js";
 import { userId } from "../../discord/selectors.js";
 
 const data = command(
@@ -22,8 +25,8 @@ export default defineCommand({
   data,
   access: "officer",
   requires: [roleAdministrationKey],
-  async execute({ actor, interaction, services }) {
-    return dataReply(
+  async execute({ actor, viewer, interaction, services }) {
+    return officerOverrideReply(
       await services
         .get(roleAdministrationKey)
         .officer(
@@ -32,6 +35,7 @@ export default defineCommand({
           interaction.options.getSubcommand(true) === "grant",
           interaction.options.getString("reason", true),
         ),
+      viewer,
     );
   },
 });
