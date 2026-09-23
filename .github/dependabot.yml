@@ -1,6 +1,81 @@
+# Dependabot version updates for TaruBot.
+#
+# Every merged change set must raise package.json's SemVer above its base and add a CHANGELOG entry
+# (scripts/ci-version.ts, enforced on pull requests and again when main publishes images). Dependabot
+# cannot do that, so its pull requests are proposals that a maintainer completes with one signed
+# version commit before merging; see "Dependency updates" in docs/CI_CD.md. Groups, cooldowns, and
+# low pull-request limits keep the number of those version commits small.
+#
+# Deliberately not managed here:
+# - vendor/nodestone (git submodule) and lodestone-css-selectors: only `bun run nodestone:update`
+#   advances them, because it also rewrites sidecar/upstream-revisions.json and runs the contract
+#   suite. There is intentionally no gitsubmodule entry.
+# - The CI PostgreSQL service image and the digest-pinned doctl image in .github/workflows/ci.yml:
+#   Dependabot reads only `uses:` in workflows. tests/unit/runtime-pins.test.ts keeps the service
+#   image equal to docker-compose.yml.
 version: 2
+
 updates:
-  - package-ecosystem: "bun" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # Application and tooling packages (package.json and bun.lock). Until Dependabot's updater ships
+  # a Bun that reads lockfileVersion 2 (dependabot/dependabot-core#16026), these runs fail with
+  # DependencyFileNotSupported; the entry resumes on its own afterwards. Do not downgrade bun.lock.
+  - package-ecosystem: "bun"
+    directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    # Each open pull request needs its own version commit, so keep few open at once.
+    open-pull-requests-limit: 3
+    cooldown:
+      # Let new releases age before they are proposed, leaving time for compromised-package takedowns.
+      default-days: 7
+      semver-major-days: 14
+    ignore:
+      # Upstream HEAD dependencies; only `bun run nodestone:update` may move them.
+      - dependency-name: "lodestone-css-selectors"
+      - dependency-name: "nodestone-upstream"
+      # Bun's type definitions move with the runtime pin, which the docker entry proposes.
+      - dependency-name: "@types/bun"
+    groups:
+      # One pull request for compatible updates; exact pins stay exact. Majors and drizzle-orm
+      # (0.x, where a minor release can break the ORM contract) arrive separately for review.
+      bun-minor-patch:
+        patterns: ["*"]
+        exclude-patterns: ["drizzle-orm"]
+        update-types: ["minor", "patch"]
+
+  # Bun runtime image: every Dockerfile stage derives from oven/bun, so all FROM lines update together.
+  # The maintainer completes the runtime upgrade in packageManager, engines.bun, and @types/bun;
+  # tests/unit/runtime-pins.test.ts fails until they agree.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+
+  # Compose images: only postgres has a fixed tag; the GHCR images are parameterized and skipped.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    ignore:
+      # A new major image initializes an empty cluster instead of opening existing data. Plan
+      # majors as a migration (dump/restore or pg_upgrade, plus the App Platform database version).
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
+  # SHA-pinned workflow actions; Dependabot updates each SHA and its "# vX.Y.Z" comment together.
+  # GitHub raises no Dependabot alerts, and so no security updates, for SHA-pinned actions: this
+  # grouped update, after its cooldown, is the only automated path to a patched action.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]

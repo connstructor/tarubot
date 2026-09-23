@@ -2,6 +2,9 @@
 name: TaruBot code scanning
 queries:
   - uses: security-extended
+  # GitHub Code Quality is unavailable for this repository, so quality queries report through code
+  # scanning, where the main ruleset's error threshold blocks newly introduced error-level results.
+  - uses: code-quality
 paths-ignore:
   - vendor/**
   - node_modules/**
