@@ -1,6 +1,13 @@
 # Version history
 
-The current application version is **2.12.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.12.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.12.1 — Release handoff and future roadmap
+
+- Record the next-session handoff with verified merged/published/deployed versions, DevBot identities and read-only health/persistence observations, policy decisions, and implementation pointers.
+- Refresh the v2 release checklist after PR #6 and its image publication completed; retain the outstanding migration, live acceptance, operational features, recovery, and production cutover work.
+- Document the owner's v3–v6 roadmap: rank-aware dashboard, interactive actions/reaction roles, ModMail, and expanded Lodestone profiles after v2 is settled and online.
+- Link the handoff and roadmap from the README and synchronize the maintenance version in the startup plan and App Platform template.
 
 ## 2.12.0 — Officer-reviewed guest application forms
 

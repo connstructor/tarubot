@@ -2,6 +2,8 @@
 
 Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and recorded DevBot sessions through 2026-09-23. This document records the remaining delivery work.
 
+Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which distinguishes merged source, published images, and the running DevBot. Future major-version scope is recorded separately in [ROADMAP.md](ROADMAP.md).
+
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
@@ -9,7 +11,7 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. DevBot's 2.11.1 setup enabled onboarding at revision 10; its 11-channel access job succeeded with community resources excluded.
 - DevBot 2.11.1 runs published images following a stopped-writer backup. Administrator remains off, all four existing roles and officer-chat were reused, and the lobby was created. Full human visibility verification remains.
-- The 2.12.0 source adds a two-question `/apply` modal for unverified visitors, durable answer review, and migration 004. Verified non-FC Guest eligibility remains automatic. Its deployment and integrated human form/approval session remain to be completed.
+- The 2.12.0 guest-form feature is merged in [PR #6](https://github.com/connstructor/tarubot/pull/6), all checks passed, and matching images were published by [run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742). It adds an unverified-visitor modal, durable answer review, and migration 004 while retaining automatic verified Guest eligibility. DevBot deployment and human form/approval acceptance remain outstanding; 2.12.1 records the handoff/roadmap as documentation maintenance.
 - The App Platform spec creates an inline PostgreSQL 18 dev database, with private parser routing and provider-CA TLS support. Offline doctl validation and deployment/TLS invariants passed; account-backed creation and operational rehearsal remain to be performed by the operator.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
@@ -51,7 +53,7 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Complete the 2.12.0 PR/check/publication workflow, then back up and migrate DevBot to schema 004 with matching images. App Platform deployment is a separate operator-run workflow.
+1. Back up and migrate DevBot to schema 004 with a matching checked/published release. Version 2.12.0 is already published; later maintenance releases require their own PR/publication. App Platform deployment is a separate operator-run workflow.
 2. Run the unverified-visitor form/approval session in officer-chat, including restart/rejoin and retained automatic registered-visitor access.
 3. Finish the lobby visibility and ledger end-to-end sessions, while completing operational alerting/telemetry.
 4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
