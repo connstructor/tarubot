@@ -57,10 +57,28 @@ export interface Roster {
   pages: number;
 }
 
-/** Strip parser-provided markup before decoding entities, preserving literal encoded brackets. */
+/**
+ * Remove parser-provided tags until a pass changes nothing. One pass is already stable, because no
+ * tag can reassemble from the remainder; the fixed-point loop is the shape CodeQL's
+ * js/incomplete-multi-character-sanitization accepts (the result flows back into the receiver),
+ * so do not collapse it into a single replace.
+ */
+function stripTags(markup: string): string {
+  let text = markup;
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/gu, "");
+  } while (text !== previous);
+  return text;
+}
+/**
+ * Convert parser-provided markup to plain text. Encoded brackets decode to literal `<`/`>`, so the
+ * result is display text, not HTML-safe output: every HTML sink must encode it when rendering.
+ */
 export function display(value: unknown): string {
   if (typeof value !== "string") throw new Failure("invalid_response", "Missing display text.");
-  return decode(value.replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/gu, "")).trim();
+  return decode(stripTags(value.replace(/<br\s*\/?\s*>/gi, "\n"))).trim();
 }
 /** Missing/empty identity attributes invalidate an observation instead of creating partial records. */
 function requiredText(value: unknown): string {

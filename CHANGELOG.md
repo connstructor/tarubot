@@ -1,6 +1,17 @@
 # Version history
 
-The current application version is **2.12.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.12.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.12.2 — Workflow and code-scanning hardening
+
+- Release the Claude Code workflows added in PR #8, which merged without the required version increment and so left `main` unpublished.
+- Pin `anthropics/claude-code-action` v1.0.231 and `actions/checkout` v7.0.1 by commit SHA in the Claude assistant and review workflows, resolving code-scanning alerts #3 and #4. Start `@claude` runs only for owner/member/collaborator mentions, drop the idle assignment trigger, skip fork review events, queue requests per issue or PR, and commit through the API so assistant commits are verified.
+- Review only ready, same-repository PRs to `main` started by people; cancel superseded reviews, bound both jobs with timeouts, keep `GITHUB_TOKEN` read-only, and stop persisting checkout credentials.
+- Remove CodeQL's experimental `analysis-kinds` input, which was ignored, logged errors, and will become fatal; run the `code-quality` query suite through code scanning instead, since GitHub Code Quality is unavailable for this repository. Record the exact CodeQL action version and let main/scheduled analyses finish instead of cancelling them.
+- Make Lodestone tag stripping an explicit fixed point with identical output, resolving high-severity alert #1, and document that display text is not HTML-safe. Add direct `display()` tests.
+- Replace the template Dependabot config with Bun, Bun runtime image, Compose PostgreSQL, and grouped GitHub Actions updates with cooldowns, excluding Nodestone-managed dependencies and PostgreSQL majors. Document how maintainers complete Dependabot PRs under the version policy.
+- Record the DevBot 2.12.1 rollout on schema 004, the officer-chat review destination, the first approved unverified-visitor application, and the queue-logging follow-up it exposed.
+- Add a unit test that keeps the Bun runtime pins and the CI/Compose PostgreSQL images in agreement, run the version check last in the CI checks job so dependency PRs report its other steps first, add an advisory `bun audit` workflow, comment GHCR write grants, and add a security policy that routes reports to private vulnerability reporting.
 
 ## 2.12.1 — Release handoff and future roadmap
 

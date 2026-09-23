@@ -7,11 +7,11 @@ Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which disting
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.12.0 full automated suite passed **127 tests / 1,196 assertions** with both supplied and synthetic migration inputs, including guest-form acknowledgement/persistence/review and large-guild REST request-budget regressions.
+- The 2.12.2 full automated suite passed **132 tests / 1,219 assertions** with both supplied and synthetic migration inputs, including guest-form acknowledgement/persistence/review, large-guild REST request-budget, Lodestone display-text, and runtime-pin regressions.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. DevBot's 2.11.1 setup enabled onboarding at revision 10; its 11-channel access job succeeded with community resources excluded.
-- DevBot 2.11.1 runs published images following a stopped-writer backup. Administrator remains off, all four existing roles and officer-chat were reused, and the lobby was created. Full human visibility verification remains.
-- The 2.12.0 guest-form feature is merged in [PR #6](https://github.com/connstructor/tarubot/pull/6), all checks passed, and matching images were published by [run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742). It adds an unverified-visitor modal, durable answer review, and migration 004 while retaining automatic verified Guest eligibility. DevBot deployment and human form/approval acceptance remain outstanding; 2.12.1 records the handoff/roadmap as documentation maintenance.
+- DevBot runs the published **2.12.1** images (revision `da7ed72`) on schema 004, applied on 2026-09-23 after a stopped-writer backup and an exact restore/migration rehearsal; the updated commands are registered and guest reviews go to officer-chat (revision 11). Administrator remains off, all four existing roles and officer-chat were reused, and the lobby was created. Full human visibility verification remains.
+- The 2.12.0 guest-form feature is merged in [PR #6](https://github.com/connstructor/tarubot/pull/6), all checks passed, and matching images were published by [run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742). It adds an unverified-visitor modal, durable answer review, and migration 004 while retaining automatic verified Guest eligibility. The first unverified-visitor submission and officer approval passed on DevBot; the remaining form scenarios are listed below. 2.12.1 records the handoff/roadmap as documentation maintenance, and 2.12.2 hardens the workflows and code scanning.
 - The App Platform spec creates an inline PostgreSQL 18 dev database, with private parser routing and provider-CA TLS support. Offline doctl validation and deployment/TLS invariants passed; account-backed creation and operational rehearsal remain to be performed by the operator.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
@@ -24,6 +24,7 @@ Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which disting
 | --- | --- | --- |
 | P1 | Complete officer operational notifications: aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices, with per-guild/run throttling. | **OPS-11, DB-07**. `Synchronization.roster` currently emits roster acceptance/degraded messages; general queue failures go to logs/status through `Queue` and `src/main.ts`. |
 | P1 | Complete operational telemetry: application/job duration, queue age, retry context, and consistent guild/FC/run context. | **OPS-10**. Current reporting has operation IDs, result/error categories, queue counts, and roster age, but does not cover all required measurements. |
+| P2 | Report expected queue waits below error level with their actual cause, and retain role changes applied by a superseded reconciliation pass. | **OPS-10, OPS-11**. On DevBot 2.12.1, role-layout lock waits (`busy`) and a gateway-echo generation change (`superseded: Worker lease expired`) were logged as errors, and the final no-op pass replaced the approved Guest role delta in the job result. |
 | P2 | Harden and rehearse coalescing/backoff for bursts of role events and complete member enumeration. | **SYNC-02, SYNC-14–17**. Live role changes produced transient gateway rate-limit errors before recovering; exercise this at representative guild size. |
 
 ## Live acceptance still to record
@@ -33,7 +34,7 @@ These paths have implementation and automated coverage. The remaining work is to
 | Area | Remaining checks | Requirements |
 | --- | --- | --- |
 | Lobby onboarding | Setup/access job succeeded on 2.11.1. Exercise visibility, drift, restart, and visitor revocation with non-owner/non-Administrator users; retain excluded community policy. | **ACCESS-01–05**; `docs/DEV_GUILD.md` |
-| Guest applications | Deploy 2.12.0/migration 004, choose officer-chat as the review destination, submit the unverified-visitor `/apply` modal, and approve/deny through buttons/commands. Exercise original buttons after restart, deleted review-message repair, blocked DMs, duplicate/stale forms, denial cooldown, grant/revoke/rejoin, and visible delivery outcomes. | **GUEST-01–09, AC-12–13**; `test-plans/current.json` |
+| Guest applications | One unverified-visitor submission and button approval passed on 2.12.1 in officer-chat. Deny, and decide through commands; exercise original buttons after restart, deleted review-message repair, blocked DMs, duplicate/stale forms, denial cooldown, grant/revoke/rejoin, and visible delivery outcomes. | **GUEST-01–09, AC-12–13**; `test-plans/current.json` |
 | Ledger | Initialize the isolated DevBot account; deposit/withdraw/adjust; balance/history pagination; ordinary-member versus officer authorization; blocked notification and retry without a second financial mutation; historical account access after unlink/relink. | **LEDGER-01–11, AC-15–17** |
 | Character workflows | By-name/world search and selection, private autocomplete, officer assignment, offline local unassignment, multiple characters, primary selection, and expired/replaced proof through actual interactions. | **CHAR-01–05, VERIFY-01–06, AC-03–06** |
 | Nicknames | Non-owner writes, primary changes, manual-override suspension, re-enable baseline, restoration, and imported-user opt-in. Record the happy path explicitly even where a normal write may already have occurred during claim testing. | **NICK-01–06, AC-14** |
@@ -53,11 +54,10 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Back up and migrate DevBot to schema 004 with a matching checked/published release. Version 2.12.0 is already published; later maintenance releases require their own PR/publication. App Platform deployment is a separate operator-run workflow.
-2. Run the unverified-visitor form/approval session in officer-chat, including restart/rejoin and retained automatic registered-visitor access.
-3. Finish the lobby visibility and ledger end-to-end sessions, while completing operational alerting/telemetry.
-4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
-5. Least-privilege and interruption/recovery rehearsal.
-6. Production capture, import preview, and coordinated cutover.
+1. Finish the unverified-visitor form/approval session in officer-chat, including denial/cooldown, restart/rejoin, and retained automatic registered-visitor access. DevBot already runs 2.12.1 on schema 004; later checked releases such as 2.12.2 deploy without a new migration. App Platform deployment is a separate operator-run workflow.
+2. Finish the lobby visibility and ledger end-to-end sessions, while completing operational alerting/telemetry.
+3. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
+4. Least-privilege and interruption/recovery rehearsal.
+5. Production capture, import preview, and coordinated cutover.
 
 PR validation, required CodeQL security/code-quality analysis, and post-merge GHCR publication are defined in `.github/workflows/ci.yml`, `codeql.yml`, and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. Publication and pull-only DevBot deployment were verified for 2.8.3; subsequent releases follow the same checked PR/publication/deployment flow. This automation complements the live acceptance and cutover work above.

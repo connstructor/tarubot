@@ -1,3 +1,4 @@
+# Answers @claude requests from the owner and collaborators on issues and pull requests.
 name: Claude Code
 
 on:
@@ -5,46 +6,67 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  issues:
-    types: [opened, assigned]
   pull_request_review:
     types: [submitted]
+  issues:
+    # Assignment is omitted: the action reacts to it only when assignee_trigger is configured.
+    types: [opened]
+
+permissions:
+  contents: read
 
 jobs:
   claude:
+    name: Claude assistant
+    # Start only for @claude mentions by trusted accounts; the action separately rejects actors
+    # without write access. Review events on fork pull requests receive no secrets or OIDC token.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
-    runs-on: ubuntu-latest
+      (github.event_name == 'issue_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      || (github.event_name == 'pull_request_review_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'pull_request_review'
+        && contains(github.event.review.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issues'
+        && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      # One request per issue or pull request at a time, so two runs never push to the same branch;
+      # `queue: max` keeps every waiting request instead of replacing it with the newest.
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    # Comments, commits, and pushes use the Claude GitHub App token, not GITHUB_TOKEN.
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      contents: read # check out the repository
+      pull-requests: read # CI tools look up the pull request's head commit with GITHUB_TOKEN
+      actions: read # CI tools read workflow runs and job logs with GITHUB_TOKEN
+      id-token: write # exchanged for the short-lived Claude GitHub App token
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The action fetches the pull request branch at the depth it needs.
           fetch-depth: 1
-
+          # The action configures git with its own App token. Its earlier fetches run without
+          # credentials, which works because this repository is public.
+          persist-credentials: false
       - name: Run Claude Code
-        id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # Commit through the GitHub API so assistant commits are verified, as main requires
+          # signed commits. Trade-offs: no local rebase or cherry-pick, and each commit writes
+          # Claude's copy of the listed files onto the branch's current tip without a conflict
+          # check, so a push made to that branch during the run is reverted in those files.
+          use_commit_signing: true
+          # Also grant actions: read to the App token so Claude can inspect CI results.
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-

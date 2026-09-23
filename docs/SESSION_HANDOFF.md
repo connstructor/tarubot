@@ -19,7 +19,9 @@ The core v2 functionality is implemented and tested. The next live milestone is 
 | Schema required by 2.12.x | **`004_guest_application_form.sql`**, not yet applied to DevBot |
 | Production cutover | Not performed |
 
-The handoff's documentation version is not evidence of a deployed image. **2.12.0 is already available for the guest-form rollout**; a later version must finish its own checked PR/publication first. The current source's startup plan and App Platform template track 2.12.1 as required by repository versioning.
+The handoff's documentation version is not evidence of a deployed image. **2.12.0 is already available for the guest-form rollout**; a later version must finish its own checked PR/publication first. The current source's startup plan and App Platform template track 2.12.2 as required by repository versioning.
+
+**Update later on 2026-09-23:** DevBot now runs the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
 
 **Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock; the recovery command below is available if that recurs. This documentation branch has not been pushed or given a PR at this checkpoint.
 
@@ -95,7 +97,7 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubo
 ### Release and implementation
 
 - [x] Merge the guest-form feature and publish 2.12.0 images.
-- [ ] Deploy migration 004 and a matching published release to DevBot; register commands and select officer-chat for new reviews.
+- [x] Deploy migration 004 and a matching published release to DevBot (2.12.1); register commands and select officer-chat for new reviews.
 - [ ] **P1 — Officer operational alerts (OPS-11 / DB-07):** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
 - [ ] **P1 — Telemetry (OPS-10):** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
 - [ ] **P2 — Burst handling:** rehearse role-event coalescing and member-enumeration backoff at representative guild size; fix any remaining rate-limit/recovery problems.
