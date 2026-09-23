@@ -11,6 +11,7 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID` | Required runtime credentials/identity |
 | `POSTGRES_PASSWORD` | Required Compose database credential |
 | `DATABASE_URL` | Local-tool connection string; Compose supplies its internal connection string |
+| `DATABASE_CA_CERT` | Optional PEM provider CA; enables verified PostgreSQL TLS and takes precedence over URL SSL switches |
 | `NODESTONE_URL` | `http://nodestone:8080` inside Compose |
 | `ENABLE_EFFECTS` | `false`; process-wide delivery switch |
 | `TEST_GUILD_ID` | Optional development interaction restriction |
@@ -23,6 +24,8 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `HEALTH_PORT` | 3,000 inside the bot container |
 
 Request, worker, retry, body, pagination, and region settings are in [NODESTONE.md](NODESTONE.md). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
+
+App Platform uses [`.do/app.yaml`](../.do/app.yaml) and its automatically provisioned PostgreSQL dev database. Follow [APP_PLATFORM.md](APP_PLATFORM.md) for bound credentials/CA, explicit command registration, and the phased update procedure that stops the old worker before pre-deploy migrations and a replacement worker start.
 
 ## Inspect and repair
 

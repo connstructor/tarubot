@@ -5,10 +5,11 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.10.2 full automated suite passed **108 tests / 1,049 assertions** with both supplied and synthetic migration inputs.
+- The 2.11.0 full automated suite passed **113 tests / 1,097 assertions** with both supplied and synthetic migration inputs.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. Live onboarding verification is the next session.
 - DevBot 2.10.1 was deployed after a backup/restore comparison and migration rehearsal. Administrator is now off, the separate officer-chat was created and managed successfully, and compiled 2.10.2 preflight passed with the configured community-updates channel/category excluded. Full human visibility verification remains.
+- The App Platform spec creates an inline PostgreSQL 18 dev database, with private parser routing and provider-CA TLS support. Offline doctl validation and deployment/TLS invariants passed; account-backed creation and operational rehearsal remain to be performed by the operator.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
 - Nodestone submodule builds, dependency-update checks, clean-clone installation, containers, fixture import, and an earlier backup/restore rehearsal have passed.
@@ -37,6 +38,7 @@ These paths have implementation and automated coverage. The remaining work is to
 | Membership/configuration transitions | Drift repair; joins/departures/rejoins; FC unlink/relink; role replacement/clearing; stale/failed acquisition; controlled departure-confirmation scenarios retaining unrelated roles and durable history. | **CFG-04–06, ROLE-01–06, SYNC-09–17, AC-07–11** |
 | Version command | `commits:1` and `commits:10` through Discord; ordinary non-officer access; link clicks and badge appearance. Owner invocation and live backend retrieval have passed. | Approved `/version` amendment |
 | Recovery | Restart with pending guest/ledger work, reconnects, permission loss/restoration, and graceful shutdown while decisions/effects are in flight. | **DB-03–06, OPS-07–09, AC-20–22** |
+| App Platform | Fill secrets, provision the selected inline dev database/app, confirm TLS and internal routing, register commands, and rehearse the documented single-writer update and backup procedure. | **DEPLOY-DO-01**; `docs/APP_PLATFORM.md` |
 
 ## Production delivery gates
 
@@ -48,7 +50,7 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Merge/publish the verified 2.10.2 community-scope fix and update DevBot; migration 003 is already installed.
+1. Merge/publish the verified 2.11.0 release and update DevBot; migration 003 is already installed. App Platform deployment is a separate operator-run workflow.
 2. Run the DevBot lobby/staff/registered-visitor session, including retained persistence and least-privilege visibility checks.
 3. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
 4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.

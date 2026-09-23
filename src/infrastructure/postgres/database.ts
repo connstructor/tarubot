@@ -7,6 +7,7 @@ import { sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 import type { PoolClient, QueryResultRow } from "pg";
 import { Failure } from "../../domain/values.js";
+import { postgresConnection } from "./connection.js";
 
 // OID 20 covers balances, sequences, and counts; Number would silently lose large integers.
 pg.types.setTypeParser(20, (value) => BigInt(value));
@@ -32,7 +33,7 @@ export class Database {
   /** Bound connection/query waits and normalize all database-generated instants to UTC. */
   constructor(url: string) {
     this.pool = new pg.Pool({
-      connectionString: url,
+      ...postgresConnection(url, process.env.DATABASE_CA_CERT),
       max: 12,
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000,

@@ -421,6 +421,8 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 ### Database and durable work
 
+**DEPLOY-DO-01.** Supply an App Platform creation spec using matching published GHCR images for a single bot worker, internal-only Nodestone service, and pre-deploy migration job. Provision a new inline PostgreSQL dev database from the spec, using provider-bound runtime credentials and verified TLS with its CA. Document dev-tier limits and an update procedure that retains database identity and stops the previous writer before migrations/replacement startup. Validate configuration without creating cloud resources in tests or CI.
+
 **DB-01.** PostgreSQL is the runtime database. Use Drizzle ORM for typed application persistence over the node-postgres driver, with table mappings and inferred record types maintained alongside explicit versioned SQL migrations. The migrations own foreign keys, unique constraints, indexes, domains, and triggers; already-applied migrations are immutable. Bind ORM work inside an application transaction to its exact checked-out client. Retain narrowly scoped parameterized PostgreSQL control/locking SQL and catalog-based restore verification. Application startup checks the required schema version and checksum.
 
 The physical schema may use different names, but it must represent these logical records and constraints:

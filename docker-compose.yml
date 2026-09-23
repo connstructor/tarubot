@@ -38,6 +38,8 @@ services:
     image: ${TARUBOT_IMAGE:-ghcr.io/connstructor/tarubot:${TARUBOT_IMAGE_TAG:-latest}}
     environment:
       DATABASE_URL: postgresql://tarubot:${POSTGRES_PASSWORD}@postgres:5432/tarubot
+      # Optional provider root CA for deployments using an external TLS PostgreSQL endpoint.
+      DATABASE_CA_CERT: ${DATABASE_CA_CERT:-}
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID:-}
       NODESTONE_URL: http://nodestone:8080

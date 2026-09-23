@@ -76,6 +76,12 @@ jobs:
         run: |
           docker compose --env-file .env.example config --quiet
           docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.build.yml config --quiet
+      - name: Validate App Platform schema without cloud credentials
+        run: >-
+          docker run --rm --network none
+          -v "$PWD/.do:/spec:ro"
+          digitalocean/doctl:1.169.0@sha256:f8a097dd95129ce4e5c751418d3ba4a67372c908728064af2b7fa7e3ee02b75f
+          apps spec validate /spec/app.yaml --schema-only
 
   images:
     name: Container build (${{ matrix.target }})

@@ -1,6 +1,13 @@
 # Version history
 
-The current application version is **2.10.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.11.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.11.0 — DigitalOcean App Platform deployment
+
+- Add a GHCR-backed App Platform spec with one bot worker, internal Nodestone service, pre-deploy migration job, and a newly provisioned inline PostgreSQL 18 dev database.
+- Bind database credentials and the provider CA at runtime; enforce certificate/hostname verification when `DATABASE_CA_CERT` is supplied, including over conflicting URL TLS flags.
+- Validate the provider schema offline in CI and test release/credential/networking invariants and actual driver TLS option parsing.
+- Document initial provisioning, secrets, command registration, dev-database limits, and phased single-writer updates with persistent database identity.
 
 ## 2.10.2 — Separate officer chat from community channels
 
@@ -102,6 +109,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.10.0 | Opt-in lobby/staff channel security and derived registered-visitor Guest access |
 | 2.10.1 | Preserve private channels expressed through explicit role/member visibility denies |
 | 2.10.2 | Protected community-update resources and separate officer chat |
+| 2.11.0 | App Platform spec with automatic PostgreSQL provisioning and provider-CA support |
 
 ## Increment policy
 

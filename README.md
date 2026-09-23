@@ -14,6 +14,8 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 
 The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
 
+For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) provisions a new PostgreSQL 18 **dev database**, a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for filling secrets, deploying from scratch, and updating with one active writer.
+
 Normal deployments pull **`ghcr.io/connstructor/tarubot:latest`** and **`ghcr.io/connstructor/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
 The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:

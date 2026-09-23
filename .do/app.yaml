@@ -1,0 +1,131 @@
+# Creation template: App Platform provisions the PostgreSQL dev database automatically.
+# Fill the Discord credentials in an untracked copy or the DO control panel.
+# See docs/APP_PLATFORM.md before deployment, especially the single-writer update procedure.
+name: tarubot
+region: nyc
+alerts:
+  - rule: DEPLOYMENT_FAILED
+
+# No cluster_name: this creates a new DO-hosted dev PostgreSQL database, not a container.
+databases:
+  - name: db
+    engine: PG
+    version: "18"
+    production: false
+
+# Only the bot consumes Discord gateway events. Keep a single instance and no autoscaling.
+workers:
+  - name: tarubot
+    image: &bot-image
+      registry_type: GHCR
+      registry: connstructor
+      repository: tarubot
+      tag: &release "2.11.0"
+      # For private packages, add registry_credentials in your untracked deployment copy.
+    run_command: bun dist/src/main.js
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    termination:
+      grace_period_seconds: 30
+    liveness_health_check:
+      http_path: /health/live
+      port: 3000
+      initial_delay_seconds: 30
+      period_seconds: 15
+      timeout_seconds: 5
+      failure_threshold: 3
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${db.DATABASE_URL}
+      - key: DATABASE_CA_CERT
+        scope: RUN_TIME
+        value: ${db.CA_CERT}
+      - key: DISCORD_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_WITH_DISCORD_BOT_TOKEN
+      - key: DISCORD_APPLICATION_ID
+        scope: RUN_TIME
+        value: REPLACE_WITH_DISCORD_APPLICATION_ID
+      - key: NODESTONE_URL
+        scope: RUN_TIME
+        value: http://nodestone:8080
+      - key: HEALTH_PORT
+        scope: RUN_TIME
+        value: "3000"
+      - key: LOG_LEVEL
+        scope: RUN_TIME
+        value: info
+      # Enable delivery after the intended guild/data have been configured or imported.
+      - key: ENABLE_EFFECTS
+        scope: RUN_TIME
+        value: "false"
+      - key: TEST_GUILD_ID
+        scope: RUN_TIME
+        value: ""
+      - key: PUBLIC_TEST_RESPONSES
+        scope: RUN_TIME
+        value: "false"
+
+# An internal-only service: no http_port and no ingress rules expose Nodestone publicly.
+services:
+  - name: nodestone
+    image:
+      registry_type: GHCR
+      registry: connstructor
+      repository: tarubot-nodestone
+      tag: *release
+    run_command: bun dist/sidecar/server.js
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    internal_ports: [8080]
+    health_check:
+      http_path: /health
+      port: 8080
+      initial_delay_seconds: 10
+      period_seconds: 15
+      timeout_seconds: 5
+      failure_threshold: 3
+    termination:
+      grace_period_seconds: 30
+    envs:
+      - key: PORT
+        scope: RUN_TIME
+        value: "8080"
+      - key: PAGE_REGION
+        scope: RUN_TIME
+        value: na
+      - key: LODESTONE_CONCURRENCY
+        scope: RUN_TIME
+        value: "2"
+      - key: LODESTONE_START_MS
+        scope: RUN_TIME
+        value: "1000"
+      - key: LODESTONE_TIMEOUT_MS
+        scope: RUN_TIME
+        value: "15000"
+      - key: LODESTONE_BODY_BYTES
+        scope: RUN_TIME
+        value: "2000000"
+      - key: NODESTONE_UPSTREAM_CHECK_SECONDS
+        scope: RUN_TIME
+        value: "3600"
+
+# Migrate with exactly the bot image. No Discord token is needed by this job.
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    image: *bot-image
+    run_command: bun dist/scripts/migrate.js
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${db.DATABASE_URL}
+      - key: DATABASE_CA_CERT
+        scope: RUN_TIME
+        value: ${db.CA_CERT}
