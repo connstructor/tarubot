@@ -59,9 +59,30 @@ const gateway = new DiscordGateway();
 const app = new Service(db, gateway, new Nodestone(config.NODESTONE_URL), config);
 const sync = new Synchronization(app);
 const access = new GuildAccess(app, new DiscordGuildAccess(gateway.client));
-const queue = new Queue(db, dispatcher(app, sync, access), (error, job) =>
-  report(error, job?.id ?? "queue"),
-);
+const queue = new Queue(db, dispatcher(app, sync, access), (event) => {
+  if (event.type === "worker") return report(event.error, event.job?.id ?? "queue");
+  // Classified attempts log at their own level: expected waits stay at debug unless they stall.
+  // Only identifiers, codes, approved diagnostics and timings are logged, never payloads or tokens.
+  const { job, outcome } = event;
+  log[outcome.level](
+    {
+      operation: job.id,
+      kind: job.kind,
+      generation: job.generation,
+      attempts: job.attempts,
+      code: outcome.code,
+      status: outcome.status,
+      category: outcome.category,
+      source: outcome.source,
+      diagnostic: outcome.diagnostic,
+      delaySeconds: Math.ceil(outcome.delaySeconds),
+      durationMs: event.durationMs,
+      waitMs: event.waitMs,
+      ageMs: event.ageMs,
+    },
+    "Job attempt outcome classified; inspect scoped work status.",
+  );
+});
 const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue, log, report);
 const services = new Services()
   .provide(applicationKey, app)

@@ -34,6 +34,8 @@ App Platform uses [`.do/app.yaml`](../.do/app.yaml) and its automatically provis
 - `/guest status`: durable decisions, grants, revocations, and separate delivery work.
 - `/ledger balance` / `/ledger history`: committed balances/entries and delivery status.
 
+Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded.
+
 Job diagnostics are scoped. Repair the configured resource or permissions, then let reconciliation/backoff resume. For a terminal delivery failure, an operator can explicitly retry the job using database credentials:
 
 ```sh

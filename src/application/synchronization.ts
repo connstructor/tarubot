@@ -7,7 +7,7 @@ import {
   type AccessFacts,
   type Actor,
 } from "../domain/policy.js";
-import { Failure, nickname, normalized } from "../domain/values.js";
+import { Failure, json, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
 import { ensureUser, orm } from "../infrastructure/postgres/database.js";
 import {
@@ -24,6 +24,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
 import {
@@ -36,6 +37,27 @@ import {
 import type { GuildRecord, MemberView } from "./records.js";
 import type { Service } from "./service.js";
 import { accessFacts } from "./access-facts.js";
+
+/** Bound the per-job role-delta history; a long-lived blocked job is re-run indefinitely. */
+const APPLIED_HISTORY = 20;
+/** One role delta sent to Discord by a reconciliation pass, even if that pass is later superseded. */
+type AppliedDelta = {
+  generation: number;
+  at: string;
+  add: string[];
+  remove: string[];
+  status: "applied" | "pending_or_blocked";
+};
+/**
+ * Append a pass's delta to the job's existing `applied` list and keep the newest entries.
+ * A superseded pass re-runs with the roles already present (add/remove empty), so without this
+ * list the delta Discord actually received would vanish from the job's result.
+ */
+function appliedHistory(entry: AppliedDelta | null): SQL {
+  const prior = sql`CASE WHEN jsonb_typeof(${t.jobs.result}->'applied')='array' THEN ${t.jobs.result}->'applied' ELSE '[]'::jsonb END`;
+  const list = entry ? sql`(${prior} || ${json([entry])}::jsonb)` : prior;
+  return sql`(SELECT coalesce(jsonb_agg(item.value ORDER BY item.position),'[]'::jsonb) FROM jsonb_array_elements(${list}) WITH ORDINALITY AS item(value,position) WHERE item.position>jsonb_array_length(${list})-${APPLIED_HISTORY})`;
+}
 
 /** Evidence publication and Discord delivery have distinct transactions, timestamps, and failures. */
 export class Synchronization {
@@ -135,7 +157,12 @@ export class Synchronization {
             ),
           )
           .for("update");
-        if (!lease.length) throw new Failure("superseded", "Expired acquisition lease.");
+        // No live lease row means another worker reclaimed (or will reclaim) this acquisition.
+        if (!lease.length)
+          throw new Failure(
+            "lease_lost",
+            "Worker lease expired or was reclaimed; another worker owns this job.",
+          );
         await this.app.storeCompany(client, roster.company);
         const [snapshot] = await db
           .insert(t.rosterSnapshots)
@@ -283,7 +310,11 @@ export class Synchronization {
       });
       return result;
     } catch (error) {
-      if (!(error instanceof Failure && ["cooldown", "superseded"].includes(error.code))) {
+      // Cooldowns, superseded inputs and a lost worker lease are ownership/timing changes, not
+      // Lodestone degradation: the reclaiming worker owns FC state and any officer notice.
+      if (
+        !(error instanceof Failure && ["cooldown", "superseded", "lease_lost"].includes(error.code))
+      ) {
         await this.app.db.orm
           .update(t.freeCompanies)
           .set({ last_error: error instanceof Failure ? error.code : "acquisition_failed" })
@@ -635,13 +666,23 @@ export class Synchronization {
       } catch (error) {
         nicknameError = error;
       }
+      const roles = { status: roleError ? "pending_or_blocked" : "applied", add, remove } as const;
+      const nicknameResult = { status: nicknameError ? "pending_or_blocked" : "applied" } as const;
+      // Record the delta this pass sent to Discord before any later generation fence can discard it.
+      const entry =
+        add.length || remove.length
+          ? {
+              generation: job.generation,
+              at: new Date().toISOString(),
+              add,
+              remove,
+              status: roles.status,
+            }
+          : null;
       await db
         .update(t.jobs)
         .set({
-          result: {
-            roles: { status: roleError ? "pending_or_blocked" : "applied", add, remove },
-            nickname: { status: nicknameError ? "pending_or_blocked" : "applied" },
-          },
+          result: sql`jsonb_build_object('roles',${json(roles)}::jsonb,'nickname',${json(nicknameResult)}::jsonb,'applied',${appliedHistory(entry)})`,
         })
         .where(
           and(
@@ -674,7 +715,15 @@ export class Synchronization {
       }
       if (roleError) throw roleError;
       if (nicknameError) throw nicknameError;
-      return { user: member.id, add, remove, status: "applied" };
+      // Queue completion carries the stored `applied` history into this final result.
+      return {
+        user: member.id,
+        add,
+        remove,
+        status: "applied",
+        roles,
+        nickname: nicknameResult,
+      };
     } finally {
       if (locked)
         await connection

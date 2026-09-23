@@ -56,6 +56,9 @@ try {
           attempts: 0,
           lease_token: randomUUID(),
           message_id: null,
+          // Timing fields only feed queue logs; a transient preview job is created and due now.
+          created_at: new Date(),
+          due_at: new Date(),
         },
         async () => {},
         true,
