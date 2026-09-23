@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Events } from "discord.js";
+import { assertAuthenticatedApplication, assertToolScope } from "../src/config/deployment.js";
 import { DiscordGateway } from "../src/discord/gateway.js";
 import { readDump } from "../src/import/dump.js";
 import { snapshotSchema } from "../src/import/importer.js";
@@ -19,12 +20,21 @@ const token = process.env.DISCORD_TOKEN;
 if (!file || !output || !token)
   throw new Error("DISCORD_TOKEN, --dump DUMP.sql, and --output SNAPSHOT.json are required.");
 const data = readDump(await Bun.file(file).text());
+// The dump's guilds must belong to this env's deployment profile before any login.
+const deployment = assertToolScope(process.env, {
+  tool: "snapshot",
+  guilds: data.guilds.map((guild) => guild.guild_id),
+  discord: "read",
+  databases: [],
+});
 const gateway = new DiscordGateway();
 try {
   await gateway.client.login(token);
   // Operational capture waits for login without loading application event handlers or workers.
   if (!gateway.client.isReady())
     await new Promise<void>((resolve) => gateway.client.once(Events.ClientReady, () => resolve()));
+  // The token must belong to the profile's application before any member is enumerated.
+  assertAuthenticatedApplication(deployment, gateway.client.application?.id);
   const guilds = [];
   for (const guild of data.guilds) {
     const members = await gateway.members(guild.guild_id);

@@ -23,6 +23,16 @@ export interface AutocompleteContext extends BotContext {
   readonly interaction: AutocompleteInteraction;
 }
 
+/**
+ * A pre-modal check runs before the form's acknowledgement, so it gets no actor: resolving one
+ * needs Discord round trips that the three-second window cannot afford. The router has already
+ * confirmed a human member of an allowed guild; `guildId` is that verified guild.
+ */
+export interface ModalGateContext extends BotContext {
+  readonly guildId: string;
+  readonly interaction: ChatInputCommandInteraction;
+}
+
 /** Metadata and handlers exported together prevent registration/runtime inventories drifting. */
 interface CommandMetadata {
   readonly data: Pick<SlashCommandBuilder, "toJSON">;
@@ -36,7 +46,10 @@ interface CommandMetadata {
     | ApplicationCommandOptionChoiceData<string>[];
 }
 
-/** Modal opening is synchronous and unprivileged; its submission authenticates before any work. */
+/**
+ * Modal opening is unprivileged. An optional pre-modal check may refuse it, and the submission
+ * authenticates before any work.
+ */
 export type CommandOptions = CommandMetadata &
   (
     | {
@@ -44,10 +57,21 @@ export type CommandOptions = CommandMetadata &
           context: CommandContext,
         ) => Promise<InteractionEditReplyOptions> | InteractionEditReplyOptions;
         readonly modal?: never;
+        readonly beforeModal?: never;
       }
     | {
         readonly access?: "user";
         readonly modal: (interaction: ChatInputCommandInteraction) => ModalBuilder;
+        /**
+         * Optional availability check before the form opens. Return refusal text to answer with it
+         * instead of the form, or null to open the form. Keep it to one fast local read: Discord
+         * allows three seconds for the first acknowledgement, so the router opens the form anyway
+         * if the check errors or overruns its budget. It is a courtesy, not authorization; the
+         * submission still resolves a fresh actor and repeats every check.
+         */
+        readonly beforeModal?: (
+          context: ModalGateContext,
+        ) => Promise<string | null> | string | null;
         readonly execute?: never;
       }
   );
@@ -61,6 +85,7 @@ export class Command {
   readonly requires: readonly ServiceKey<unknown>[];
   readonly execute: CommandOptions["execute"];
   readonly modal: CommandOptions["modal"];
+  readonly beforeModal: CommandOptions["beforeModal"];
   readonly autocomplete: CommandOptions["autocomplete"];
 
   constructor(options: CommandOptions) {
@@ -79,6 +104,12 @@ export class Command {
       throw new Error(
         "Immediate modal commands must be unprivileged; authorize submissions instead.",
       );
+    // Discovered modules are untyped at runtime, so re-check what the option union promises.
+    if (
+      options.beforeModal !== undefined &&
+      (typeof options.beforeModal !== "function" || typeof options.modal !== "function")
+    )
+      throw new Error("A pre-modal check must be a function on a modal command.");
     if (options.autocomplete !== undefined && typeof options.autocomplete !== "function") {
       throw new Error("Command autocomplete must be a function.");
     }
@@ -90,6 +121,7 @@ export class Command {
     this.requires = options.requires ?? [];
     this.execute = options.execute;
     this.modal = options.modal;
+    this.beforeModal = options.beforeModal;
     this.autocomplete = options.autocomplete;
   }
 

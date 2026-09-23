@@ -1,5 +1,6 @@
 /** Maintenance CLI: publish fresh roster evidence for a guild without running Discord effects. */
 import { randomUUID } from "node:crypto";
+import { assertToolScope } from "../src/config/deployment.js";
 import { configuration } from "../src/config/env.js";
 import { DiscordGateway } from "../src/discord/gateway.js";
 import { Service } from "../src/application/service.js";
@@ -13,6 +14,13 @@ import * as t from "../src/infrastructure/postgres/schema.js";
 
 const config = configuration();
 const guild = id(process.argv[2]);
+// The guild and database must belong to this env's deployment profile before any connection.
+assertToolScope(process.env, {
+  tool: "acquire",
+  guilds: [guild],
+  discord: "none",
+  databases: ["DATABASE_URL"],
+});
 const db = new Database(config.DATABASE_URL);
 try {
   await db.schema();

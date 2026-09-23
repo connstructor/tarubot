@@ -1,0 +1,157 @@
+/**
+ * An ApplicationLifecycle with controlled collaborators, for writer-lease and readiness tests. Only
+ * the database is supplied by the test (a fake pool in unit tests, real PostgreSQL in integration
+ * tests); Discord, Lodestone, scheduling and the queue are prototype-backed stand-ins that record
+ * what startup asked of them.
+ */
+import { Guild } from "discord.js";
+import { pino } from "pino";
+import { ApplicationLifecycle, type LifecycleOptions } from "../../src/application/lifecycle.js";
+import { Service } from "../../src/application/service.js";
+import { Synchronization } from "../../src/application/synchronization.js";
+import type { Configuration } from "../../src/config/env.js";
+import { DiscordGateway } from "../../src/discord/gateway.js";
+import type { Database } from "../../src/infrastructure/postgres/database.js";
+import { Queue } from "../../src/jobs/queue.js";
+
+/** The application ID the stand-in gateway reports, so start() passes its identity check. */
+const APPLICATION_ID = "123";
+
+/** Build an instance of a class from its prototype plus replaced members, without its constructor. */
+export function instance<T extends object>(
+  type: abstract new (...args: never[]) => T,
+  members: object,
+): T {
+  const value: unknown = Object.assign(Object.create(type.prototype), members);
+  if (!(value instanceof type)) throw new Error(`Invalid ${type.name} fixture`);
+  return value;
+}
+
+/** One structured pino line, as the lifecycle wrote it. */
+export interface LogLine {
+  level: number;
+  msg: string;
+  lock?: number;
+  holderPid?: number;
+  waitedMs?: number;
+}
+/** pino's numeric levels, so assertions can name them. */
+export const LEVEL = { info: 30, warn: 40, error: 50 } as const;
+
+export interface LifecycleHarness {
+  lifecycle: ApplicationLifecycle;
+  /** Every structured log line, in order. */
+  logs: LogLine[];
+  /** Exit codes requested through LifecycleOptions.exit (never the real process.exit). */
+  exits: number[];
+  /** Operations passed to the report callback. */
+  reports: string[];
+  /** How many times startup started the queue workers. */
+  queueStarts: () => number;
+  /** GET a health endpoint on the lifecycle's own probe server. */
+  probe: (path: "/health/live" | "/health/ready") => Promise<{ status: number; body: Probe }>;
+}
+/** The probe fields these tests assert. */
+export interface Probe {
+  live: boolean;
+  ready: boolean;
+  database: boolean;
+  writerLease: boolean;
+  discord: boolean;
+}
+
+/**
+ * The gateway reports itself connected and correctly identified, so readiness depends only on
+ * the lease and startup. Timing defaults are short; the process exit is recorded, not performed.
+ * `guilds` are the guild IDs the gateway's cache reports present, which start() reconciles.
+ */
+export function lifecycleHarness(
+  db: Database,
+  options: Partial<LifecycleOptions> = {},
+  guilds: readonly string[] = [],
+): LifecycleHarness {
+  const logs: LogLine[] = [];
+  const exits: number[] = [];
+  const reports: string[] = [];
+  let started = 0;
+  const config: Configuration = {
+    DATABASE_URL: "postgresql://unused/unused",
+    DISCORD_TOKEN: "test-only",
+    DISCORD_APPLICATION_ID: APPLICATION_ID,
+    NODESTONE_URL: "http://unused",
+    LOG_LEVEL: "info",
+    ENABLE_EFFECTS: false,
+    TEST_GUILD_ID: "",
+    PUBLIC_TEST_RESPONSES: false,
+    ROSTER_INTERVAL_SECONDS: 21600,
+    PROFILE_INTERVAL_SECONDS: 86400,
+    VERIFICATION_SECONDS: 1800,
+    GUEST_COOLDOWN_SECONDS: 86400,
+    // Port 0 lets several lifecycles (and parallel test runs) listen side by side.
+    HEALTH_PORT: 0,
+  };
+  // A real SDK client that never logs in; only readiness and identity are replaced.
+  const gateway = new DiscordGateway();
+  Object.assign(gateway.client, { isReady: () => true, application: { id: APPLICATION_ID } });
+  // start() reads only the cache's keys, so a prototype-backed stand-in per guild suffices (Guild's
+  // constructor is private, so instance() cannot build it).
+  for (const id of guilds)
+    gateway.client.guilds.cache.set(
+      id,
+      Object.assign(Object.create(Guild.prototype) as Guild, { id }),
+    );
+  const app = instance(Service, { lodestone: { stop: () => {} } });
+  const sync = instance(Synchronization, { schedule: async () => {} });
+  const queue = instance(Queue, {
+    start: () => {
+      started++;
+    },
+    stop: async () => {},
+  });
+  const log = pino({ level: "info" }, { write: (line: string) => logs.push(JSON.parse(line)) });
+  const lifecycle = new ApplicationLifecycle(
+    config,
+    db,
+    gateway,
+    app,
+    sync,
+    queue,
+    log,
+    (_error, operation) => reports.push(operation),
+    { leaseRetryMs: 25, leaseWarnAfterMs: 60000, exit: (code) => exits.push(code), ...options },
+  );
+  return {
+    lifecycle,
+    logs,
+    exits,
+    reports,
+    queueStarts: () => started,
+    probe: async (path) => {
+      const response = await fetch(new URL(path, lifecycle.healthUrl));
+      return { status: response.status, body: (await response.json()) as Probe };
+    },
+  };
+}
+
+/** Poll a condition on real timers; fails the test with the label instead of hanging. */
+export async function eventually(label: string, condition: () => boolean | Promise<boolean>) {
+  const deadline = performance.now() + 5000;
+  while (!(await condition())) {
+    if (performance.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
+    await Bun.sleep(10);
+  }
+}
+
+/** Track a promise's settlement without awaiting it, and keep its rejection handled. */
+export function observe<T>(promise: Promise<T>): {
+  settled: () => boolean;
+  result: Promise<T>;
+} {
+  let settled = false;
+  const result = promise.finally(() => {
+    settled = true;
+  });
+  // The test awaits result later; this handler only prevents an unhandled-rejection report.
+  result.catch(() => {});
+  return { settled: () => settled, result };
+}

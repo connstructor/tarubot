@@ -138,14 +138,35 @@ export function importReport(data: LegacyData, snapshot: Snapshot | null, mappin
         raw: row.last_updated,
         utc: `${row.last_updated?.replace(" ", "T")}Z`,
       })),
+    // What each guild row will hold, so the dry run shows every launch default before publication
+    // (MIG-02). The legacy review channel is only recorded; it is kept for a later explicit choice.
+    guildSettings: data.guilds.map((row) => ({
+      guildId: row.guild_id,
+      memberRoleId: row.member_role_id,
+      guestRoleId: row.guest_role_id,
+      ledgerChannelId: row.ledger_channel_id,
+      officerNotificationsChannelId: row.officer_notifications_channel_id,
+      guestApplications: importedGuestApplications(row.guest_application_channel_id),
+    })),
     bootstrap: {
       primaryCharacters: "unset",
       nicknames: "disabled",
       liveRoster: "pending",
       effects: "disabled",
       snapshotComplete: snapshot !== null,
+      // Owner launch decisions of 2026-09-23 (see importLegacy's guild insert).
+      guestApplications: "closed",
+      roleLayout: "disabled",
+      guestGrandfathering: "pending_first_activation",
     },
   };
+}
+/**
+ * /apply opens only after an explicit `/config guest_applications` choice (owner decision
+ * 2026-09-23). The legacy channel ID is kept here so that choice can reuse it.
+ */
+function importedGuestApplications(legacyChannelId: string | null) {
+  return { state: "closed", legacyChannelId } as const;
 }
 /** Repeat fingerprints preserve later decisions; new imports publish completely or roll back. */
 export async function importLegacy(
@@ -223,9 +244,17 @@ export async function importLegacy(
         fc_id: guild.fc,
         member_role_id: guild.member_role_id,
         guest_role_id: guild.guest_role_id,
+        // Ledger and roster notices keep their legacy destinations; activation validates them.
         ledger_channel_id: guild.ledger_channel_id,
         officer_notifications_channel_id: guild.officer_notifications_channel_id,
-        guest_application_channel_id: guild.guest_application_channel_id,
+        // Owner launch decisions of 2026-09-23:
+        // - applications start closed; /apply opens only through an explicit
+        //   /config guest_applications, and the report and audit keep the legacy channel;
+        guest_application_channel_id: null,
+        // - imported servers keep their existing role display and order until a manager opts in;
+        role_layout_enabled: false,
+        // - the guild owes exactly one first-activation grandfathering run.
+        guest_grandfather: "pending",
         effects_enabled: false,
       });
       if (data.guilds.length === 1)
@@ -268,6 +297,10 @@ export async function importLegacy(
       await audit(client, guild.guild_id, null, "migration.import", data.fingerprint, {
         snapshotChecksum: checksum,
         sourceTimezone: "UTC",
+        // The launch defaults written above, recorded where officers can find them later.
+        guestApplications: importedGuestApplications(guild.guest_application_channel_id),
+        roleLayout: false,
+        guestGrandfather: "pending",
       });
       if (guild.fc) await enqueue(client, "roster", `roster:${guild.fc}`, { fcId: guild.fc });
     }

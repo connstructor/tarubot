@@ -10,13 +10,22 @@ import {
   GatewayIntentBits,
   PermissionFlagsBits,
 } from "discord.js";
-import type { GuildMember } from "discord.js";
+import type { Collection, GuildMember, Role } from "discord.js";
 import { Failure, normalized } from "../domain/values.js";
 import type { Actor } from "../domain/policy.js";
 import type { ApplicationRecord, DiscordPort, MemberView } from "../application/records.js";
-import { rolePositionChanges } from "../domain/role-layout.js";
+import { roleLayoutPlan, rolePositionChanges, type RoleLayoutPlan } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
 import { guestApplicationEmbeds } from "./guest-application.js";
+
+/**
+ * Lowest role first. Discord can give new roles identical raw positions; the SDK comparison
+ * resolves those ties by ID, matching the effective order Discord displays. Shared by the layout
+ * pass, its readback and the read-only planner so all three see one order.
+ */
+function ascendingRoles(roles: Collection<string, Role>): Role[] {
+  return [...roles.values()].sort((left, right) => left.comparePositionTo(right));
+}
 
 /** Exposes a reusable Discord client plus application-owned projections of SDK state. */
 export class DiscordGateway implements DiscordPort {
@@ -128,13 +137,18 @@ export class DiscordGateway implements DiscordPort {
         );
     }
   }
-  /** Setup adopts a configured/exact-name role or creates a zero-permission role below the bot. */
+  /**
+   * Setup adopts a configured/exact-name role or creates a zero-permission role below the bot.
+   * `hoist` is the guild's role-layout switch: created roles follow it, so with layout off Discord's
+   * default (not displayed separately) is kept. Adopted existing roles are never re-hoisted here.
+   */
   async ensureRole(
     guildId: string,
     name: string,
     actorId: string,
     configured: string | null,
     canonicalName: string,
+    hoist: boolean,
   ): Promise<{ id: string; created: boolean }> {
     const guild = await this.client.guilds.fetch(guildId);
     const roles = await guild.roles.fetch();
@@ -145,7 +159,7 @@ export class DiscordGateway implements DiscordPort {
       role = await guild.roles.create({
         name,
         permissions: 0n,
-        hoist: true,
+        hoist,
         reason: `TaruBot setup requested by ${actorId}`,
       });
       created = true;
@@ -177,19 +191,14 @@ export class DiscordGateway implements DiscordPort {
       }
     }
     roles = await guild.roles.fetch();
-    // Discord can give new roles identical raw positions; SDK comparison resolves their ID ties.
-    const ascending = [...roles.values()]
-      .sort((left, right) => left.comparePositionTo(right))
-      .map((role) => role.id);
+    const ascending = ascendingRoles(roles).map((role) => role.id);
     const positions = rolePositionChanges(ascending, priority);
     if (positions.length) {
       await guard();
       await guild.roles.setPositions(positions);
     }
     const verified = await guild.roles.fetch();
-    const actual = [...verified.values()]
-      .sort((left, right) => left.comparePositionTo(right))
-      .map((role) => role.id);
+    const actual = ascendingRoles(verified).map((role) => role.id);
     const expected = positions.length ? positions.map((entry) => entry.role) : ascending;
     if (
       actual.join(":") !== expected.join(":") ||
@@ -202,6 +211,23 @@ export class DiscordGateway implements DiscordPort {
       );
     }
     return { order: [...priority], hoisted, positions };
+  }
+  /**
+   * Read-only counterpart of layoutRoles for the cutover preview: the same per-role checks (so a
+   * blocked pass reports the same diagnostic), one role fetch and the same ordering, then the plan
+   * of hoist and position writes a pass would make. It never writes, and it is deliberately not on
+   * DiscordPort, so reconciliation fakes need no planner.
+   */
+  async planRoleLayout(guildId: string, priority: readonly string[]): Promise<RoleLayoutPlan> {
+    if (!priority.length) return roleLayoutPlan([], priority);
+    const guild = await this.client.guilds.fetch(guildId);
+    for (const roleId of priority) await this.validateRole(guildId, roleId);
+    const ascending = ascendingRoles(await guild.roles.fetch()).map((role) => ({
+      id: role.id,
+      name: role.name,
+      hoist: role.hoist,
+    }));
+    return roleLayoutPlan(ascending, priority);
   }
   /** Fetch the channel globally, then explicitly check guild ownership and current overwrites. */
   async validateChannel(guildId: string, channelId: string): Promise<void> {

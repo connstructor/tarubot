@@ -47,11 +47,40 @@ export interface AccessFacts {
   revoked: boolean;
   hasMember: boolean;
   hasGuest: boolean;
-  /** Enabled onboarding treats an active trusted character link as a verified visitor credential. */
+  /**
+   * Any active trusted character link registers the user; in every guild, with or without lobby
+   * onboarding, it qualifies a non-member for Guest (ROLE-07). The name predates 2.13.0 and is kept
+   * because reconciliation and `/guest status` read it.
+   */
   verified?: boolean;
 }
 
-/** Member access wins; revocation suppresses guest access without changing FC eligibility. */
+/**
+ * Classify FC membership as the union over a user's active trusted links for the guild's currently
+ * linked FC (ROLE-07): one confirmed character (present, or awaiting departure confirmation) makes
+ * the user a member whatever their other links show. An unevaluated link keeps the user uncertain
+ * unless a local unlink already removed their last confirmed character.
+ */
+export function membershipClass(counts: {
+  fcLinked: boolean;
+  confirmed: bigint;
+  unknown: bigint;
+  localLoss: boolean;
+}): AccessFacts["membership"] {
+  if (!counts.fcLinked) return "ineligible";
+  if (counts.confirmed > 0n) return "member";
+  return counts.unknown > 0n && !counts.localLoss ? "uncertain" : "ineligible";
+}
+
+/**
+ * Member access wins; revocation suppresses guest access without changing FC eligibility.
+ * Precedence over the link union: a member class never gains Guest (stale evidence only keeps one
+ * already held until Member can be added); an uncertain class keeps held roles and honors durable
+ * grants, but neither former-member history nor registration creates a role; an ineligible class
+ * receives Guest from a durable grant, former-member history, or registration (at least one
+ * trusted link, `verified`), where registration needs fresh evidence to add Guest and stale
+ * evidence only keeps a held one.
+ */
 export function desiredAccess(facts: AccessFacts): { member: boolean; guest: boolean } {
   if (facts.membership === "member") {
     // Stale evidence can retain an existing grant, but cannot create a new member-role grant.

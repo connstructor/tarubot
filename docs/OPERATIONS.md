@@ -12,6 +12,8 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `POSTGRES_PASSWORD` | Required Compose database credential |
 | `DATABASE_URL` | Local-tool connection string; Compose supplies its internal connection string |
 | `DATABASE_CA_CERT` | Optional PEM provider CA; enables verified PostgreSQL TLS and takes precedence over URL SSL switches |
+| `RESTORE_DATABASE_CA_CERT` | Optional CA for `check-restore`'s `RESTORE_DATABASE_URL` (a PITR fork); empty reuses `DATABASE_CA_CERT` |
+| `TARUBOT_ENVIRONMENT` | Maintenance-tool deployment profile: `production`, `rehearsal`, `devbot`, or empty to infer it; see [CONFIGURATION.md](CONFIGURATION.md#maintenance-tool-profiles) |
 | `NODESTONE_URL` | `http://nodestone:8080` inside Compose |
 | `ENABLE_EFFECTS` | `false`; process-wide delivery switch |
 | `TEST_GUILD_ID` | Optional development interaction restriction |
@@ -25,14 +27,17 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 
 Request, worker, retry, body, pagination, and region settings are in [NODESTONE.md](NODESTONE.md). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
 
-App Platform uses [`.do/app.yaml`](../.do/app.yaml) and its automatically provisioned PostgreSQL dev database. Follow [APP_PLATFORM.md](APP_PLATFORM.md) for bound credentials/CA, explicit command registration, and the phased update procedure that stops the old worker before pre-deploy migrations and a replacement worker start.
+App Platform uses [`.do/app.yaml`](../.do/app.yaml), which attaches the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`). Follow [APP_PLATFORM.md](APP_PLATFORM.md) for provider prerequisites, bound credentials/CA, the worker-free deployment phases, and the update procedure that stops the old worker before pre-deploy migrations and a replacement worker start. Production maintenance tools run from a clean build of the deployed release with an explicit production env file ([MIGRATION.md](MIGRATION.md) E0), never from a checkout's `.env`.
 
 ## Inspect and repair
 
-- `/config show` and `/config validate`: resource existence, permissions/hierarchy, linked FC, and freshness.
+- `/config show` and `/config validate`: resource existence, permissions/hierarchy, linked FC, freshness, and whether the role layout is enabled.
+- `/config role_layout enabled:<true|false>`: a server manager with Manage Server and Manage Roles turns managed-role display and ordering on or off. Disabling leaves the current display as it is; a queued `roles.layout` job then completes as `skipped: layout disabled`.
 - `/sync status`: run outcomes and queued/running/blocked/failed work. Officers see guild-wide work; other users see their authorized requests and effects.
-- `/guest status`: durable decisions, grants, revocations, and separate delivery work.
+- `/guest status`: durable decisions, grants with their provenance (`approved`, `manual`, `imported_guest`, or `grandfathered`), revocations, derived `verifiedGuestEligible`, and separate delivery work. `/guest revoke` is the lasting removal for every kind of Guest access; a later `/guest grant` restores it as a manual grant.
 - `/ledger balance` / `/ledger history`: committed balances/entries and delivery status.
+- `commands.js list`: reads back the application's global and guild command scopes and exits 0 only when the declared scope matches exactly and every other scope is empty; `commands.js clear-guild` removes leftover guild-scoped commands after a fingerprint-confirmed dry run.
+- `preview.js GUILD_ID --late-joiners`: a database-only list of humans who joined after an imported guild's first-activation enumeration and hold neither a guest grant nor an active link, for an officer `/guest grant` decision.
 
 Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded.
 
@@ -41,6 +46,8 @@ Job diagnostics are scoped. Repair the configured resource or permissions, then 
 ```sh
 bun run jobs:retry GUILD_ID JOB_ID
 ```
+
+Against production, run the compiled tool with the production env file instead, as `prod dist/scripts/retry.js GUILD_ID JOB_ID` ([MIGRATION.md](MIGRATION.md) E0).
 
 Retries recompute current desired roles/nicknames. Ledger notifications refer to their original immutable entry and preserve account order. An ambiguous Discord acknowledgement can produce a duplicate visible message; the stable entry ID identifies the same financial mutation. PostgreSQL remains authoritative.
 
@@ -59,9 +66,34 @@ SELECT account_id, sequence, id, operation, delta, balance, event_at
 FROM ledger_entries ORDER BY account_id, sequence;
 ```
 
-Readiness uses database/schema initialization and Discord connectivity; liveness is local. Probes do not acquire Lodestone pages. Logs periodically include queue counts, blocked work, oldest accepted-roster age, and degraded FC counts.
+Readiness uses database/schema initialization, the database writer lease (below), and Discord connectivity; liveness is local. Probes do not acquire Lodestone pages. Logs periodically include queue counts, blocked work, oldest accepted-roster age, and degraded FC counts.
 
 Expired challenges are pruned after seven days. Active links/grants, membership evidence, audits, ledger entries, imports, and work history are retained. Operators can establish a bounded diagnostic-retention policy while retaining financial and access-policy evidence.
+
+## Single database writer
+
+Exactly one bot process writes to a database. The bot enforces this with a PostgreSQL session advisory lock, the **writer lease**, key **`714882494`** (`WRITER_LEASE_LOCK` in `src/application/lifecycle.ts`). Other fixed keys are transaction locks: `714882490` serializes migrations, `714882491` character claims, and `714882492` legacy import.
+
+- **Startup.** After the schema check, the bot checks out one dedicated pool connection and runs `pg_try_advisory_lock(714882494)` every 5 seconds until it succeeds. It holds that connection for the life of the process; it is one of the pool's 12 connections. The queue does not start and the bot does not log in to Discord until the lease is held. Each attempt, and each probe of the holder, has the same 10-second client-side deadline as the lease check below. If the connection stops answering or fails while the bot waits, the bot logs an error, destroys that connection and exits with status 1, so its supervisor restarts it with a fresh connection instead of leaving it live but unready until TCP gives up.
+- **While waiting.** Each attempt logs `Waiting for the database writer lease…` with the holder's backend `holderPid`, at info for the first 60 seconds and at warn after that. `/health/live` stays 200, so App Platform's liveness check keeps the waiting process; `/health/ready` is 503 with `writerLease: false`, so the Compose health check reports it unhealthy (Compose does not restart it for that). An overlapping deployment therefore waits for the previous writer to stop instead of running beside it.
+- **Shutdown.** SIGTERM wakes a waiting process at once, and it exits without logging in. A running writer unlocks after its workers and Discord client stop and before its pool closes, so the next writer acquires within one retry. A process that is killed releases the lease when PostgreSQL ends its session: at once for a normal kill, and after a lost host or network partition once the server's TCP keepalive gives up (about 60 seconds with the pool's session settings). Shutdown has a 27-second deadline, after which the process exits anyway: with status 0 for an ordinary stop, and with status 1 after a lost lease.
+- **Lost session.** If the lease connection ends (database restart, failover or a terminated backend), PostgreSQL frees the lock. The bot logs an error, shuts down and exits with status 1, so its supervisor restarts it and it waits for the lease again.
+- **Silent loss.** A connection can also die without any error reaching the bot, for example when a failover removes the old primary's host (advisory locks are not replicated to a promoted standby, so the lock is already gone) or a network path drops the idle socket (the old session may still hold the lock until the server's keepalive ends it). Every 30 seconds the bot therefore asks the lease connection itself whether it still holds the lock, with a 10-second client-side deadline. No answer, an error or a missing lock counts as a lost lease, so a silent loss is detected within about 40 seconds. The bot then stops, destroys that connection instead of unlocking over it, and exits with status 1 as above. The same failure can leave workers' pool connections hanging so the pool never closes; the shutdown deadline then still exits with status 1. The pool enables client TCP keepalive so the bot notices a vanished peer sooner, and sets server-side `tcp_keepalives_idle=30`, `tcp_keepalives_interval=10` and `tcp_keepalives_count=3` so PostgreSQL ends an orphaned session, and frees its lease, in about a minute.
+- **Stale holder.** If a restarted bot keeps logging the same `holderPid` for more than a few minutes while App Platform shows only the waiting instance, confirm the holder is idle from before the restart with `SELECT pid, state, backend_start, state_change, client_addr FROM pg_stat_activity WHERE pid = <holderPid>`, then run `SELECT pg_terminate_backend(<holderPid>)` as `tarubot`. The waiting writer acquires the lease on its next 5-second attempt.
+
+The lease needs a direct PostgreSQL connection; a transaction-mode pool (PgBouncer) cannot hold a session lock.
+
+**Runbook gate.** Before running migrate, import, activate or a restore against a database, confirm that no bot writer holds the lease. This read-only query must return no rows:
+
+```sql
+SELECT l.pid, a.application_name, a.client_addr, a.backend_start
+FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE l.locktype = 'advisory' AND l.granted
+  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND l.classid = 0 AND l.objid = 714882494 AND l.objsubid = 1;
+```
+
+A single bigint advisory key appears in `pg_locks` as `classid` (high 32 bits), `objid` (low 32 bits) and `objsubid = 1`. A role without `pg_read_all_stats` sees null `client_addr` and `backend_start` for other roles' sessions; the `pid` row alone means a writer is connected. The tools themselves do not take the lease, so this check is the operator's.
 
 ## Shutdown and restart
 
@@ -69,9 +101,9 @@ The Compose stop grace period is 30 seconds. SIGTERM stops new interaction handl
 
 Use a maintenance window for migrations, final capture/import, command replacement/cutover, or restoration. Normal backups can run against the active database; a consistent dump uses PostgreSQL's snapshot semantics.
 
-## Backup
+## Backup (local Compose and DevBot)
 
-The following stores a custom-format archive inside the PostgreSQL container, then copies it into the project. Create the destination directory first.
+The following stores a custom-format archive inside the PostgreSQL container, then copies it into the project. Create the destination directory first. DevBot's database is `tarubot_dev`; add `-f docker-compose.devbot.yml` and use that name.
 
 ```sh
 mkdir -p artifacts/backups
@@ -81,7 +113,7 @@ docker compose cp postgres:/tmp/tarubot-backup.dump artifacts/backups/tarubot-ba
 
 Keep backups and the original import/snapshot/report together in your operational backup storage. For post-activation recovery with no loss of acknowledged decisions, use PostgreSQL WAL/PITR or capture and reconcile all changes newer than the restored backup.
 
-## Restore rehearsal
+## Restore rehearsal (local Compose and DevBot)
 
 Restore into a separate database first:
 
@@ -99,6 +131,46 @@ With the writer stopped, the compiled read-only comparison tool checks all appli
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/tarubot RESTORE_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/tarubot_restore_test bun dist/scripts/check-restore.js
 ```
 
+The deployment guard applies here too. Under DevBot's profile, `DATABASE_URL` must name `tarubot_dev` and the restore target must end in `_restore_test` (for example `tarubot_dev_restore_test`). The one exception is `migrate.js --restore-rehearsal` below. Other local installations use the unmanaged profile and any names.
+
+`check-restore` requires both databases to report this build's `SCHEMA_VERSION`. A **pre-migration** rehearsal therefore runs from the currently deployed build, or from the newer build with `--schema-version` naming the migration both databases still report, for example `bun dist/scripts/check-restore.js --schema-version 004_guest_application_form.sql` before applying `005_launch_access_policy.sql`. Rehearse the new migration on the restored copy before applying it to the live database.
+
+Under DevBot's profile, only `migrate.js --restore-rehearsal` may name the restore copy as `DATABASE_URL`, and with that flag it must end in `_restore_test`. Run the new release's migrate inside its image, deriving the URL in the container so no credential is printed:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.devbot.yml run --rm --no-deps -T tarubot \
+  sh -c 'DATABASE_URL="${DATABASE_URL%/*}/tarubot_dev_restore_test" exec bun dist/scripts/migrate.js --restore-rehearsal'
+```
+
+It must print `Schema ready.` Then migrate `tarubot_dev` itself with a plain `bun dist/scripts/migrate.js`. The production application never uses the flag; its migrations are rehearsed in `tarubot_rehearsal` ([MIGRATION.md](MIGRATION.md) E2).
+
 For actual recovery, stop the writer, preserve the newest available state, restore/replay to the required recovery point, validate invariants and configuration, then restart exactly one writer. Unacknowledged outbound effects resume from durable jobs. Already acknowledged application decisions must be present before resuming.
+
+## Managed PostgreSQL backups and recovery
+
+Production on App Platform uses the managed cluster's backups plus independent exports; [APP_PLATFORM.md](APP_PLATFORM.md#backups-pitr-and-recovery) describes the provider behavior (7-day daily backups and PITR, restores that fork a new cluster) and the repoint procedure.
+
+**Independent export.** Take it before every maintenance window and on the owner's schedule, as `tarubot` over verified TLS with a PostgreSQL 18 client, and store it off the provider:
+
+```sh
+read -rs 'PGPASSWORD?tarubot password: '; export PGPASSWORD
+docker run --rm -e PGPASSWORD -v "$HOME/tarubot-cutover/work:/work" postgres:18.4-alpine \
+  pg_dump "host=CLUSTER_HOST port=25060 dbname=tarubot user=tarubot sslmode=verify-full sslrootcert=/work/ca-certificate.crt" \
+  -Fc -f /work/backups/tarubot-YYYYMMDD.dump
+```
+
+**Restore rehearsal.** In a maintenance window with the worker removed (the `maintenance` phase), either fork the cluster at a recorded time or restore the export into a scratch database on the same cluster. For the scratch path, `doadmin` creates `tarubot_restore` with the documented grants, then:
+
+```sh
+docker run --rm -e PGPASSWORD -v "$HOME/tarubot-cutover/work:/work" postgres:18.4-alpine \
+  pg_restore -d "host=CLUSTER_HOST port=25060 dbname=tarubot_restore user=tarubot sslmode=verify-full sslrootcert=/work/ca-certificate.crt" \
+  --no-owner --no-privileges --exit-on-error /work/backups/tarubot-YYYYMMDD.dump
+```
+
+Add `RESTORE_DATABASE_URL` to the production env file and run `prod dist/scripts/check-restore.js` (`prod` is defined in [MIGRATION.md](MIGRATION.md) E0). The production profile accepts `tarubot_restore` on the primary's host or `tarubot` on another host (a PITR fork), with `RESTORE_DATABASE_CA_CERT` when the fork's CA differs; the rehearsal profile accepts `*_restore_test`. `doadmin` drops the scratch database, or the owner destroys the billed fork, afterwards.
+
+**Recovery (OPS-13).** Stop the writer with the `maintenance` phase, fork at the latest point that keeps every acknowledged decision, repoint `cluster_name` and the local production tooling (see [APP_PLATFORM.md](APP_PLATFORM.md#backups-pitr-and-recovery)), and apply `full`. A database restore never reverts Discord role changes the worker already applied; see the cutover recovery limits in [MIGRATION.md](MIGRATION.md) E4.
+
+## Volumes
 
 `postgres_data` is mounted at `/var/lib/postgresql`, the parent-volume layout expected by PostgreSQL 18 images. Container recreation retains that volume. Removing a volume is a separate destructive operator action.

@@ -28,6 +28,16 @@ src/
 - Runtime dispatch and `commands:register` use the same `loadCommands()` function. Registration loads definitions without connecting application services to PostgreSQL or logging a gateway client into Discord.
 - `bun run build` cleans generated `dist/` first. Removing or renaming a source module therefore removes its stale compiled route as well.
 - Deploy definition changes with `bun run commands:register --guild ID` for development or `--global` at production cutover. Rebuild/restart to load changed execution code. Event/component additions are loaded on restart.
+- `scripts/commands.ts` reads back every command scope against the same discovered declarations (`list`, which exits 0 only when the declared scope matches and every other scope is empty) and clears leftover guild-scoped commands after a fingerprint-confirmed dry run (`clear-guild`). Production runs the compiled tools with an explicit env file ([MIGRATION.md](MIGRATION.md) E0).
+
+## Maintenance tooling boundaries
+
+One-shot tools under `scripts/` keep their I/O at the edges and put testable logic in exported functions or `src/` modules:
+
+- `src/config/deployment.ts` is the pure deployment-identity guard every Discord/database tool calls before any I/O ([CONFIGURATION.md](CONFIGURATION.md#maintenance-tool-profiles)).
+- `src/discord/inspection.ts` holds pure helpers over raw Discord REST payloads (command paths, intents, role order, permissions, inventory differences) shared by `commands.ts`, `register.ts`, `discord-inspect.ts`, and `discord-smoke.ts`.
+- `src/domain/grandfathering.ts` classifies humans for first-activation grandfathering, computes the plan checksum, and summarizes plans; `src/application/grandfathering.ts` gathers the evidence and writes grants; `src/application/activation.ts` runs activation as one transaction. `scripts/preview.ts` and `scripts/activate.ts` supply Discord validation and enumeration around them.
+- `scripts/app-spec.ts` derives and checks the App Platform deployment phases without any cloud call ([APP_PLATFORM.md](APP_PLATFORM.md#deployment-phases)).
 
 ## Add a command
 
@@ -59,7 +69,9 @@ For an officer-only root, set both the Discord builder's default `ManageGuild` p
 
 ### Open a modal
 
-A command can declare a synchronous `modal(interaction)` factory **instead of** `execute`. It returns a `ModalBuilder`, as `/apply` does using labeled text inputs. These openers are user-access only, receive no resolved actor or service context, and must not do network/database work: `showModal` must be Discord's initial acknowledgement. Opening the form does not create a record or grant authority.
+A command can declare a synchronous `modal(interaction)` factory **instead of** `execute`. It returns a `ModalBuilder`, as `/apply` does using labeled text inputs. These openers are user-access only, receive no resolved actor, and must not do network/database work: `showModal` must be Discord's initial acknowledgement. Opening the form does not create a record or grant authority.
+
+An optional `beforeModal({ guildId, services, interaction })` check may refuse a closed feature before the form opens. It receives the router-verified guild but no actor, and returns refusal text or `null`. Keep it to one fast local read: the router waits at most `MODAL_GATE_BUDGET_MS` (1.5 s) inside Discord's three-second window, and if the check errors or overruns, the error is logged and the form opens as before. A refusal is sent as the interaction's only reply with mentions disabled. The check is a courtesy, not authorization, so the submission path must repeat it. `/apply` uses it to refuse while guest applications are closed; the constructor rejects `beforeModal` on a non-modal command.
 
 Route submission through a separate discovered component namespace. The router defers that submission, resolves the current actor, and authorizes it before the handler runs. Validate actor/guild bindings, input limits, and current persisted context again in the application operation; custom IDs are context, not credentials. A form may remain open across a process restart. Reject obsolete joins and duplicate submissions according to the feature's durable policy. Pre-acknowledgement failures use the same reply-visibility rules as deferred errors.
 

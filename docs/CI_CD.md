@@ -112,7 +112,7 @@ That override uses `tarubot:local` and `tarubot-nodestone:local`. Registry deplo
 
 ## PostgreSQL test data
 
-The checks also validate `.do/app.yaml` using a version/digest-pinned doctl container with networking disabled. This validates the App Platform schema without credentials or resource creation. Unit checks keep its image references in step with the package version and verify inline database creation, private routing, and credential scope; see [APP_PLATFORM.md](APP_PLATFORM.md).
+The checks also derive the worker-free `foundation` and `maintenance` App Platform phases with `scripts/app-spec.ts` into `.cache/ci/app-platform/`, then validate `.do/app.yaml` and both derived files using a version/digest-pinned doctl container with networking disabled. This validates the App Platform schema without credentials or resource creation. Unit checks keep its image references in step with the package version and verify attachment of the managed PostgreSQL cluster (no pool or private-URL binding, a CA wherever the database URL is bound), the single effect-enabled worker, private routing, and credential scope; the managed-privileges integration test runs every migration with only the documented managed-cluster grants. See [APP_PLATFORM.md](APP_PLATFORM.md).
 
 CI runs the full integration suite with deterministic **synthetic** data generated under `.cache/ci/legacy.sql`. It exercises the migration schema, fixture counts, ownership links, known/unknown opening balances, and the same persistence/recovery scenarios without uploading the supplied database dump.
 

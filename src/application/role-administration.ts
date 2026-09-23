@@ -12,12 +12,14 @@ import type { Service } from "./service.js";
 
 /** Extra provisioning capability, separate from the reconciliation/test port. */
 export interface RoleProvisioner extends DiscordPort {
+  /** `hoist` is the guild's role-layout switch; a created role is displayed separately only when on. */
   ensureRole(
     guild: string,
     name: string,
     actor: string,
     configured: string | null,
     canonicalName: string,
+    hoist: boolean,
   ): Promise<{ id: string; created: boolean }>;
 }
 
@@ -64,6 +66,10 @@ export class RoleAdministration {
           "Unlink the current FC explicitly before selecting a different one.",
         );
       await this.access.discord.check(actor.guildId, actor.userId);
+      // Setup never changes the role-layout switch. An existing guild keeps its value (an imported
+      // guild stays off); a guild first created here gets the column default, which is on. A
+      // concurrent /config role_layout bumps the revision, so the check below turns it into a conflict.
+      const layout = previous?.role_layout_enabled ?? true;
       const company =
         fcId && fcId !== previous?.fc_id ? await this.app.lodestone.company(fcId) : null;
       const specifications = [
@@ -89,6 +95,7 @@ export class RoleAdministration {
             actor.userId,
             previous?.[field] ?? null,
             label,
+            layout,
           )),
         });
       }
@@ -204,7 +211,8 @@ export class RoleAdministration {
           await enqueue(client, "roster", `roster:${targetFc}`, { fcId: targetFc });
         }
         await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
-        await layoutGuildRoles(client, actor.guildId);
+        // Presentation is opt-in per guild; with the switch off no hoist/position work is queued.
+        if (current.role_layout_enabled) await layoutGuildRoles(client, actor.guildId);
         const accessJob = await secureGuildChannels(client, actor.guildId);
         await audit(client, actor.guildId, actor.userId, "setup", actor.guildId, {
           roles,
@@ -219,7 +227,9 @@ export class RoleAdministration {
           fcId: targetFc,
           officerRank: officerRank ?? current.officer_rank_name,
           effects: "queued",
-          roleLayout: "FC Leader > Officer > Member > Guest; consecutive block; display separately",
+          roleLayout: current.role_layout_enabled
+            ? "FC Leader > Officer > Member > Guest; consecutive block; display separately"
+            : "disabled: role display and order are left unchanged; enable with /config role_layout enabled:true",
           lobby: prepared.lobby,
           officerChannel: prepared.officers,
           accessPolicy: "queued",
@@ -237,19 +247,27 @@ export class RoleAdministration {
     }
   }
 
-  /** A durable revoke overrides rank automation until a manager explicitly grants again. */
+  /**
+   * A durable revoke overrides rank automation until a manager explicitly grants again.
+   *
+   * An override may be recorded before any Officer role is bound. The production cutover (W15)
+   * records the owner-approved exceptions first and only then binds the legacy role with
+   * adopt_holders:false, whose repair pass would otherwise strip the role from every exception
+   * until its grant arrived. Without a bound role the override confers nothing yet: officer
+   * authority needs the bound role (Service.enrichActor), and reconciliation skips an unbound role.
+   */
   async officer(actor: Actor, user: string, grant: boolean, reason: string): Promise<unknown> {
     authorizeRoleManager(actor);
     reason = note(reason);
     const guild = await this.app.guild(actor);
-    if (!guild.officer_role_id)
-      throw new Failure("setup", "Run /setup or configure an Officer role first.");
-    await this.discord.validateRole(
-      guild.id,
-      guild.officer_role_id,
-      actor.userId,
-      grant && guild.access_policy_enabled,
-    );
+    // The bound role must still be one this manager and the bot may assign.
+    if (guild.officer_role_id)
+      await this.discord.validateRole(
+        guild.id,
+        guild.officer_role_id,
+        actor.userId,
+        grant && guild.access_policy_enabled,
+      );
     const member = await this.discord.member(guild.id, user);
     if (member?.bot || (grant && !member))
       throw new Failure("input", "Officer grants require a current human guild member.");
@@ -272,7 +290,11 @@ export class RoleAdministration {
         { reason },
       );
       await reconcileUser(client, guild.id, user);
-      return { status: grant ? "granted" : "revoked", effects: "queued" };
+      // "recorded": nothing to apply until /config roles officer binds a role (its pass applies it).
+      return {
+        status: grant ? "granted" : "revoked",
+        effects: guild.officer_role_id ? "queued" : "recorded",
+      };
     });
   }
 }

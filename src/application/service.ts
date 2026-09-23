@@ -24,7 +24,11 @@ import { authorize, authorizeRoleManager, type Actor } from "../domain/policy.js
 import { rankAccess } from "./rank-policy.js";
 import { accessFacts } from "./access-facts.js";
 import { Failure, gil, MAX_GIL, note, normalized } from "../domain/values.js";
-import { guestApplicationInput, type GuestApplicationInput } from "../domain/guest-application.js";
+import {
+  GUEST_APPLICATIONS_CLOSED,
+  guestApplicationInput,
+  type GuestApplicationInput,
+} from "../domain/guest-application.js";
 import {
   audit,
   ensureUser,
@@ -38,6 +42,7 @@ import type {
   Nodestone,
 } from "../infrastructure/nodestone/client.js";
 import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
+import { managedRoleOrder } from "../domain/role-layout.js";
 import type { ApplicationRecord, DiscordPort, GuildRecord } from "./records.js";
 
 /** Guild-scoped operations reused by slash commands, components, and operational workflows. */
@@ -316,6 +321,10 @@ export class Service {
     return {
       configuration: guild,
       effectsGloballyEnabled: this.config.ENABLE_EFFECTS,
+      // The raw row also carries role_layout_enabled; this states what the switch means.
+      roleLayout: guild.role_layout_enabled
+        ? "enabled"
+        : "disabled (role display and order are not changed by the bot)",
       capabilities,
       fc: guild.fc_id
         ? await this.db.orm
@@ -437,8 +446,19 @@ export class Service {
         },
       });
   }
-  /** Validate external resources first, then atomically revise config and queue cleanup/projection. */
-  async configure(actor: Actor, field: string, value: string | null): Promise<unknown> {
+  /**
+   * Validate external resources first, then atomically revise config and queue cleanup/projection.
+   * `adoptHolders` applies only when binding an Officer role (owner decision O1, 2026-09-23):
+   * true (the default, the long-standing behavior) grants every current human holder a manual
+   * officer override; false grants nobody, so officer authority comes only from the mapped
+   * in-game rank and explicit /officer grant. Either choice is recorded in the config audit.
+   */
+  async configure(
+    actor: Actor,
+    field: string,
+    value: string | null,
+    options: { adoptHolders?: boolean } = {},
+  ): Promise<unknown> {
     authorize(actor, actor.guildId, "officer");
     const fields = [
       "fc_id",
@@ -453,6 +473,10 @@ export class Service {
     const column = fields.find((candidate) => candidate === field);
     if (!column) throw new Failure("input", "Invalid configuration field.");
     if (field === "officer_role_id" || field === "leader_role_id") authorizeRoleManager(actor);
+    const bindsOfficer = field === "officer_role_id" && value !== null;
+    if (options.adoptHolders !== undefined && !bindsOfficer)
+      throw new Failure("input", "adopt_holders applies only when binding an Officer role.");
+    const adoptHolders = options.adoptHolders ?? true;
     if (field === "fc_id" && value === null)
       throw new Failure("input", "Use FC unlink with the currently linked ID.");
     const [existing] = await this.db.orm
@@ -483,14 +507,17 @@ export class Service {
         );
     } else if (field.endsWith("channel_id") && value)
       await this.discord.validateChannel(actor.guildId, value);
+    // With adopt_holders:false the holders are not even enumerated; nobody gains an override.
     const adopted =
-      field === "officer_role_id" && value && existing?.officer_role_id !== value
+      bindsOfficer && adoptHolders && value && existing?.officer_role_id !== value
         ? (await this.discord.members(actor.guildId)).filter(
             (member) => !member.bot && member.roles.includes(value),
           )
         : [];
     return this.db.transaction(async (client) => {
       const db = orm(client);
+      // A guild first created here takes the column defaults, so its role layout starts on,
+      // exactly like a guild first created by /setup.
       await db
         .insert(t.guilds)
         .values({ id: actor.guildId, effects_enabled: true })
@@ -557,8 +584,17 @@ export class Service {
           .onConflictDoNothing();
         await enqueue(client, "roster", `roster:${value}`, { fcId: value });
       }
-      await audit(client, actor.guildId, actor.userId, "config", field, { value });
-      if (field.endsWith("role_id")) await layoutGuildRoles(client, actor.guildId);
+      await audit(
+        client,
+        actor.guildId,
+        actor.userId,
+        "config",
+        field,
+        bindsOfficer ? { value, adoptHolders, adopted: adopted.length } : { value },
+      );
+      // Role bindings change the managed block, but presentation work follows the guild's switch.
+      if (field.endsWith("role_id") && saved.role_layout_enabled)
+        await layoutGuildRoles(client, actor.guildId);
       if (saved.access_policy_enabled) await secureGuildChannels(client, actor.guildId);
       for (const member of adopted) {
         await ensureUser(client, actor.guildId, member.id, member.joinedAt);
@@ -583,7 +619,18 @@ export class Service {
         .where(
           and(eq(t.jobs.guild_id, actor.guildId), inArray(t.jobs.status, ["blocked", "disabled"])),
         );
-      return { status: "saved", effects: "queued" };
+      if (!bindsOfficer) return { status: "saved", effects: "queued" };
+      return {
+        status: "saved",
+        effects: "queued",
+        officerHolders: adoptHolders
+          ? { adopt: true, adopted: adopted.length }
+          : {
+              adopt: false,
+              adopted: 0,
+              note: "Current holders were not granted officer access. Officers come from /config officer_rank and /officer grant; holders with neither can lose this role once effects apply.",
+            },
+      };
     });
   }
   /** Selecting an automatic authority source is reserved for actual server role managers. */
@@ -609,6 +656,55 @@ export class Service {
         officerRank: rank,
         mode: rank ? "rank_and_manual_overrides" : "manual_only",
         effects: "queued",
+      };
+    });
+  }
+  /**
+   * Managed-role presentation opt-in (decision 4, CFG-07): manager-only, audited and
+   * revision-fenced. Enabling first repeats the AUTH-03 hierarchy checks for every managed role and
+   * queues one layout pass; disabling queues nothing and never reverts earlier hoist or order (a
+   * queued pass completes as skipped, a running pass is fenced before its next write).
+   */
+  async configureRoleLayout(actor: Actor, enabled: boolean): Promise<unknown> {
+    authorizeRoleManager(actor);
+    // An active, configured guild only; this setting never creates a guild implicitly.
+    const guild = await this.guild(actor);
+    if (enabled)
+      for (const role of managedRoleOrder(guild))
+        await this.discord.validateRole(guild.id, role, actor.userId, guild.access_policy_enabled);
+    return this.db.transaction(async (client) => {
+      const db = orm(client);
+      const [saved] = await db
+        .select({ enabled: t.guilds.role_layout_enabled })
+        .from(t.guilds)
+        .where(and(eq(t.guilds.id, actor.guildId), eq(t.guilds.active, true)))
+        .for("update");
+      // The bot may have left the guild since the preflight read.
+      if (!saved)
+        throw new Failure(
+          "setup",
+          "This guild is unconfigured. An officer can begin with /config fc link.",
+        );
+      const roleLayout = enabled ? "enabled" : "disabled";
+      // A repeated choice is a no-op: no revision bump (which would fence other work) and no audit.
+      if (saved.enabled === enabled) return { status: "unchanged", roleLayout };
+      await db
+        .update(t.guilds)
+        .set({ role_layout_enabled: enabled, revision: sql`${t.guilds.revision}+1` })
+        .where(eq(t.guilds.id, actor.guildId));
+      await audit(client, actor.guildId, actor.userId, "config.role_layout", actor.guildId, {
+        enabled,
+        previous: saved.enabled,
+      });
+      const layoutJob = enabled ? await layoutGuildRoles(client, actor.guildId) : null;
+      return {
+        status: "saved",
+        roleLayout,
+        effects: enabled ? "queued" : "none",
+        layoutJob,
+        note: enabled
+          ? "FC Leader > Officer > Member > Guest will display separately in one consecutive block; see /sync status."
+          : "Current role display and order are left as they are; the bot will no longer change them.",
       };
     });
   }
@@ -1125,7 +1221,10 @@ export class Service {
       return { status: "saved", effects: "queued" };
     });
   }
-  /** Registration is derived from current trusted links; it never recreates a revoked durable grant. */
+  /**
+   * Registration is derived from current trusted links in every guild, with or without lobby
+   * onboarding (ROLE-07); it never recreates a revoked durable grant.
+   */
   async registrationGuestEligible(
     client: Connection,
     guild: GuildRecord,
@@ -1343,6 +1442,19 @@ export class Service {
       next: entries.length === 10 ? entries.at(-1)?.sequence.toString() : null,
     };
   }
+  /**
+   * Whether /apply may open its form in this guild: one primary-key read, fast enough for the
+   * router's pre-modal check. A guild with no active row, or with no review channel (imports start
+   * that way), is closed. It reveals nothing beyond that and grants nothing; apply() repeats the
+   * check at submission.
+   */
+  async guestApplicationsOpen(guildId: string): Promise<boolean> {
+    const [row] = await this.db.orm
+      .select({ channel: t.guilds.guest_application_channel_id })
+      .from(t.guilds)
+      .where(and(eq(t.guilds.id, guildId), eq(t.guilds.active, true)));
+    return Boolean(row?.channel);
+  }
   /** One pending application per join context; duplicate submissions reuse the persisted request. */
   async apply(actor: Actor, input: GuestApplicationInput): Promise<ApplicationRecord> {
     const submitted = guestApplicationInput.safeParse(input);
@@ -1352,7 +1464,12 @@ export class Service {
         "Reopen /apply and provide two answers of 10–300 valid text characters.",
       );
     const guild = await this.guild(actor);
-    if (!guild.guest_role_id || !guild.guest_application_channel_id)
+    // With no review channel, applications are closed (imports start closed; owner decision
+    // 2026-09-23). The visitor gets the same message as the pre-modal refusal. The channel is
+    // checked first, so an unconfigured server never shows the visitor officer setup text. A
+    // missing guest role with an open channel is an officer configuration task.
+    if (!guild.guest_application_channel_id) throw new Failure("setup", GUEST_APPLICATIONS_CLOSED);
+    if (!guild.guest_role_id)
       throw new Failure("setup", "Configure a guest role and application review channel first.");
     const reviewChannel = guild.guest_application_channel_id;
     await this.discord.validateRole(

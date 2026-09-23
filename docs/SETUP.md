@@ -12,11 +12,11 @@ The optional prefix defaults to `DevBot` in a configured test guild and to an em
 
 Configured IDs are preferred on reruns, so renaming an already configured role does not create duplicates. Otherwise setup looks for a unique match to either the requested prefixed name or the canonical **Member**, **Guest**, **Officer**, or **FC Leader** name, using case/Unicode/whitespace normalization. A prefix therefore does not hide existing unprefixed roles. A reused canonical role is renamed to the requested prefixed name while retaining its ID, permissions, and assignments. An explicitly configured custom name is preserved. Only a missing role is created; ambiguous matches require an explicit `/config roles` selection.
 
-Setup commits the selected role/channel IDs, first-observed channel snapshots, and queued membership/layout/access work together. Discord resource creation precedes that transaction; a retry reuses created resources. Existing lobby reparenting and permission enforcement begin only after snapshots are persisted. To correct a previous duplicate binding, select the original role with `/config roles` before rerunning `/setup`. A different FC still requires explicit unlinking first. After onboarding is enabled, role bindings require manager authority and all four must remain configured; select replacements rather than clearing them.
+Setup commits the selected role/channel IDs, first-observed channel snapshots, and queued membership, layout (while the role-layout switch is on), and access work together. Discord resource creation precedes that transaction; a retry reuses created resources. Existing lobby reparenting and permission enforcement begin only after snapshots are persisted. To correct a previous duplicate binding, select the original role with `/config roles` before rerunning `/setup`. A different FC still requires explicit unlinking first. After onboarding is enabled, role bindings require manager authority and all four must remain configured; select replacements rather than clearing them.
 
-FC ID and officer rank are optional. Omitting them preserves existing values; a fresh setup can provision roles before linking an FC. Existing human holders of an adopted Officer role receive audited manual grants. Imported guild activation remains a separate cutover step.
+FC ID and officer rank are optional. Omitting them preserves existing values; a fresh setup can provision roles before linking an FC. Existing human holders of an adopted Officer role receive audited manual grants. Imported guild activation remains a separate cutover step, and `/setup` is not run in the imported production guild at launch: it would enable onboarding, open `/apply`, and adopt every Officer-role holder (see [Officer authority](#officer-authority) for the non-adopting binding).
 
-Unset officer-notification and guest-review destinations default to the selected officer room. Existing explicit destinations are retained. Configure the ledger and any desired overrides afterward:
+Unset officer-notification and guest-review destinations default to the selected officer room, so `/setup` also opens guest applications in a guild where they were closed. Existing explicit destinations are retained. Configure the ledger and any desired overrides afterward:
 
 ```text
 /config ledger channel:#dev
@@ -56,13 +56,21 @@ Channel create/update/delete events coalesce `channels.access` work without enum
 
 `channel_access_policies.original_state` retains the first channel overwrites, type, name, and parent; `guilds.access_everyone_before` retains the original everyone permission bitfield. Setup and successful enforcement are audited. Take a database backup before first activation. For operator recovery, stop the writer and inspect those original snapshots and the setup audit's created-resource flags. They provide the evidence for a deliberate manual restore. Before restarting after a policy rollback, disable `access_policy_enabled`, increment `revision`, and audit that operator decision through the Drizzle maintenance boundary. Normal reconciliation deliberately restores the configured policy, so editing managed visibility alone is treated as drift.
 
-## Registered visitor access
+## Registered visitor access (all guilds)
 
-In onboarding-enabled guilds, an **active trusted ownership link** establishes registration. Accepted fresh FC evidence still determines Member status. A registered owner whose linked characters are not eligible for the linked FC receives Guest automatically; if no FC is linked, registration is sufficient locally. Imported trusted ownership and authorized assignment are trusted links as well as profile-token verification. A profile's FC hint never establishes membership.
+In every configured guild, whether or not onboarding is enabled, an **active trusted ownership link** establishes registration. Imported trusted ownership and authorized assignment are trusted links as well as profile-token verification; a pending `/claim` and a profile's FC hint never count. Access is the union over the user's links (ROLE-07):
 
-Automatic Guest is derived, not inserted as an irrevocable manual grant. Explicit Guest revocation suppresses it across restarts/rejoins, and removing the final active link removes this basis for access. Independent manual/approved/imported grants and former-member eligibility retain their existing rules. FC Member eligibility takes precedence even when Guest is revoked. Unknown/stale roster evidence cannot create a new automatic grant; an already-held Guest role can be preserved while accepted evidence is stale. `/guest status` reports `verifiedGuestEligible` separately, and `/apply` explains when existing eligibility should be repaired by reconciliation instead.
+- any character with confirmed membership in the linked FC gives **Member**;
+- any such character holding the configured in-game officer rank adds **Officer**, unless that link came from a bot-only officer's assignment;
+- a registered owner with no FC character gets **Guest**. With no FC linked, registration alone suffices.
+
+Onboarding only adds channel visibility on top of these roles; a guild without `/setup` receives no channel-visibility work.
+
+Automatic Guest is derived, not inserted as an irrevocable manual grant. Explicit Guest revocation suppresses it across restarts/rejoins, and removing the final active link removes this basis for access. Independent manual/approved/imported/grandfathered grants and former-member eligibility retain their existing rules. FC Member eligibility takes precedence even when Guest is revoked; restoring a revoked user with `/guest grant` creates a durable manual grant. Unknown/stale roster evidence cannot create a new automatic role; an already-held Guest role can be preserved while accepted evidence is stale. `/guest status` reports `verifiedGuestEligible` separately, and `/apply` explains when existing eligibility should be repaired by reconciliation instead.
 
 ## Unverified visitor applications
+
+Guest applications are **open only while a review channel is configured**. Imported guilds start closed: the importer records the legacy review channel but does not apply it, and first activation never opens applications. While closed, `/apply` answers "Guest applications are not open in this server. Ask an officer about Guest access." before its form opens, and a form opened earlier is refused the same way at submission. Visitors can still get Guest by verifying a character or through an officer's `/guest grant`. Open applications only deliberately, with `/config guest_applications channel:#officer-chat`; `/setup` also opens them when no review channel is set, because it adopts the officer room as the default. The owner has deferred the form's live acceptance until after launch.
 
 Visitors without an active trusted character link use `/apply` in the lobby. It opens a modal with two required answers, each 10–300 characters: **Introduce yourself** and **Why join this server?** The second prompt asks how they found the community or who invited them. Officers review these answers for spam before deciding; submitting or reopening the form grants no access.
 
@@ -76,11 +84,19 @@ Trusted verified/imported/assigned links continue through character/FC eligibili
 
 ## Member-list grouping and role hierarchy
 
-The four configured roles automatically enable **Display role members separately from online members** (`hoist`). They form **one consecutive block**, with highest-to-lowest priority **FC Leader → Officer → Member → Guest**, below the bot's highest role. New roles are created with separate display enabled; existing configured roles are updated by durable `roles.layout` work.
+While the guild's **role-layout switch** is on, the four configured roles automatically enable **Display role members separately from online members** (`hoist`). They form **one consecutive block**, with highest-to-lowest priority **FC Leader → Officer → Member → Guest**, below the bot's highest role. New roles are created with separate display enabled; existing configured roles are updated by durable `roles.layout` work.
 
-Layout checks run after setup, role binding changes, guild refresh, role events, and application startup. Only necessary writes are sent. The planner packs the block starting at the lowest configured role's effective position, preserving unrelated roles' relative order. It submits the complete final hierarchy because sparse position updates can leave roles interleaved. Discord.js resolves tied raw positions before planning; readback verifies the full result and adjacency, rather than checking priority alone. Partial configurations form a smaller consecutive block with the same relative priority.
+### Role layout switch
 
-Layout shares setup's guild lock, rechecks the current configuration and effect activation before writes, and verifies Discord's result afterward. `/sync status` reports pending or blocked work; refresh runs include layout in their child-job totals. Repair missing roles or hierarchy permissions and rerun `/setup` or `/refresh` to retry.
+`guilds.role_layout_enabled` decides whether TaruBot manages role presentation at all (CFG-07):
+
+- **Defaults.** Guilds created by the legacy import start **off**, so the production server keeps its existing role display and order. Every other guild starts **on**: guilds first created by `/setup` or `/config`, and guilds managed live before migration 005 (DevBot's). `/setup` never changes the switch.
+- **Off.** TaruBot changes no role's hoist flag or position. Startup, rejoin, role events, role configuration, setup, activation, and refresh queue no layout work; a queued or requeued `roles.layout` job completes as `skipped: layout disabled`. Roles that `/setup` creates keep Discord's default display. Role assignment is unaffected.
+- **Changing it.** `/config role_layout enabled:true|false` requires a server manager with Manage Server and Manage Roles. Enabling first repeats the hierarchy checks for every managed role, then queues one layout pass; disabling queues nothing and never reverts display or order already applied, and a pass already running stops before its next write. Each change is audited (`config.role_layout` with the previous value) and advances the configuration revision; repeating the current value changes nothing. `/config show` and `/config validate` report the switch, and the cutover preview's `roleLayout.ifEnabled` shows what enabling it would move.
+
+Layout checks run after setup, role binding changes, guild refresh, role events, and application startup, only while the switch is on. Only necessary writes are sent. The planner packs the block starting at the lowest configured role's effective position, preserving unrelated roles' relative order. It submits the complete final hierarchy because sparse position updates can leave roles interleaved. Discord.js resolves tied raw positions before planning; readback verifies the full result and adjacency, rather than checking priority alone. Partial configurations form a smaller consecutive block with the same relative priority.
+
+Layout shares setup's guild lock, rechecks the current configuration, the role-layout switch, and effect activation before writes, and verifies Discord's result afterward. `/sync status` reports pending or blocked work; refresh runs include layout in their child-job totals. Repair missing roles or hierarchy permissions and rerun `/setup` or `/refresh` to retry.
 
 Discord displays groups according to membership, presence, and channel visibility. Empty roles do not produce empty headings, and a member with multiple displayed roles belongs to the highest applicable group. Role grouping does not assign membership or change the rank eligibility rules below.
 
@@ -89,17 +105,20 @@ Discord displays groups according to membership, presence, and channel visibilit
 ```text
 /config officer_rank rank:Officer
 /config officer_rank clear:true
+/config roles officer role:@Officer adopt_holders:false
 /officer grant member:DISCORD_ID reason:EXPLANATION
 /officer revoke member:DISCORD_ID reason:EXPLANATION
 ```
 
 An Officer role grants **bot-only officer command access**. Server managers retain their existing access. Role provisioning, changes to the Officer/FC Leader role binding, changes to the officer rank mapping, and explicit officer grants/revocations require a server manager with Manage Roles. All four role bindings require that authority once channel onboarding is enabled; initial setup additionally checks Manage Channels. Changing the linked FC while officer rank automation is enabled also requires manager authority.
 
-When an in-game rank is configured, a trusted linked character with that normalized rank in accepted roster evidence qualifies its owner for the Officer role. Rank names are matched using consistent Unicode, case, and whitespace normalization; this uses the **FC rank**, not the character's Grand Company rank.
+When an in-game rank is configured, a trusted linked character with confirmed FC membership and that normalized rank in accepted roster evidence qualifies its owner for the Officer role; with several linked characters, any one suffices. Rank names are matched using consistent Unicode, case, and whitespace normalization; this uses the **FC rank**, not the character's Grand Company rank.
 
 Manual grants work independently of FC rank. A manual revocation suppresses automatic officer eligibility until an explicit grant restores it. Revocation is checked in application authorization immediately, even if Discord role removal is pending.
 
 Bot-only officers can assign ordinary trusted membership links, but such assignments do not confer automatic officer authority. A verified claim, trusted import, or assignment by a server manager with Manage Roles is required for that privilege. This prevents indirect delegation through `/assign`.
+
+Binding an Officer role with `/config roles officer role:@Officer` normally grants its current human holders audited manual officer grants. Add `adopt_holders:false` to bind it without adopting anyone, so officer authority comes only from the mapped in-game rank and explicit `/officer grant`; the option exists only on `/config roles officer`, and the choice is recorded in the `config` audit. `/officer grant` and `/officer revoke` also work before any Officer role is bound: the override is recorded (`effects: "recorded"`) and confers nothing until a role is bound. The production launch uses this order: map the rank first (`/config officer_rank rank:Officer`), grant the owner-approved exceptions, then bind the legacy role with `adopt_holders:false`. Binding queues an immediate repair pass, and grants recorded first keep exceptions from losing the role when it is bound. Holders with neither the rank nor a grant lose the Officer role once reconciliation runs.
 
 Officer command visibility is enforced at runtime because Discord's static default permission bitfield cannot represent a configurable role. Both the router and application operation enforce authorization. `/setup` and `/officer` retain static server-manager permission requirements.
 
@@ -109,7 +128,7 @@ FC leadership uses the validated unique Lodestone master-rank icon, independentl
 
 Rank names and leadership facts are stored with accepted roster members. Existing confirmed membership awaiting departure confirmation keeps its last positive rank evidence. Missing/unrecognized rank or leader evidence preserves an existing projection but cannot grant a new automatic role. An unknown master marker is treated as unknown leadership, and its compatibility contract must be updated if upstream changes the marker.
 
-Member and Guest eligibility use the established ownership, membership, application, grant, and revocation policies plus the opt-in registration rule above. Creating a role does not create character ownership. FC Leader grants staff channel visibility but still does not implicitly grant officer command authority.
+Member and Guest eligibility use the established ownership, membership, application, grant, and revocation policies plus the registration rule above. Creating a role does not create character ownership. FC Leader grants staff channel visibility but still does not implicitly grant officer command authority.
 
 ## Migration
 
@@ -117,4 +136,12 @@ The role/rank feature introduced `002_setup_and_ranks.sql`; **2.10.0 adds `003_g
 
 **2.12.0 adds `004_guest_application_form.sql`** for guest introduction/interest answers. Follow the same stopped-writer backup/migration procedure using matching images, then register the updated `/apply` definition. Existing applications, grants, decisions, channels, and visibility snapshots are preserved; only new submissions require form answers.
 
-Existing guilds migrate with `access_policy_enabled=false`. Their visibility and registered-visitor behavior are enabled only by a manager running `/setup`. Imported guild activation still requires its persisted effects flag and the process-wide `ENABLE_EFFECTS` flag. Original migrations remain immutable; Drizzle mappings and the startup checksum advance together.
+Existing guilds migrate with `access_policy_enabled=false`. Their channel visibility is enabled only by a manager running `/setup`. Imported guild activation still requires its persisted effects flag and the process-wide `ENABLE_EFFECTS` flag. Original migrations remain immutable; Drizzle mappings and the startup checksum advance together.
+
+**2.13.0 adds `005_launch_access_policy.sql`**:
+
+- The `guest_grants` provenance check also accepts `grandfathered`.
+- `guilds.guest_grandfather` (`pending`/`completed`) and `guest_grandfathered_at` form the once-only first-activation marker. Existing guilds that were never imported keep NULL and are never grandfathered; an imported guild that was never activated becomes `pending`.
+- `guilds.role_layout_enabled` defaults on. Guilds with a `migration.import` audit are backfilled off.
+
+The migration does not change any guild's revision. Registered-visitor Guest needs no schema change: it no longer depends on `access_policy_enabled`, so registered non-members in onboarding-off guilds receive Guest after the upgrade. Follow the same stopped-writer backup/migration procedure and register the updated commands (`/config role_layout` and the `adopt_holders` option).

@@ -71,15 +71,15 @@ test("Discord setup renames existing Member and Guest without creating roles or 
   );
   const validate = spyOn(gateway, "validateRole").mockResolvedValue();
   try {
-    expect(await gateway.ensureRole("100", "DevBot Member", "300", null, "Member")).toEqual({
+    expect(await gateway.ensureRole("100", "DevBot Member", "300", null, "Member", true)).toEqual({
       id: "201",
       created: false,
     });
-    expect(await gateway.ensureRole("100", "DevBot Guest", "300", null, "Guest")).toEqual({
+    expect(await gateway.ensureRole("100", "DevBot Guest", "300", null, "Guest", true)).toEqual({
       id: "202",
       created: false,
     });
-    expect(await gateway.ensureRole("100", "DevBot Member", "300", "201", "Member")).toEqual({
+    expect(await gateway.ensureRole("100", "DevBot Member", "300", "201", "Member", true)).toEqual({
       id: "201",
       created: false,
     });
@@ -96,14 +96,61 @@ test("Discord setup renames existing Member and Guest without creating roles or 
     expect(validate).toHaveBeenCalledWith("100", "201", "300");
     expect(validate).toHaveBeenCalledWith("100", "202", "300");
     validate.mockRejectedValueOnce(new Failure("blocked", "Unmanageable existing role"));
-    await expect(gateway.ensureRole("100", "Other Guest", "300", "202", "Guest")).rejects.toThrow(
-      "Unmanageable",
-    );
+    await expect(
+      gateway.ensureRole("100", "Other Guest", "300", "202", "Guest", true),
+    ).rejects.toThrow("Unmanageable");
     expect(patch).toHaveBeenCalledTimes(2);
   } finally {
     get.mockRestore();
     patch.mockRestore();
     post.mockRestore();
+    validate.mockRestore();
+    await gateway.client.destroy();
+  }
+});
+
+test("setup creates missing roles with the guild's role-layout display setting", async () => {
+  // Created roles follow the layout switch: hoisted only when the guild's layout is on.
+  const gateway = new DiscordGateway();
+  const roles = [{ id: "100", name: "@everyone", position: 0, permissions: "0", hoist: false }];
+  const get = spyOn(gateway.client.rest, "get").mockImplementation(async (route) => {
+    if (route === "/guilds/100")
+      return { id: "100", name: "Create fixture", roles: structuredClone(roles) };
+    if (route === "/guilds/100/roles") return structuredClone(roles);
+    throw new Error("Unexpected fixture read");
+  });
+  const bodies: unknown[] = [];
+  let serial = 500;
+  const post = spyOn(gateway.client.rest, "post").mockImplementation(async (route, options) => {
+    expect(route).toBe("/guilds/100/roles");
+    // The SDK sends permissions as a bit field that serializes later; only name/hoist matter here.
+    const input = z.object({ name: z.string(), hoist: z.boolean() }).parse(options?.body);
+    bodies.push(input);
+    return { id: String(++serial), position: 1, permissions: "0", ...input };
+  });
+  const patch = spyOn(gateway.client.rest, "patch").mockRejectedValue(
+    new Error("Unexpected role edit"),
+  );
+  const validate = spyOn(gateway, "validateRole").mockResolvedValue();
+  try {
+    expect(await gateway.ensureRole("100", "Imported Guest", "300", null, "Guest", false)).toEqual({
+      id: "501",
+      created: true,
+    });
+    expect(await gateway.ensureRole("100", "DevBot Member", "300", null, "Member", true)).toEqual({
+      id: "502",
+      created: true,
+    });
+    expect(bodies).toEqual([
+      { name: "Imported Guest", hoist: false },
+      { name: "DevBot Member", hoist: true },
+    ]);
+    expect(patch).not.toHaveBeenCalled();
+    expect(validate).toHaveBeenCalledWith("100", "501", "300");
+  } finally {
+    get.mockRestore();
+    post.mockRestore();
+    patch.mockRestore();
     validate.mockRestore();
     await gateway.client.destroy();
   }

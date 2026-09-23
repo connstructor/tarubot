@@ -75,30 +75,39 @@ export class GuildEvents {
         .update(t.guilds)
         .set({ active: true })
         .where(eq(t.guilds.id, guildId))
-        .returning({ id: t.guilds.id, access_policy_enabled: t.guilds.access_policy_enabled });
+        .returning({
+          id: t.guilds.id,
+          access_policy_enabled: t.guilds.access_policy_enabled,
+          role_layout_enabled: t.guilds.role_layout_enabled,
+        });
       if (configured.length) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
-        await layoutGuildRoles(client, guildId);
+        // Presentation work is queued only for guilds that opted in to the managed-role layout.
+        if (configured[0]?.role_layout_enabled) await layoutGuildRoles(client, guildId);
         if (configured[0]?.access_policy_enabled) await secureGuildChannels(client, guildId);
       }
     });
   }
 
-  /** Role changes can unblock hierarchy checks or require cleanup of managed-role drift. */
+  /**
+   * Role changes can unblock hierarchy checks or require cleanup of managed-role drift. One read of
+   * the guild's switches decides which guild-wide work follows: layout only when the managed-role
+   * layout is on (so a layout-disabled guild never reacts to role events with presentation work),
+   * channel access only when onboarding is on.
+   */
   async roleChanged(guildId: string): Promise<void> {
     await this.db.transaction(async (client) => {
-      const configured = await orm(client)
-        .select({ id: t.guilds.id })
+      const [configured] = await orm(client)
+        .select({
+          access: t.guilds.access_policy_enabled,
+          layout: t.guilds.role_layout_enabled,
+        })
         .from(t.guilds)
         .where(eq(t.guilds.id, guildId));
-      if (configured.length) {
+      if (configured) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
-        await layoutGuildRoles(client, guildId);
-        const secured = await orm(client)
-          .select({ id: t.guilds.id })
-          .from(t.guilds)
-          .where(and(eq(t.guilds.id, guildId), eq(t.guilds.access_policy_enabled, true)));
-        if (secured.length) await secureGuildChannels(client, guildId);
+        if (configured.layout) await layoutGuildRoles(client, guildId);
+        if (configured.access) await secureGuildChannels(client, guildId);
       }
     });
   }

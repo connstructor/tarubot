@@ -14,7 +14,7 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 
 The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
 
-For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) provisions a new PostgreSQL 18 **dev database**, a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for filling secrets, deploying from scratch, and updating with one active writer.
+For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) attaches the owner-provisioned **Managed PostgreSQL cluster** `tarubot-pg` (database/user `tarubot`) and defines a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. The app is created from a derived worker-free phase and the worker is added only at activation; a PostgreSQL writer lease keeps exactly one bot writer. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for provider prerequisites, deployment phases, and single-writer updates.
 
 Normal deployments pull **`ghcr.io/connstructor/tarubot:latest`** and **`ghcr.io/connstructor/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
@@ -119,15 +119,17 @@ docker compose logs -f tarubot
 
 The configured **DevBot** test session uses `docker-compose.devbot.yml` and its own `tarubot_dev` database. See [DEV_GUILD.md](docs/DEV_GUILD.md) for its exact launch commands and completed live checks.
 
-Use `/config fc link`, `/config roles member`, `/config roles guest`, and the three notification-channel configuration commands. `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles.
+Use `/config fc link`, `/config roles member`, `/config roles guest`, and the three notification-channel configuration commands. `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles. `/config role_layout enabled:true|false` (server managers with Manage Roles) turns automatic managed-role display and ordering on or off for the guild; it is on by default and off for imported guilds. `/config roles officer` accepts `adopt_holders:false` to bind an Officer role without granting its current holders officer access.
 
-`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and a separate `#officer-chat`. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary managed channels, and Officers/FC Leaders see managed staff areas and the lobby. Existing private managed areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. The community-updates channel and its parent retain their existing policy. An optional in-game officer rank enables automatic bot-only Officer access. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
+`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and a separate `#officer-chat`. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary managed channels, and Officers/FC Leaders see managed staff areas and the lobby. Existing private managed areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. The community-updates channel and its parent retain their existing policy. An optional in-game officer rank enables automatic bot-only Officer access. `/setup` also opens guest applications when no review channel is set and adopts current Officer-role holders, so it is not run in the imported production guild at launch. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
 
 Every development startup posts the current responsibility-separated session plan to `#chat`. Update `test-plans/current.json` for the next session; see [TEST_PLANS.md](docs/TEST_PLANS.md).
 
-For the supplied legacy data, follow the [migration runbook](docs/MIGRATION.md) before enabling effects. An imported guild has its own persisted activation flag as well as the process-wide `ENABLE_EFFECTS` setting.
+For the supplied legacy data, follow the [migration runbook](docs/MIGRATION.md) before enabling effects. An imported guild has its own persisted activation flag as well as the process-wide `ENABLE_EFFECTS` setting, and starts with guest applications closed, the role layout off, and one first-activation grandfathering run owed.
 
-To run the compiled bot or one-shot tools locally, publish loopback-only dependency ports explicitly:
+**Production maintenance tools** never use this checkout's `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file=PRODUCTION_ENV dist/scripts/TOOL.js`, with a production env file copied from [`production.env.example`](production.env.example) and an isolated Nodestone sidecar on `127.0.0.1:18080`. A deployment guard checks the application, test scope, guilds, and databases against one profile (production, rehearsal, or DevBot) before any I/O; see [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) and [MIGRATION.md](docs/MIGRATION.md) E0.
+
+To run the compiled bot or one-shot tools locally (development only), publish loopback-only dependency ports explicitly:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --wait postgres nodestone
@@ -144,8 +146,8 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 - `/characters`, `/main`, and `/nickname` manage local identity preferences. Existing-link operations use stored IDs and work during Lodestone outages.
 - Imported users select `/main character:ID` and `/nickname enabled:true` explicitly to opt in to nicknames.
 - `/refresh` returns an inspectable run ID; `/sync status` reports durable work. Officer-only `force:true` bypasses freshness while retaining rate limits and locks.
-- `/apply` opens a short guest application form for visitors without a verified character: introduce yourself and explain why you want to join (10–300 characters each). Answers go to the configured officer review room; submission grants no access. Officers use persistent Approve/Deny buttons or `/guest approve` and `/guest deny`. `/guest status` reports progress, and `/guest grant` and `/guest revoke` record explicit access decisions.
-- In onboarding-enabled guilds, trusted linked characters qualify their owners for Guest when current evidence excludes FC membership, or when no FC is linked. Confirmed FC members receive Member instead. Explicit Guest revocation remains authoritative; `/guest status` reports derived eligibility separately from durable grants.
+- `/apply` opens a short guest application form for visitors without a verified character when the guild has a review channel: introduce yourself and explain why you want to join (10–300 characters each). Answers go to the configured officer review room; submission grants no access. Officers use persistent Approve/Deny buttons or `/guest approve` and `/guest deny`. Without a review channel (imported guilds start that way), `/apply` explains that applications are not open before any form appears. `/guest status` reports progress and grant provenance, and `/guest grant` and `/guest revoke` record explicit access decisions.
+- In every guild, with or without onboarding, trusted linked characters qualify their owners for Guest when current evidence excludes FC membership for all of them, or when no FC is linked. Any confirmed FC character gives Member instead, and any FC character with the configured officer rank adds Officer. Explicit Guest revocation remains authoritative; `/guest status` reports derived eligibility separately from durable grants.
 - `/ledger deposit`, `/ledger withdraw`, `/ledger initialize`, and `/ledger adjust` require notes. `/ledger balance` and `/ledger history` expose immutable entries and notification delivery state.
 - A confirmed departure requires two complete accepted observations at least 60 seconds apart. Former-member guest eligibility is scoped to the currently linked FC. Explicit revocation overrides guest eligibility; FC membership takes precedence.
 
@@ -160,13 +162,18 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 | `bun run import:legacy --file FILE --dry-run` | Read-only SQL validation and mapping report |
 | `bun run import:legacy --file FILE --snapshot FILE` | Atomically publish a validated legacy import |
 | `bun run roster:acquire GUILD_ID` | Acquire/publish a complete roster during a maintenance window |
-| `bun run preview GUILD_ID` | Read-only role/nickname reconciliation preview |
-| `bun run activate GUILD_ID` | Validate resources and enable an imported guild's effects |
+| `bun run preview GUILD_ID [--output PLAN.json]` | Read-only role/nickname preview plus the grandfathering plan and checksum, pending departures, and the guest-application, onboarding, and role-layout state (with what enabling the layout would change) |
+| `bun run preview GUILD_ID --late-joiners` | Database-only list of humans who joined after first activation's enumeration and hold no grant or link |
+| `bun run activate GUILD_ID --grandfather-plan SHA [--grandfather-plan-file PLAN.json] [--guest-applications closed\|open] [--requeue]` | Validate resources, grandfather an imported guild once from the confirmed plan, and enable its effects; a rerun on a live guild changes nothing without `--requeue` |
 | `bun run jobs:retry GUILD_ID JOB_ID` | Retry delivery independently of a committed decision |
+| `bun run commands:list [--guild ID ...] [--declared-scope global\|ID]` | Read back every command scope; exits 0 only when the declared scope matches and every other scope is empty |
+| `bun run commands:clear-guild GUILD_ID --application APP_ID [--confirm FINGERPRINT]` | Dry-run, then fingerprint-confirmed removal of one guild scope's leftover commands |
+| `bun run app:spec PHASE INPUT OUTPUT` | Derive the `foundation`, `maintenance`, or `full` App Platform spec |
+| `bun dist/scripts/discord-inspect.js` | Read-only REST preflight: DevBot mode, or (production/rehearsal profile) intents, guilds, permissions, managed-role hierarchy, and channel access with `--guild ID --dump FILE`, plus repeatable `--role ID` for roles the dump does not name (the Officer role) |
 
-One-shot commands execute compiled scripts; run `bun run build` after source changes. The equivalent container commands use `bun dist/scripts/NAME.js`.
+One-shot commands execute compiled scripts; run `bun run build` after source changes. The equivalent container commands use `bun dist/scripts/NAME.js`. The `bun run` forms are for development: production and rehearsal tools run the compiled files directly with `bun --env-file` (see above).
 
-Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, and Discord connectivity. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations. The sidecar exposes `/health` on port 8080.
+Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, the database writer lease, and Discord connectivity; a second bot process against the same database stays unready until the first releases the lease. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations. The sidecar exposes `/health` on port 8080.
 
 The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs, and outbox deliveries remain in PostgreSQL across restarts. [Recovery and backup procedures](docs/OPERATIONS.md) explain inspection, retries, and restoration.
 

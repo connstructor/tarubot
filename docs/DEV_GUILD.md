@@ -127,6 +127,15 @@ At that point onboarding was still opted out. The separate room's creation and p
 - Unverified visitor `1010097911566180445` submitted application `f6198657-4f4b-4477-b9c8-c98ba09fa9ed` with bounded answers. Nothing was granted before the decision, and a repeated submission returned the same application. Review message `1552306613384118474` was posted in officer-chat. The owner approved it: the grant, audit, updated review, approval DM, and DevBot Guest role were all delivered.
 - Follow-up: expected role-layout lock waits and a gateway-echo generation change were logged at error level, and the final no-op reconciliation replaced the applied Guest delta in its job result. See [OPEN_ITEMS.md](OPEN_ITEMS.md).
 
+### 2.12.3 rollout and launch-scope session (in progress) — 2026-09-23
+
+- Published 2.12.3 bot/sidecar images (revision `341c6ed610ed12b8d787f468644d2fb0d2edbf42`, the PR #10 merge) replaced 2.12.1 at 15:51 UTC with no migration. The stopped-writer backup `.cache/backups/tarubot_dev-before-2.12.3-341c6ed.dump` restored exactly (every row, sequence, trigger and constraint). Guild commands matched the image before and after re-registration (19 roots / 40 paths).
+- Startup logged no warn or error lines (2.12.1 logged six error-level `busy` waits for the same startup). All 12 startup jobs succeeded; the role-layout job was superseded once by its own echo and recorded the wait at debug. The launch-scope plan was posted as message `1552346750315143329`.
+- `/config validate`: all nine role/channel capabilities available, effects on globally and for the guild.
+- Ledger: `/ledger initialize` (10,000,000), deposit +10,000 and withdraw −5,000 recorded sequences 1–3 with exact balances (10,005,000 final); `/ledger history` listed them newest first, and all three ledger notifications posted (delivery jobs succeeded).
+- `/assign` with a typed name in `member` failed with a raw `SyntaxError` (operation `1552351740568015000`): the ID schema's range refinement ran after its regex failed (Zod 4) and called `BigInt()` on the name. 2.13.0 guards the refinement and adds regression tests; until it is deployed, use the numeric user ID or a real mention.
+- The owner reviewed the replies (all raw JSON) and approved the embed mockups for 2.14.0; the remaining session steps are `/ledger adjust`, non-officer denials, `/assign`/`/unassign` with a numeric ID, role removals and drift repair, and `/guest revoke`/`/guest grant`.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing.

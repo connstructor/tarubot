@@ -24,20 +24,38 @@ export function orm(connection: Connection): Orm {
   }
   return instance;
 }
-export const SCHEMA_VERSION = "004_guest_application_form.sql";
+/** The newest migration this build requires; startup and tools refuse any other applied head. */
+export const SCHEMA_VERSION = "005_launch_access_policy.sql";
+/** Numbered migration filenames, as stored in schema_migrations.version. */
+export const MIGRATION_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
 /** The pool is application-owned; remote Discord/Lodestone work stays outside transactions. */
+/** Per-session settings every pooled connection starts with; tests that set their own URL options restate them. */
+export const SESSION_OPTIONS =
+  "-c timezone=UTC -c statement_timeout=15000 -c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=3";
+
 export class Database {
   readonly pool: pg.Pool;
   readonly orm: Orm;
   healthy = false;
-  /** Bound connection/query waits and normalize all database-generated instants to UTC. */
-  constructor(url: string) {
+  /**
+   * Bound connection/query waits and normalize all database-generated instants to UTC.
+   * `ca` defaults to DATABASE_CA_CERT; a second connection (for example check-restore against a
+   * PITR fork) can supply its own provider CA, and "" forces a connection without a provider CA.
+   */
+  constructor(url: string, ca: string | undefined = process.env.DATABASE_CA_CERT) {
     this.pool = new pg.Pool({
-      ...postgresConnection(url, process.env.DATABASE_CA_CERT),
+      ...postgresConnection(url, ca),
       max: 12,
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000,
-      options: "-c timezone=UTC -c statement_timeout=15000",
+      // Client TCP keepalive lets the bot notice a database peer that vanished without FIN/RST;
+      // the lifecycle's periodic lease check is the guarantee on this side.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
+      // Server-side keepalive (30 s idle, 3 probes 10 s apart) lets PostgreSQL end a session whose
+      // client vanished after a host loss or partition, releasing its writer lease in about a
+      // minute instead of after the OS default of roughly two hours.
+      options: SESSION_OPTIONS,
     });
     this.orm = orm(this.pool);
     this.pool.on("error", () => {
@@ -76,16 +94,23 @@ export class Database {
       client.release();
     }
   }
-  /** A matching filename and checksum are required before startup accepts work. */
-  async schema(): Promise<void> {
+  /**
+   * A matching filename and checksum are required before startup accepts work. `version` is this
+   * build's SCHEMA_VERSION except for check-restore --schema-version, which verifies two databases
+   * still at an earlier migration of this build (a pre-migration restore rehearsal).
+   */
+  async schema(version: string = SCHEMA_VERSION): Promise<void> {
+    // The name becomes a path under migrations/, so only a plain migration filename is accepted.
+    if (!MIGRATION_FILE.test(version))
+      throw new Failure("input", "A schema version is a migration filename such as 004_name.sql.");
     try {
       const rows = await this.query<{ version: string; checksum: string }>(
         "SELECT version,checksum FROM schema_migrations ORDER BY version DESC LIMIT 1",
       );
       const expected = createHash("sha256")
-        .update(await Bun.file(`migrations/${SCHEMA_VERSION}`).text())
+        .update(await Bun.file(`migrations/${version}`).text())
         .digest("hex");
-      if (rows[0]?.version !== SCHEMA_VERSION || rows[0].checksum !== expected)
+      if (rows[0]?.version !== version || rows[0].checksum !== expected)
         throw new Failure(
           "schema",
           "Schema version/checksum mismatch. Use matching versioned migrations and application image.",

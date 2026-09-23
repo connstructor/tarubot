@@ -2,6 +2,7 @@
 import { expect, test } from "bun:test";
 import pg from "pg";
 import { postgresConnection } from "../../src/infrastructure/postgres/connection.js";
+import { Database } from "../../src/infrastructure/postgres/database.js";
 
 test("provider CA survives native URL parsing and preserves credentials and ordinary parameters", () => {
   const url =
@@ -46,4 +47,38 @@ test("local connections retain their original driver options and malformed TLS U
   expect(() => postgresConnection("invalid-with-sensitive-fixture", "provider-ca-fixture")).toThrow(
     "DATABASE_URL must be a PostgreSQL URL",
   );
+});
+
+test("Database takes an explicit provider CA and otherwise falls back to DATABASE_CA_CERT", async () => {
+  // check-restore gives a PITR fork its own CA; constructing a pool never opens a connection.
+  const managed =
+    "postgresql://tarubot:fixture@tarubot-pg-do-user-1-0.m.db.ondigitalocean.com:25060/tarubot?sslmode=require";
+  const explicit = new Database(managed, "restore-ca-fixture");
+  const previous = process.env.DATABASE_CA_CERT;
+  let fallback: Database;
+  try {
+    // Omitting the argument reads the environment at construction time, like the bot and tools.
+    process.env.DATABASE_CA_CERT = "environment-ca-fixture";
+    fallback = new Database(managed);
+  } finally {
+    if (previous === undefined) delete process.env.DATABASE_CA_CERT;
+    else process.env.DATABASE_CA_CERT = previous;
+  }
+  try {
+    expect<unknown>(explicit.pool.options.ssl).toEqual({
+      ca: "restore-ca-fixture",
+      rejectUnauthorized: true,
+    });
+    // The URL sslmode is removed so node-postgres cannot replace the verified provider CA.
+    expect(explicit.pool.options.connectionString).toBe(
+      "postgresql://tarubot:fixture@tarubot-pg-do-user-1-0.m.db.ondigitalocean.com:25060/tarubot",
+    );
+    expect<unknown>(fallback.pool.options.ssl).toEqual({
+      ca: "environment-ca-fixture",
+      rejectUnauthorized: true,
+    });
+  } finally {
+    await explicit.close();
+    await fallback.close();
+  }
 });

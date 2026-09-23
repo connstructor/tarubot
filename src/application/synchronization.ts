@@ -466,16 +466,17 @@ export class Synchronization {
           )
           .onConflictDoNothing();
       };
-      const layout = await layoutGuildRoles(client, guildId);
-      await attach(layout);
-      const secured = await db
-        .select({ id: t.guilds.id })
+      // One read of the guild's switches decides which guild-wide child work this run attaches:
+      // role layout only when presentation is on, channel access only when onboarding is on.
+      const [switches] = await db
+        .select({
+          access: t.guilds.access_policy_enabled,
+          layout: t.guilds.role_layout_enabled,
+        })
         .from(t.guilds)
-        .where(and(eq(t.guilds.id, guildId), eq(t.guilds.access_policy_enabled, true)));
-      if (secured.length) {
-        const access = await secureGuildChannels(client, guildId);
-        await attach(access);
-      }
+        .where(eq(t.guilds.id, guildId));
+      if (switches?.layout) await attach(await layoutGuildRoles(client, guildId));
+      if (switches?.access) await attach(await secureGuildChannels(client, guildId));
       for (const member of members) {
         if (member.bot) continue;
         await ensureUser(client, guildId, member.id, member.joinedAt);

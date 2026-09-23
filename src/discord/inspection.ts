@@ -1,0 +1,367 @@
+/**
+ * Pure helpers for read-only Discord inspection and command-scope maintenance. They work on raw
+ * REST payloads (not discord.js caches), so the production inspection and `commands.js` can run
+ * over plain GET requests while the legacy bot still owns the gateway. Nothing here performs I/O.
+ */
+import { PermissionFlagsBits, PermissionsBitField } from "discord.js";
+import { rolePositionChanges } from "../domain/role-layout.js";
+import { Failure } from "../domain/values.js";
+
+/** The structural subset of a command option that decides its invocable paths. */
+export interface CommandOption {
+  type: number;
+  name: string;
+  options?: readonly CommandOption[] | undefined;
+}
+
+/**
+ * Flatten a command into its invocable paths ("config roles member"). Subcommands (1) and
+ * subcommand groups (2) nest; ordinary argument options end the path. Paths, not Discord-generated
+ * IDs or omitted defaults, are what registration readback compares.
+ */
+export function commandPaths(name: string, options: readonly CommandOption[] = []): string[] {
+  const children = options.filter((entry) => entry.type === 1 || entry.type === 2);
+  return children.length
+    ? children.flatMap((entry) => commandPaths(`${name} ${entry.name}`, entry.options))
+    : [name];
+}
+
+/** Paths present on only one side, each sorted, for declared-versus-registered comparisons. */
+export function inventoryDiff(
+  expected: readonly string[],
+  actual: readonly string[],
+): { missing: string[]; unexpected: string[] } {
+  const want = new Set(expected);
+  const have = new Set(actual);
+  return {
+    missing: [...want].filter((path) => !have.has(path)).sort(),
+    unexpected: [...have].filter((path) => !want.has(path)).sort(),
+  };
+}
+
+/** ApplicationFlags.GatewayGuildMembers: the verified-app Server Members intent. */
+export const GATEWAY_GUILD_MEMBERS = 1 << 14;
+/** ApplicationFlags.GatewayGuildMembersLimited: the unverified-app (under 100 guilds) grant. */
+export const GATEWAY_GUILD_MEMBERS_LIMITED = 1 << 15;
+
+/** Decode the application's Server Members intent from its public flags. */
+export function memberIntent(flags: number | undefined): "enabled" | "limited" | "disabled" {
+  const value = flags ?? 0;
+  if (value & GATEWAY_GUILD_MEMBERS) return "enabled";
+  if (value & GATEWAY_GUILD_MEMBERS_LIMITED) return "limited";
+  return "disabled";
+}
+
+/** A guild role as GET /guilds/{id}/roles returns it (the fields inspection uses). */
+export interface ApiRole {
+  id: string;
+  name: string;
+  position: number;
+  permissions: string;
+  hoist: boolean;
+  managed: boolean;
+}
+
+/** A channel permission overwrite: type 0 targets a role, type 1 a member. */
+export interface ApiOverwrite {
+  id: string;
+  type: number;
+  allow: string;
+  deny: string;
+}
+
+/** A guild channel as GET /guilds/{id}/channels returns it. */
+export interface ApiChannel {
+  id: string;
+  name?: string | undefined;
+  type: number;
+  permission_overwrites?: readonly ApiOverwrite[] | undefined;
+}
+
+/**
+ * Lowest role first, in the order Discord displays. Equal raw positions (common for new roles) are
+ * resolved like discord.js's RoleManager.comparePositions: the higher ID sits lower. The live
+ * gateway sorts through the SDK; this is the same order for raw payloads.
+ */
+export function ascendingRoles<T extends { id: string; position: number }>(
+  roles: readonly T[],
+): T[] {
+  return [...roles].sort((left, right) => {
+    if (left.position !== right.position) return left.position - right.position;
+    const leftId = BigInt(left.id);
+    const rightId = BigInt(right.id);
+    return leftId === rightId ? 0 : leftId > rightId ? -1 : 1;
+  });
+}
+
+/** `ignoreAdministrator` previews the bot with Administrator removed (the OPS-12 target). */
+export interface PermissionOptions {
+  ignoreAdministrator?: boolean;
+}
+
+const ADMINISTRATOR = PermissionFlagsBits.Administrator;
+
+/**
+ * Guild-level permissions of a member: @everyone (the role whose ID is the guild ID) plus every
+ * role the member holds. Administrator implies every permission unless it is being ignored, in
+ * which case the bit itself is dropped too, so the result is what remains without it.
+ */
+export function guildPermissions(
+  guildId: string,
+  roles: readonly ApiRole[],
+  memberRoles: readonly string[],
+  options: PermissionOptions = {},
+): bigint {
+  const held = new Set([guildId, ...memberRoles]);
+  let bits = roles
+    .filter((role) => held.has(role.id))
+    .reduce((total, role) => total | BigInt(role.permissions), 0n);
+  if (options.ignoreAdministrator) bits &= ~ADMINISTRATOR;
+  else if (bits & ADMINISTRATOR) return PermissionsBitField.All;
+  return bits;
+}
+
+/**
+ * Discord's channel overwrite algorithm for one member: start from guild permissions, apply the
+ * @everyone overwrite, then the union of the member's role overwrites (denies before allows), then
+ * the member's own overwrite. Administrator bypasses overwrites unless it is being ignored.
+ */
+export function channelPermissions(
+  guildId: string,
+  base: bigint,
+  overwrites: readonly ApiOverwrite[],
+  member: { id: string; roles: readonly string[] },
+  options: PermissionOptions = {},
+): bigint {
+  let bits = base;
+  if (options.ignoreAdministrator) bits &= ~ADMINISTRATOR;
+  else if (bits & ADMINISTRATOR) return PermissionsBitField.All;
+  const everyone = overwrites.find((entry) => entry.id === guildId);
+  if (everyone) bits = (bits & ~BigInt(everyone.deny)) | BigInt(everyone.allow);
+  const roles = overwrites.filter(
+    (entry) => entry.type === 0 && entry.id !== guildId && member.roles.includes(entry.id),
+  );
+  const roleDeny = roles.reduce((total, entry) => total | BigInt(entry.deny), 0n);
+  const roleAllow = roles.reduce((total, entry) => total | BigInt(entry.allow), 0n);
+  bits = (bits & ~roleDeny) | roleAllow;
+  const own = overwrites.find((entry) => entry.type === 1 && entry.id === member.id);
+  if (own) bits = (bits & ~BigInt(own.deny)) | BigInt(own.allow);
+  return bits;
+}
+
+/**
+ * The README's bot permissions for a launch without onboarding. Manage Channels is omitted: it is
+ * needed only when lobby onboarding is enabled, which the production launch leaves off.
+ */
+export const requiredBotPermissions = {
+  ManageRoles: PermissionFlagsBits.ManageRoles,
+  ManageNicknames: PermissionFlagsBits.ManageNicknames,
+  ViewChannel: PermissionFlagsBits.ViewChannel,
+  SendMessages: PermissionFlagsBits.SendMessages,
+  EmbedLinks: PermissionFlagsBits.EmbedLinks,
+  AttachFiles: PermissionFlagsBits.AttachFiles,
+  ReadMessageHistory: PermissionFlagsBits.ReadMessageHistory,
+} as const;
+
+/** The channel permissions DiscordGateway.validateChannel requires of a configured destination. */
+export const destinationPermissions = {
+  ViewChannel: PermissionFlagsBits.ViewChannel,
+  SendMessages: PermissionFlagsBits.SendMessages,
+  EmbedLinks: PermissionFlagsBits.EmbedLinks,
+  ReadMessageHistory: PermissionFlagsBits.ReadMessageHistory,
+} as const;
+
+/** Names of required permissions the bits lack, in declaration order. */
+export function missingPermissions(bits: bigint, required: Readonly<Record<string, bigint>>) {
+  return Object.entries(required)
+    .filter(([, bit]) => (bits & bit) !== bit)
+    .map(([name]) => name);
+}
+
+/** Human-readable permission names for a bitfield. */
+export const permissionNames = (bits: bigint): string[] => new PermissionsBitField(bits).toArray();
+
+/** Access roles must not carry these (DiscordGateway.validateRole refuses them). */
+const BLOCKING = {
+  Administrator: PermissionFlagsBits.Administrator,
+  ManageGuild: PermissionFlagsBits.ManageGuild,
+  ManageRoles: PermissionFlagsBits.ManageRoles,
+} as const;
+
+/** A managed role to inspect: its configuration field (member, guest, ...) and ID. */
+export interface ManagedRoleTarget {
+  field: string;
+  id: string;
+}
+
+/** What the inspection reports for one managed role. `position` is its ascending display index. */
+export interface ManagedRoleEntry {
+  field: string;
+  id: string;
+  name: string | null;
+  exists: boolean;
+  position: number | null;
+  hoist: boolean | null;
+  belowBot: boolean;
+  blockingPermissions: string[];
+}
+
+/**
+ * Hierarchy report for the managed roles (highest first). `belowBot` is what role assignment needs
+ * (the bot's highest role above the managed role). `layout` describes the presentation a role-layout
+ * pass would impose; `wouldChange` is informational only, since the production launch keeps the
+ * layout switch off, and is null when a missing or duplicated role blocks the plan.
+ */
+export function managedRoleReport(
+  guildId: string,
+  roles: readonly ApiRole[],
+  botRoles: readonly string[],
+  managed: readonly ManagedRoleTarget[],
+): {
+  botHighest: { id: string; name: string; position: number } | null;
+  roles: ManagedRoleEntry[];
+  layout: {
+    hoisted: boolean;
+    consecutive: boolean;
+    wouldChange: boolean | null;
+    blocked: string | null;
+  };
+} {
+  const ascending = ascendingRoles(roles);
+  const index = new Map(ascending.map((role, position) => [role.id, position]));
+  const held = new Set([guildId, ...botRoles]);
+  const top = ascending.reduce<number>(
+    (highest, role, position) => (held.has(role.id) ? position : highest),
+    -1,
+  );
+  const highest = top >= 0 ? ascending[top] : undefined;
+  const entries = managed.map(({ field, id }): ManagedRoleEntry => {
+    const role = ascending.find((candidate) => candidate.id === id);
+    const position = index.get(id);
+    return {
+      field,
+      id,
+      name: role?.name ?? null,
+      exists: role !== undefined,
+      position: position ?? null,
+      hoist: role?.hoist ?? null,
+      belowBot: position !== undefined && position < top,
+      blockingPermissions: role
+        ? Object.entries(BLOCKING)
+            .filter(([, bit]) => (BigInt(role.permissions) & bit) === bit)
+            .map(([name]) => name)
+        : [],
+    };
+  });
+  const present = entries.filter((entry) => entry.exists);
+  const positions = present.map((entry) => entry.position ?? 0).sort((a, b) => a - b);
+  const consecutive = positions.every(
+    (position, offset) => offset === 0 || position === (positions[offset - 1] ?? 0) + 1,
+  );
+  const hoisted = present.every((entry) => entry.hoist === true);
+  let wouldChange: boolean | null = null;
+  let blocked: string | null = null;
+  try {
+    // The real layout pass plans with the same function, so a blocked plan matches its diagnostic.
+    const moves = rolePositionChanges(
+      ascending.map((role) => role.id),
+      managed.map((entry) => entry.id),
+    );
+    wouldChange = moves.length > 0 || !hoisted;
+  } catch (error) {
+    if (!(error instanceof Failure)) throw error;
+    blocked = error.message;
+  }
+  return {
+    botHighest: highest ? { id: highest.id, name: highest.name, position: top } : null,
+    roles: entries,
+    layout: { hoisted, consecutive, wouldChange, blocked },
+  };
+}
+
+/** A configured destination channel to inspect; `imported` is false for settings not applied. */
+export interface ChannelTarget {
+  field: string;
+  id: string;
+  imported: boolean | null;
+}
+
+/** Destination access with and without Administrator, as the bot would use the channel. */
+export interface ChannelEntry {
+  field: string;
+  id: string;
+  name: string | null;
+  exists: boolean;
+  type: number | null;
+  imported: boolean | null;
+  bot: Access;
+  withoutAdministrator: Access;
+}
+
+/** The channel permissions a destination depends on, as booleans. */
+interface Access {
+  view: boolean;
+  send: boolean;
+  embed: boolean;
+  attach: boolean;
+  history: boolean;
+}
+
+/** Summarize one channel bitfield into the access flags the report shows. */
+function access(bits: bigint): Access {
+  const has = (bit: bigint) => (bits & bit) === bit;
+  return {
+    view: has(PermissionFlagsBits.ViewChannel),
+    send: has(PermissionFlagsBits.SendMessages),
+    embed: has(PermissionFlagsBits.EmbedLinks),
+    attach: has(PermissionFlagsBits.AttachFiles),
+    history: has(PermissionFlagsBits.ReadMessageHistory),
+  };
+}
+
+/**
+ * The target-guild section of the production inspection: guild permissions (and what is missing
+ * with Administrator removed), the managed-role hierarchy, and destination-channel access.
+ */
+export function targetReport(input: {
+  guildId: string;
+  roles: readonly ApiRole[];
+  channels: readonly ApiChannel[];
+  bot: { id: string; roles: readonly string[] };
+  managedRoles: readonly ManagedRoleTarget[];
+  channelTargets: readonly ChannelTarget[];
+}) {
+  const { guildId, roles, bot } = input;
+  const withAdmin = guildPermissions(guildId, roles, bot.roles);
+  const raw = guildPermissions(guildId, roles, bot.roles, { ignoreAdministrator: true });
+  const hierarchy = managedRoleReport(guildId, roles, bot.roles, input.managedRoles);
+  const channels = input.channelTargets.map(({ field, id, imported }): ChannelEntry => {
+    const channel = input.channels.find((candidate) => candidate.id === id);
+    const overwrites = channel?.permission_overwrites ?? [];
+    return {
+      field,
+      id,
+      name: channel?.name ?? null,
+      exists: channel !== undefined,
+      type: channel?.type ?? null,
+      imported,
+      bot: access(channel ? channelPermissions(guildId, withAdmin, overwrites, bot) : 0n),
+      withoutAdministrator: access(
+        channel
+          ? channelPermissions(guildId, raw, overwrites, bot, { ignoreAdministrator: true })
+          : 0n,
+      ),
+    };
+  });
+  return {
+    // The bot's own grants, without the Administrator expansion, so the listing stays readable.
+    permissions: permissionNames(raw | (withAdmin & ADMINISTRATOR)),
+    administrator: (withAdmin & ADMINISTRATOR) === ADMINISTRATOR,
+    missingRequired: missingPermissions(withAdmin, requiredBotPermissions),
+    withoutAdministrator: { missingRequired: missingPermissions(raw, requiredBotPermissions) },
+    botHighest: hierarchy.botHighest,
+    managedRoles: hierarchy.roles,
+    layout: hierarchy.layout,
+    channels,
+  };
+}
