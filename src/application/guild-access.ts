@@ -55,7 +55,6 @@ export class GuildAccess {
             : (known.get(channel.id) ??
               initiallyStaffOnly(
                 channel,
-                guild,
                 alreadyEnabled,
                 channel.parentId ? known.get(channel.parentId) === true : false,
               ));

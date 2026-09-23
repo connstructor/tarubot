@@ -1417,6 +1417,22 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       memberVisible: false,
       guestVisible: false,
     });
+    const privateChannels: AccessChannel[] = [
+      { id: fixture.guild.member_role_id ?? "", type: OverwriteType.Role },
+      { id: fixture.guild.guest_role_id ?? "", type: OverwriteType.Role },
+      { id: "81901", type: OverwriteType.Role },
+      { id: "94001", type: OverwriteType.Member },
+    ].map((denied, index) => ({
+      id: String(81009 + index),
+      name: `private-${denied.id}`,
+      type: ChannelType.GuildText,
+      parentId: null,
+      everyoneVisible: false,
+      memberVisible: false,
+      guestVisible: false,
+      overwrites: [{ ...denied, allow: "0", deny: String(P.ViewChannel) }],
+    }));
+    fixture.remote.channels.push(...structuredClone(privateChannels));
     await events.channelChanged(fixture.guild.id);
     await fixture.policy.reconcile(fixture.guild.id, async () => {});
     expect(
@@ -1432,6 +1448,24 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           )
       )[0]?.staff_only,
     ).toBe(false);
+    for (const original of privateChannels) {
+      const [saved] = await db.orm
+        .select()
+        .from(t.channelAccessPolicies)
+        .where(
+          and(
+            eq(t.channelAccessPolicies.guild_id, fixture.guild.id),
+            eq(t.channelAccessPolicies.channel_id, original.id),
+          ),
+        );
+      expect(saved).toMatchObject({ staff_only: true, original_state: original });
+      const channel = fixture.remote.channels.find((channel) => channel.id === original.id);
+      for (const role of [fixture.guild.member_role_id, fixture.guild.guest_role_id]) {
+        const overwrite = channel?.overwrites.find((overwrite) => overwrite.id === role);
+        expect(BigInt(overwrite?.allow ?? "0") & P.ViewChannel).toBe(0n);
+        expect(BigInt(overwrite?.deny ?? "0") & P.ViewChannel).toBe(P.ViewChannel);
+      }
+    }
     expect(enumerations).toBe(1);
     await db.orm.insert(t.guilds).values({ id: "666666666666666679" });
     await events.channelChanged("666666666666666679");

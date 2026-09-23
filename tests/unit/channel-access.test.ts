@@ -213,6 +213,48 @@ test("ambiguous rooms, insufficient authority, dangerous roles and superseded wr
   }
 });
 
+test("explicit visibility denies keep new default-closed channels staff-only", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    await fixture.port.restrictEveryone("100", async () => {});
+    const guild = await fixture.client.guilds.fetch("100");
+    const member = await guild.members.fetch("401"),
+      guest = await guild.members.fetch("402"),
+      officer = await guild.members.fetch("403");
+    for (const denied of [
+      { id: fixture.bindings.member, type: OverwriteType.Role },
+      { id: fixture.bindings.guest, type: OverwriteType.Role },
+      { id: "500", type: OverwriteType.Role },
+      { id: "400", type: OverwriteType.Member },
+    ]) {
+      // A real SDK snapshot distinguishes explicit privacy from the removed everyone default.
+      const raw = fixture.add(`private-${denied.id}`, ChannelType.GuildText, [
+        { ...denied, allow: "0", deny: String(P.ViewChannel) },
+      ]);
+      const snapshot = await fixture.port.snapshot("100", fixture.bindings);
+      const observed = snapshot.channels.find((channel) => channel.id === raw.id);
+      if (!observed) throw new Error("Missing private channel observation");
+      expect(observed).toMatchObject({
+        everyoneVisible: false,
+        memberVisible: false,
+        guestVisible: false,
+      });
+      const audience = initiallyStaffOnly(observed, true, false) ? "officers" : "members";
+      await fixture.port.channel("100", raw.id, fixture.bindings, audience, async () => {});
+      const channel = await guild.channels.fetch(raw.id);
+      if (!channel) throw new Error("Missing enforced private channel");
+      expect({
+        denied,
+        member: channel.permissionsFor(member).has(P.ViewChannel),
+        guest: channel.permissionsFor(guest).has(P.ViewChannel),
+        officer: channel.permissionsFor(officer).has(P.ViewChannel),
+      }).toEqual({ denied, member: false, guest: false, officer: true });
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("privacy classification separates newly closed defaults from explicit private areas", () => {
   const channel: AccessChannel = {
     id: "200",
@@ -224,9 +266,9 @@ test("privacy classification separates newly closed defaults from explicit priva
     memberVisible: false,
     guestVisible: false,
   };
-  expect(initiallyStaffOnly(channel, "100", false, false)).toBe(true);
-  expect(initiallyStaffOnly(channel, "100", true, false)).toBe(false);
-  expect(initiallyStaffOnly(channel, "100", true, true)).toBe(true);
+  expect(initiallyStaffOnly(channel, false, false)).toBe(true);
+  expect(initiallyStaffOnly(channel, true, false)).toBe(false);
+  expect(initiallyStaffOnly(channel, true, true)).toBe(true);
   expect(
     initiallyStaffOnly(
       {
@@ -235,7 +277,6 @@ test("privacy classification separates newly closed defaults from explicit priva
           { id: "203", type: OverwriteType.Role, allow: String(P.ViewChannel), deny: "0" },
         ],
       },
-      "100",
       true,
       false,
     ),

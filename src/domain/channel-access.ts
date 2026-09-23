@@ -62,7 +62,6 @@ export function accessRoles(bindings: {
 /** New plain channels start closed after @everyone loses View Channel; that alone is not staff-only. */
 export function initiallyStaffOnly(
   channel: AccessChannel,
-  guild: string,
   alreadyEnabled: boolean,
   staffParent: boolean,
 ): boolean {
@@ -70,10 +69,9 @@ export function initiallyStaffOnly(
   if (channel.memberVisible || channel.guestVisible || channel.everyoneVisible) return false;
   return (
     !alreadyEnabled ||
+    // Any explicit visibility exception is privacy evidence, regardless of overwrite target.
     channel.overwrites.some(
-      (overwrite) =>
-        (BigInt(overwrite.allow) & P.ViewChannel) !== 0n ||
-        (overwrite.id === guild && (BigInt(overwrite.deny) & P.ViewChannel) !== 0n),
+      (overwrite) => ((BigInt(overwrite.allow) | BigInt(overwrite.deny)) & P.ViewChannel) !== 0n,
     )
   );
 }

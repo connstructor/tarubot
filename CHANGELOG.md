@@ -1,6 +1,12 @@
 # Version history
 
-The current application version is **2.10.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.10.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.10.1 — Preserve explicit channel privacy
+
+- Treat any explicit View Channel deny as private-area evidence when everyone, Member, and Guest visibility are all absent, including role and member-specific denies after onboarding is enabled.
+- Keep a channel with no visibility overwrites distinguishable as an ordinary default-closed channel.
+- Add SDK-effective and PostgreSQL regressions covering Member, Guest, other-role, and member-specific privacy; retain the first snapshot and prevent Member/Guest grants.
 
 ## 2.10.0 — Lobby onboarding and channel access
 
@@ -87,6 +93,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.8.4 | Weekly Bun dependency-update pull requests |
 | 2.9.0 | Typed Drizzle persistence with exact-value, transaction, and queue regression coverage |
 | 2.10.0 | Opt-in lobby/staff channel security and derived registered-visitor Guest access |
+| 2.10.1 | Preserve private channels expressed through explicit role/member visibility denies |
 
 ## Increment policy
 
