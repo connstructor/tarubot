@@ -1474,6 +1474,77 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ).toEqual([]);
   });
 
+  test("reserved community resources are neither snapshotted nor enforced and cannot become onboarding bindings", async () => {
+    const fixture = await accessFixture("666666666666666680");
+    const reserved: AccessChannel[] = [
+      {
+        id: "81400",
+        name: "Admin",
+        type: ChannelType.GuildCategory,
+        parentId: null,
+        overwrites: [],
+        everyoneVisible: true,
+        memberVisible: true,
+        guestVisible: true,
+      },
+      {
+        id: "81401",
+        name: "community-updates",
+        type: ChannelType.GuildText,
+        parentId: "81400",
+        overwrites: [],
+        everyoneVisible: true,
+        memberVisible: true,
+        guestVisible: true,
+      },
+    ];
+    fixture.remote.channels.push(...structuredClone(reserved));
+    fixture.remote.excludedChannelIds = reserved.map((channel) => channel.id);
+    fixture.remote.preserveEveryoneView = true;
+    const everyone = fixture.remote.everyonePermissions;
+    const result = await fixture.policy.reconcile(fixture.guild.id, async () => {});
+    expect(result).toMatchObject({
+      status: "secured",
+      channels: 7,
+      excludedChannels: fixture.remote.excludedChannelIds,
+      preservedEveryoneView: true,
+      defaultChanged: false,
+    });
+    expect(fixture.remote.everyonePermissions).toBe(everyone);
+    expect(
+      fixture.remote.channels.filter((channel) =>
+        fixture.remote.excludedChannelIds.includes(channel.id),
+      ),
+    ).toEqual(reserved);
+    expect(
+      await db.orm
+        .select()
+        .from(t.channelAccessPolicies)
+        .where(
+          and(
+            eq(t.channelAccessPolicies.guild_id, fixture.guild.id),
+            inArray(t.channelAccessPolicies.channel_id, fixture.remote.excludedChannelIds),
+          ),
+        ),
+    ).toEqual([]);
+    expect(fixture.port.writes.some((id) => fixture.remote.excludedChannelIds.includes(id))).toBe(
+      false,
+    );
+    const writes = fixture.port.writes.length;
+    expect(
+      await new GuildAccess(service, fixture.port).reconcile(fixture.guild.id, async () => {}),
+    ).toMatchObject({ changed: [], defaultChanged: false });
+    expect(fixture.port.writes).toHaveLength(writes);
+    await db.orm
+      .update(t.guilds)
+      .set({ officer_channel_id: "81401", revision: sql`${t.guilds.revision}+1` })
+      .where(eq(t.guilds.id, fixture.guild.id));
+    await expect(fixture.policy.reconcile(fixture.guild.id, async () => {})).rejects.toThrow(
+      "reserved community channel",
+    );
+    expect(fixture.port.writes).toHaveLength(writes);
+  });
+
   test("verified visitors get derived Guest access while revocation, FC membership, staleness and unlink remain authoritative", async () => {
     const fixture = await accessFixture("666666666666666674", fc);
     await db.orm

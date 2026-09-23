@@ -1,6 +1,13 @@
 # Version history
 
-The current application version is **2.10.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.10.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.10.2 — Separate officer chat from community channels
+
+- Exclude Discord's configured community-updates channel and its parent category from onboarding preflight, selection, snapshots, and permission writes, using IDs rather than channel names.
+- Prefer/create `#officer-chat` as the separate officer room and reject reserved resources as onboarding bindings.
+- Recheck protected scope before remote mutations and react to community binding changes. Preserve the everyone visibility default where changing it would affect an excluded area.
+- Verify reserved-channel privacy and limited-permission setup with SDK, PostgreSQL, and read-only DevBot preflight checks; record the new live officer room.
 
 ## 2.10.1 — Preserve explicit channel privacy
 
@@ -94,6 +101,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.9.0 | Typed Drizzle persistence with exact-value, transaction, and queue regression coverage |
 | 2.10.0 | Opt-in lobby/staff channel security and derived registered-visitor Guest access |
 | 2.10.1 | Preserve private channels expressed through explicit role/member visibility denies |
+| 2.10.2 | Protected community-update resources and separate officer chat |
 
 ## Increment policy
 

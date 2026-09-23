@@ -45,7 +45,7 @@ export class FakeGuildAccess implements GuildAccessPort {
       return { id: channel.id, created: true };
     };
     const lobby = room(lobbyId, "lobby", "lobby"),
-      officers = room(officerId, "officers", "officers");
+      officers = room(officerId, "officer-chat", "officers");
     return { lobby, officers, snapshot: structuredClone(snapshot) };
   }
   /** Tests may seed any non-thread channel types, including staff-only categories. */
@@ -55,6 +55,8 @@ export class FakeGuildAccess implements GuildAccessPort {
       snapshot = {
         botId: "800",
         everyonePermissions: String(P.ViewChannel | P.SendMessages),
+        excludedChannelIds: [],
+        preserveEveryoneView: false,
         channels: [],
       };
       this.guilds.set(guild, snapshot);
@@ -73,6 +75,8 @@ export class FakeGuildAccess implements GuildAccessPort {
   ): Promise<boolean> {
     const snapshot = this.state(guild),
       channel = snapshot.channels.find((value) => value.id === id);
+    if (snapshot.excludedChannelIds.includes(id))
+      throw new Error("Attempted mutation of excluded channel");
     if (!channel) throw new Error("Missing fake channel");
     const desired = channelAccessOverwrites(
       channel.overwrites,
@@ -96,6 +100,7 @@ export class FakeGuildAccess implements GuildAccessPort {
   }
   async restrictEveryone(guild: string, guard: () => Promise<void>): Promise<boolean> {
     const snapshot = this.state(guild);
+    if (snapshot.preserveEveryoneView) return false;
     if ((BigInt(snapshot.everyonePermissions) & P.ViewChannel) === 0n) return false;
     await this.beforeWrite?.("everyone");
     await guard();

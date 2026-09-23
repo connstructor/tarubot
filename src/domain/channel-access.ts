@@ -28,6 +28,10 @@ export interface AccessChannel {
 export interface AccessSnapshot {
   botId: string;
   everyonePermissions: string;
+  /** Discord's community-updates channel and its parent remain outside onboarding ownership. */
+  excludedChannelIds: string[];
+  /** Preserve the guild default if changing it could affect an excluded channel's visibility. */
+  preserveEveryoneView: boolean;
   channels: AccessChannel[];
 }
 

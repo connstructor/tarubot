@@ -77,6 +77,7 @@ export function discordAccessFixture() {
     ["406", ["701"]],
   ]);
   const channels: ChannelFixture[] = [];
+  const community: { updatesChannelId: string | null } = { updatesChannelId: null };
   const writes: string[] = [];
   let serial = 1000;
   const add = (
@@ -98,7 +99,13 @@ export function discordAccessFixture() {
   };
   const get = spyOn(client.rest, "get").mockImplementation(async (route) => {
     if (route === "/guilds/100")
-      return { id: "100", name: "Access fixture", owner_id: "300", roles: structuredClone(roles) };
+      return {
+        id: "100",
+        name: "Access fixture",
+        owner_id: "300",
+        public_updates_channel_id: community.updatesChannelId,
+        roles: structuredClone(roles),
+      };
     if (route === "/guilds/100/roles") return structuredClone(roles);
     if (route === "/guilds/100/channels") return structuredClone(channels);
     const person = [...people].find(([id]) => route === `/guilds/100/members/${id}`);
@@ -159,6 +166,7 @@ export function discordAccessFixture() {
     roles,
     people,
     channels,
+    community,
     writes,
     add,
     port: new DiscordGuildAccess(client),

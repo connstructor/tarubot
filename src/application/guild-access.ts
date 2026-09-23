@@ -42,10 +42,13 @@ export class GuildAccess {
           .where(eq(t.channelAccessPolicies.guild_id, guild))
       ).map((row) => [row.channel_id, row.staff_only]),
     );
-    const channels = [...snapshot.channels].sort(
-      (a, b) =>
-        Number(b.type === ChannelType.GuildCategory) - Number(a.type === ChannelType.GuildCategory),
-    );
+    const channels = snapshot.channels
+      .filter((channel) => !snapshot.excludedChannelIds.includes(channel.id))
+      .sort(
+        (a, b) =>
+          Number(b.type === ChannelType.GuildCategory) -
+          Number(a.type === ChannelType.GuildCategory),
+      );
     for (const channel of channels) {
       const staff =
         channel.id === lobby
@@ -130,6 +133,11 @@ export class GuildAccess {
       await currentGuard();
       const snapshot = await this.discord.snapshot(guildId, roles);
       const validateRooms = (value: AccessSnapshot): void => {
+        if (value.excludedChannelIds.includes(lobby) || value.excludedChannelIds.includes(officers))
+          throw new Failure(
+            "blocked",
+            "An onboarding binding now targets a reserved community channel. Run /setup with a separate officer-chat channel.",
+          );
         if (
           !value.channels.some(
             (channel) => channel.id === lobby && channel.type === ChannelType.GuildText,
@@ -165,11 +173,13 @@ export class GuildAccess {
         changed.add(lobby);
       const defaultChanged = await this.discord.restrictEveryone(guildId, currentGuard);
       // Categories may propagate overwrites to synced children, so finish with the leaf channels.
-      for (const channel of [...snapshot.channels].sort(
-        (a, b) =>
-          Number(b.type === ChannelType.GuildCategory) -
-          Number(a.type === ChannelType.GuildCategory),
-      ))
+      for (const channel of snapshot.channels
+        .filter((channel) => !snapshot.excludedChannelIds.includes(channel.id))
+        .sort(
+          (a, b) =>
+            Number(b.type === ChannelType.GuildCategory) -
+            Number(a.type === ChannelType.GuildCategory),
+        ))
         if (
           await this.discord.channel(guildId, channel.id, roles, audience(channel.id), currentGuard)
         )
@@ -182,12 +192,18 @@ export class GuildAccess {
           "transient",
           "The lobby was moved into a gated category; retrying current policy.",
         );
-      if ((BigInt(verified.everyonePermissions) & P.ViewChannel) !== 0n)
+      if (
+        !verified.preserveEveryoneView &&
+        (BigInt(verified.everyonePermissions) & P.ViewChannel) !== 0n
+      )
         throw new Failure(
           "transient",
           "The default guild visibility has drifted; retrying access policy.",
         );
-      for (const channel of verified.channels) {
+      const managed = verified.channels.filter(
+        (channel) => !verified.excludedChannelIds.includes(channel.id),
+      );
+      for (const channel of managed) {
         if (
           !policies.has(channel.id) ||
           !sameOverwrites(
@@ -211,14 +227,17 @@ export class GuildAccess {
           revision: guild.revision,
           channels: [...changed],
           defaultChanged,
+          excludedChannels: verified.excludedChannelIds,
         });
       return {
         status: "secured",
-        channels: verified.channels.length,
+        channels: managed.length,
         lobby,
         officers,
         changed: [...changed],
         defaultChanged,
+        excludedChannels: verified.excludedChannelIds,
+        preservedEveryoneView: verified.preserveEveryoneView,
       };
     } finally {
       if (locked)

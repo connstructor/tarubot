@@ -417,6 +417,8 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 **ACCESS-04.** In enabled guilds, derive Guest for active trusted registered owners who are not eligible FC members, using accepted current membership evidence; registration suffices when no FC is linked. Preserve explicit Guest revocation, FC Member precedence, guild isolation, and conservative treatment of unknown/stale evidence. Derived registration must not recreate a revoked durable grant.
 
+**ACCESS-05.** Exclude Discord's configured community-updates channel and its parent category from onboarding ownership, room selection, permission preflight, new snapshots, and mutations. Use a separate officer chat. Recheck exclusions before writes and reconcile changed community bindings. Preserve the guild visibility default if lowering it would change an excluded area's inherited visibility; use explicit managed-channel gates in that case.
+
 ### Database and durable work
 
 **DB-01.** PostgreSQL is the runtime database. Use Drizzle ORM for typed application persistence over the node-postgres driver, with table mappings and inferred record types maintained alongside explicit versioned SQL migrations. The migrations own foreign keys, unique constraints, indexes, domains, and triggers; already-applied migrations are immutable. Bind ORM work inside an application transaction to its exact checked-out client. Retain narrowly scoped parameterized PostgreSQL control/locking SQL and catalog-based restore verification. Application startup checks the required schema version and checksum.

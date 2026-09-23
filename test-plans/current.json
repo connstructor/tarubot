@@ -1,9 +1,9 @@
 {
   "title": "Session: Lobby onboarding and channel access",
-  "objective": "Validate version 2.10.1 lobby, Member/Guest, and staff visibility in the development guild, including explicit role/member denies, registered visitor access, drift repair, and restart recovery.",
+  "objective": "Validate version 2.10.2 onboarding with a separate officer-chat, preserved Discord community resources, limited bot permissions, and registered visitor access.",
   "user": [
-    "Review the feature PR after required checks pass. Back up tarubot_dev, stop the writer, apply migration 003 with the published 2.10.1 image, and refresh guild command registration before startup.",
-    "Give the bot its documented channel/role permissions and its own View Channel. Choose the existing officer-only room and run `/setup officers:#ROOM`, optionally selecting `lobby:#ROOM`.",
+    "Review the fix PR after required checks pass and pull its 2.10.2 images. DevBot already has migration 003; restart it on the published release.",
+    "Run `/setup officers:#officer-chat`. Confirm the configured community-updates channel and its parent category keep their existing permission settings.",
     "Use non-owner, non-Administrator test users: verify newcomers see only the lobby, Members/Guests see ordinary channels but not the lobby, and Officers/FC Leaders see both and staff rooms.",
     "Verify an FC member and a non-FC visitor. Check automatic Member/Guest delivery, Guest revocation, rejoin, and `/guest status` without using privileged accounts for the visibility checks.",
     "After setup, create ordinary default-closed channels and private channels with role/member View Channel denies. Confirm private rooms stay staff-only, inspect sync status, and restart with repair pending."
@@ -14,9 +14,9 @@
     "Record actual role/channel IDs and live outcomes, including least-privilege behavior, retained ledger/ownership state, and pending follow-ups."
   ],
   "bot": [
-    "Run compiled version 2.10.1 with Drizzle and require the migration 003 checksum before accepting work.",
+    "Run compiled version 2.10.2 with Drizzle and require the migration 003 checksum before accepting work.",
     "Enable onboarding only after explicit setup; persist original channel permissions and queue scoped access work with the configuration decision.",
-    "Reconcile lobby/member/staff visibility, preserve Guest revocation and FC Member precedence, and report blocked or pending work through sync status.",
+    "Reconcile managed lobby/member/staff visibility, exclude community updates and its parent, preserve Guest revocation, and report blocked or pending work through sync status.",
     "Post this responsibility-separated session plan in the configured development channel."
   ]
 }
