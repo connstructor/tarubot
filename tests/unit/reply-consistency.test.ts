@@ -58,6 +58,11 @@ const FAILURE_PINS: Readonly<Record<string, Pin>> = {
   "stale.settings": { member: ["warning", "Settings changed — try again"] },
   "stale.control": { member: ["warning", "This control is out of date"] },
   "stale.form": { member: ["warning", "Please reopen /apply"] },
+  // The guest failures WS7 pins: an obsolete review message, a missing application and the
+  // reapply cooldown keep one presentation from the command, the buttons and the form.
+  "stale.review": { member: ["warning", "This review message is out of date"] },
+  "not_found.application": { member: ["warning", "Application not found"] },
+  "wait.apply": { member: ["pending", "You can apply again later"] },
   pending_proof: { member: ["pending", "Token not on the Lodestone yet"] },
   "wait.claims_own": { member: ["pending", "Too many unfinished claims"] },
   "wait.retry": { member: ["pending", "Please wait a moment"] },
@@ -68,17 +73,24 @@ const FAILURE_PINS: Readonly<Record<string, Pin>> = {
     officer: ["warning", "Discord permissions need attention"],
   },
   // C4 tone table: a paused refusal is pending like every paused state. The rows for change
-  // results and no-op results are pinned below; sync views join as their group migrates.
+  // results, the officer sync overview and no-op results are pinned below.
   paused: { member: ["pending", "Discord changes paused"] },
   unexpected: { member: ["error", "Something went wrong"] },
 };
 
 /**
- * The C4 tone table's rows for change results, pinned as groups migrate: a change saved while
- * Discord effects are paused is the approved errors-and-style#26 card in every group.
+ * The C4 tone table's rows for results, pinned as groups migrate:
+ * - a change saved while Discord effects are paused is the approved errors-and-style#26 card in
+ *   every group;
+ * - the officer sync overview is pending while work is in progress, even with a failed job
+ *   (approved guests#44), warning only when focused on blocked or failed work with nothing in
+ *   progress (#45), and pending when only paused work remains (#46).
  */
 const RESULT_PINS: Readonly<Record<string, readonly [Tone, string]>> = {
   paused_save: ["pending", "Saved, Discord changes paused"],
+  sync_overview_active: ["pending", "Sync status · server"],
+  sync_overview_focused: ["warning", "Sync status · server"],
+  sync_overview_paused: ["pending", "Sync status · server"],
 };
 
 /** No-op results are info (C4), except these approved neutral cards. */

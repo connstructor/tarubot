@@ -4327,8 +4327,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       const modalId = guestApplicationModal(interactions.slash()).toJSON().custom_id;
       // The router/service are new instances; no in-memory form session is needed after restart.
       await router.handle(interactions.submit(modalId, input));
+      // The receipt is the pending 'Application sent' card; it never echoes the answers.
       expect(interactions.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("awaiting officer review"),
+        content: "",
+        embeds: [
+          {
+            title: "Application sent",
+            description: expect.stringContaining("awaiting officer review"),
+          },
+        ],
       });
       const pending = await db.orm
         .select()

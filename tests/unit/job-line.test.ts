@@ -221,6 +221,8 @@ describe("job markers and lines", () => {
   test("labels fall back to the raw kind, and codes come from the last_error prefix", () => {
     expect(jobLabel("guest.review")).toBe("Guest review message");
     expect(jobLabel("reconcile.guild")).toBe("Server-wide role check");
+    // Every kind the queue runs has a member label, including the character profile refresh.
+    expect(jobLabel("profile")).toBe("Character profile refresh");
     expect(jobLabel("future.kind")).toBe("future.kind");
     expect(jobLabel("constructor")).toBe("constructor");
     expect(jobLine(job({ kind: "future.kind" }), VIEWERS.member)).toBe("`… QUEUED` future.kind");

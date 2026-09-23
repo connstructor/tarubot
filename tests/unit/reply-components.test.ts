@@ -4,7 +4,9 @@
  * 'Check again' re-renders its own private card in place, throttled by the card's timestamps;
  * 'Full details (JSON)' is refused to members before it runs and re-reads for officers; and the
  * ledger's View history opens a new reply while its pager re-reads each page in place as whoever
- * clicked.
+ * clicked. Check sync status opens the presser's own sync status as a new reply, the officer sync
+ * and guest record details attach their JSON, and the review buttons answer with the decision
+ * presenter's short form.
  */
 import { afterEach, expect, test } from "bun:test";
 import { InteractionResponseType, MessageFlags } from "discord.js";
@@ -15,13 +17,17 @@ import type { Component } from "../../src/bot/component.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
 import details from "../../src/components/details.component.js";
+import guestReview from "../../src/components/guest-review.component.js";
 import ledger from "../../src/components/ledger.component.js";
+import sync from "../../src/components/sync.component.js";
 import verify from "../../src/components/verify.component.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R } from "../fixtures/replies/characters.js";
+import { APPLICATION_ID, decision, GUEST_RESULTS as G } from "../fixtures/replies/guests.js";
 import { LEDGER_FC, LEDGER_RESULTS as L, OLD_FC } from "../fixtures/replies/ledger.js";
+import { RUN_ID, SYNC_RESULTS as SR } from "../fixtures/replies/sync-utility.js";
 import { at, CHARACTER } from "../fixtures/results.js";
 
 /** Actors the fixture member (user 400 in guild 100) resolves as. */
@@ -430,4 +436,135 @@ test("a member pressing a ledger Full details is refused before it reads", async
   );
   expect(calls).toEqual([]);
   expect(embedOf(fixture.requests[1]).title).toBe("Officers only");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Check sync status, sync and guest details, and the guest review buttons
+
+/**
+ * A router over the real sync, details and guest-review components and a prototype-backed Service
+ * whose syncStatus, guestStatus and decide record each call and return catalog results.
+ */
+function guestSyncHarness(actor: Actor) {
+  const fixture = interactionFixture();
+  open = fixture;
+  const calls: Call[] = [];
+  const app: unknown = Object.create(Service.prototype);
+  if (!(app instanceof Service)) throw new Error("Invalid application fixture");
+  Object.assign(app, {
+    syncStatus: async (caller: Actor, run: string | null) => {
+      calls.push(["syncStatus", caller.userId, run]);
+      return caller.officer ? SR.officer : run ? SR.run : SR.memberAttention;
+    },
+    guestStatus: async (caller: Actor, owner: string) => {
+      calls.push(["guestStatus", caller.userId, owner]);
+      return G.record;
+    },
+    decide: async (caller: Actor, ...args: unknown[]) => {
+      calls.push(["decide", caller.userId, ...args]);
+      return decision();
+    },
+  });
+  const components: readonly Component[] = [sync, details, guestReview];
+  const router = new InteractionRouter(
+    {
+      client: fixture.client,
+      services: new Services().provide(applicationKey, app),
+      allowsGuild: () => true,
+      isStopping: () => false,
+      resolveActor: async (guildId, userId) => ({ ...actor, guildId, userId }),
+      report: () => {},
+    },
+    new Map(),
+    new Map(components.map((component) => [component.prefix, component])),
+  );
+  return { fixture, calls, router };
+}
+
+test("Check sync status opens the presser's own status as a new reply, with or without a run", async () => {
+  const { fixture, calls, router } = guestSyncHarness(MEMBER);
+  // The /setup summary it sits on is private to the presser, and still isn't edited.
+  await router.handle(fixture.button("sync:status", "123456789", { ephemeral: true }));
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+  expect(embedOf(fixture.requests[1]).title).toBe("Your sync status");
+  await router.handle(fixture.button(`sync:status:${RUN_ID}`, "123456789", { ephemeral: true }));
+  expect(embedOf(fixture.requests.at(-1)).title).toBe("Sync run · completed");
+  expect(calls).toEqual([
+    ["syncStatus", "400", null],
+    ["syncStatus", "400", RUN_ID],
+  ]);
+});
+
+test("a malformed sync control is out of date and never reaches the service", async () => {
+  const { fixture, calls, router } = guestSyncHarness(MEMBER);
+  for (const customId of [
+    `sync:status:${RUN_ID.toUpperCase()}`,
+    "sync:status:9d8c7b6a",
+    `sync:later:${RUN_ID}`,
+    `sync:status:${RUN_ID}:x`,
+  ]) {
+    const before = fixture.requests.length;
+    await router.handle(fixture.button(customId, "123456789", { ephemeral: true }));
+    expect(embedOf(fixture.requests.slice(before)[1]).title).toBe("This control is out of date");
+  }
+  expect(calls).toEqual([]);
+});
+
+test("sync and guest Full details re-read for officers and attach their JSON", async () => {
+  const { fixture, calls, router } = guestSyncHarness(OFFICER);
+  await router.handle(fixture.button("details:sync", "123456789", { ephemeral: true }));
+  await router.handle(fixture.button(`details:sync:${RUN_ID}`, "123456789", { ephemeral: true }));
+  await router.handle(
+    fixture.button("details:guest:234567890123456789", "123456789", { ephemeral: true }),
+  );
+  expect(calls).toEqual([
+    ["syncStatus", "400", null],
+    ["syncStatus", "400", RUN_ID],
+    ["guestStatus", "400", "234567890123456789"],
+  ]);
+  const files = fixture.requests.flatMap((request) => request.files ?? []);
+  expect(files).toEqual(["tarubot-sync.json", "tarubot-sync.json", "tarubot-guest.json"]);
+  expect(embedOf(fixture.requests.at(-1)).title).toBe("Full details · guest");
+});
+
+test("members pressing sync or guest Full details are refused before any read", async () => {
+  const { fixture, calls, router } = guestSyncHarness(MEMBER);
+  for (const customId of ["details:sync", "details:guest:234567890123456789"]) {
+    const before = fixture.requests.length;
+    await router.handle(fixture.button(customId, "123456789", { ephemeral: true }));
+    expect(embedOf(fixture.requests.slice(before)[1]).title).toBe("Officers only");
+  }
+  expect(calls).toEqual([]);
+  expect(sentText(fixture.requests)).not.toContain("tarubot-guest.json");
+});
+
+test("a review button records the decision on its message and answers briefly", async () => {
+  const { fixture, calls, router } = guestSyncHarness(OFFICER);
+  await router.handle(fixture.button(`guest:approve:${APPLICATION_ID}`, "987654321"));
+  // The review message is a channel post, so the answer is a new private reply.
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+  expect(calls).toEqual([["decide", "400", APPLICATION_ID, true, null, "987654321"]]);
+  expect(embedOf(fixture.requests[1])).toMatchObject({
+    title: "Application approved",
+    description: "Recorded. The review message updates shortly.",
+    footer: { text: "Audited" },
+  });
+});
+
+test("a malformed review control is out of date and never reaches the service", async () => {
+  const { fixture, calls, router } = guestSyncHarness(OFFICER);
+  for (const customId of [
+    `guest:approve:${APPLICATION_ID.toUpperCase()}`,
+    "guest:approve:fixture",
+    `guest:ban:${APPLICATION_ID}`,
+  ]) {
+    const before = fixture.requests.length;
+    await router.handle(fixture.button(customId));
+    expect(embedOf(fixture.requests.slice(before)[1]).title).toBe("This control is out of date");
+  }
+  expect(calls).toEqual([]);
 });

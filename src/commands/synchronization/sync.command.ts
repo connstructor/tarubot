@@ -2,7 +2,7 @@
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { syncStatusReply } from "../../discord/presenters/synchronization.js";
 import { uuid } from "../../discord/selectors.js";
 
 export default defineCommand({
@@ -13,10 +13,12 @@ export default defineCommand({
       .addStringOption(string("run_id", "Synchronization run ID")),
   ),
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
-    const run = interaction.options.getString("run_id");
-    return dataReply(
-      await services.get(applicationKey).syncStatus(actor, run ? uuid(run, "run") : null),
-    );
+  async execute({ actor, viewer, interaction, services }) {
+    const option = interaction.options.getString("run_id");
+    const run = option ? uuid(option, "run") : null;
+    // The service scopes runs and work to what the actor may see; the presenter picks the view.
+    return syncStatusReply(await services.get(applicationKey).syncStatus(actor, run), viewer, {
+      run,
+    });
   },
 });

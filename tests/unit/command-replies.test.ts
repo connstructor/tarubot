@@ -1,16 +1,17 @@
 /**
- * Character and ledger commands end to end at the module boundary: the real option resolver
- * parses raw payloads, prototype-backed Service stubs return catalog results, and each command
- * returns its presenter's single embed (no flags: the router owns visibility; content only for the
- * /claim token). Through the router, an ownership conflict shows its current owner to an officer
- * on /assign and to no member (owner decision O3), and malformed ledger options are input failures
- * that never reach the service.
+ * Character, ledger, guest, synchronization and utility commands end to end at the module
+ * boundary: the real option resolver parses raw payloads, prototype-backed Service stubs return
+ * catalog results, and each command returns its presenter's single embed (no flags: the router
+ * owns visibility; content only for the /claim token). Through the router, an ownership conflict
+ * shows its current owner to an officer on /assign and to no member (owner decision O3), and
+ * malformed ledger options are input failures that never reach the service.
  */
 import { afterEach, expect, test } from "bun:test";
 import { ApplicationCommandOptionType } from "discord.js";
 import type { APIEmbed } from "discord.js";
-import { applicationKey } from "../../src/application/keys.js";
+import { applicationKey, synchronizationKey } from "../../src/application/keys.js";
 import { Service } from "../../src/application/service.js";
+import { Synchronization } from "../../src/application/synchronization.js";
 import type { Command } from "../../src/bot/command.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
@@ -22,14 +23,26 @@ import nicknameCommand from "../../src/commands/characters/nickname.command.js";
 import unassignCommand from "../../src/commands/characters/unassign.command.js";
 import unclaimCommand from "../../src/commands/characters/unclaim.command.js";
 import verifyCommand from "../../src/commands/characters/verify.command.js";
+import guestCommand from "../../src/commands/guests/guest.command.js";
 import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
+import refreshCommand from "../../src/commands/synchronization/refresh.command.js";
+import syncCommand from "../../src/commands/synchronization/sync.command.js";
+import channelCommand from "../../src/commands/utility/channel.command.js";
+import pingCommand from "../../src/commands/utility/ping.command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
 import { Presented } from "../../src/discord/presenters/reply.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R, TARGET_ID, TOKEN } from "../fixtures/replies/characters.js";
+import {
+  ACTION_RESULTS as GA,
+  APPLICATION_ID,
+  decision,
+  GUEST_RESULTS as G,
+} from "../fixtures/replies/guests.js";
 import { ENTRY_IDS, LEDGER_RESULTS as L } from "../fixtures/replies/ledger.js";
+import { refreshed, RUN_ID, SYNC_RESULTS as SR } from "../fixtures/replies/sync-utility.js";
 import { CHARACTER, GUEST_ID } from "../fixtures/results.js";
 
 /** The fixture's interaction user (400 in guild 100), as a member and as a server manager. */
@@ -72,6 +85,10 @@ function stubService(results: Readonly<Record<string, unknown>>) {
     "assign",
     "ledger",
     "ledgerRead",
+    "guestStatus",
+    "guestAction",
+    "decide",
+    "syncStatus",
   ] as const)
     Object.assign(app, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
@@ -92,15 +109,38 @@ afterEach(async () => {
   open = undefined;
 });
 
-/** Run a command's execute directly with the stub service and the actor's viewer. */
-async function run(command: Command, options: unknown[], actor: Actor, app: Service) {
+/**
+ * A prototype-backed Synchronization whose refresh returns `result` (or throws it when it is an
+ * Error), recording each call in `calls` as the Service stub does.
+ */
+function stubSynchronization(result: unknown, calls: Call[]): Synchronization {
+  const sync: unknown = Object.create(Synchronization.prototype);
+  if (!(sync instanceof Synchronization)) throw new Error("Invalid synchronization fixture");
+  Object.assign(sync, {
+    refresh: async (actor: Actor, force: boolean) => {
+      calls.push(["refresh", actor.userId, force]);
+      if (result instanceof Error) throw result;
+      return result;
+    },
+  });
+  return sync;
+}
+
+/** Run a command's execute directly with the stub services and the actor's viewer. */
+async function run(
+  command: Command,
+  options: unknown[],
+  actor: Actor,
+  app: Service,
+  sync: Synchronization = stubSynchronization(refreshed(), []),
+) {
   // One fixture at a time: the previous path's client is closed first.
   await open?.close();
   const fixture = interactionFixture();
   open = fixture;
   return command.execute?.({
     client: fixture.client,
-    services: new Services().provide(applicationKey, app),
+    services: new Services().provide(applicationKey, app).provide(synchronizationKey, sync),
     allowsGuild: () => true,
     isStopping: () => false,
     report: () => {},
@@ -412,4 +452,174 @@ test("the history cursor option describes an entry number", () => {
       ? history.options?.find((option) => option.name === "before")
       : undefined;
   expect(before?.description).toBe("Entry number from a previous page (e.g. 34)");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Guests, synchronization and utilities
+
+/** An officer of the fixture guild without Manage Roles. */
+const OFFICER: Actor = { ...MEMBER, officer: true };
+const B = ApplicationCommandOptionType.Boolean;
+
+/** Each guest, sync and utility command path: options, actor, stubbed result, title and call. */
+const WS7_PATHS: readonly {
+  readonly command: Command;
+  readonly options: unknown[];
+  readonly actor: Actor;
+  readonly results: Record<string, unknown>;
+  readonly refresh?: unknown;
+  readonly title: string;
+  readonly call: Call | null;
+}[] = [
+  {
+    command: guestCommand,
+    options: [subcommand("status")],
+    actor: MEMBER,
+    results: { guestStatus: G.granted },
+    title: "Your guest access",
+    call: ["guestStatus", "400", "400"],
+  },
+  {
+    command: guestCommand,
+    options: [subcommand("status", [text("member", `<@${GUEST_ID}>`)])],
+    actor: OFFICER,
+    results: { guestStatus: G.record },
+    title: "Guest access · member record",
+    call: ["guestStatus", "400", GUEST_ID],
+  },
+  {
+    command: guestCommand,
+    options: [subcommand("grant", [text("member", GUEST_ID), text("reason", "Vouched")])],
+    actor: OFFICER,
+    results: { guestAction: GA.granted },
+    title: "Guest access granted",
+    call: ["guestAction", "400", GUEST_ID, false, "Vouched", INTERACTION_ID],
+  },
+  {
+    command: guestCommand,
+    options: [subcommand("revoke", [text("member", GUEST_ID), text("reason", "Disruptive")])],
+    actor: OFFICER,
+    results: { guestAction: GA.revoked },
+    title: "Guest access revoked",
+    call: ["guestAction", "400", GUEST_ID, true, "Disruptive", INTERACTION_ID],
+  },
+  {
+    command: guestCommand,
+    options: [subcommand("approve", [text("application", APPLICATION_ID)])],
+    actor: OFFICER,
+    results: { decide: decision() },
+    title: "Application approved",
+    call: ["decide", "400", APPLICATION_ID, true, null],
+  },
+  {
+    command: guestCommand,
+    options: [
+      subcommand("deny", [text("application", APPLICATION_ID), text("reason", "Not a fit")]),
+    ],
+    actor: OFFICER,
+    results: { decide: decision({ status: "denied", reason: "Not a fit" }) },
+    title: "Application denied",
+    call: ["decide", "400", APPLICATION_ID, false, "Not a fit"],
+  },
+  {
+    command: refreshCommand,
+    options: [],
+    actor: MEMBER,
+    results: {},
+    refresh: refreshed(),
+    title: "Refresh requested",
+    call: ["refresh", "400", false],
+  },
+  {
+    command: refreshCommand,
+    options: [{ type: B, name: "force", value: true }],
+    actor: OFFICER,
+    results: {},
+    refresh: refreshed({ forced: true, cached: false }),
+    title: "Forced refresh requested",
+    call: ["refresh", "400", true],
+  },
+  {
+    command: syncCommand,
+    options: [subcommand("status")],
+    actor: MEMBER,
+    results: { syncStatus: SR.memberAttention },
+    title: "Your sync status",
+    call: ["syncStatus", "400", null],
+  },
+  {
+    command: syncCommand,
+    options: [subcommand("status", [text("run_id", ` ${RUN_ID} `)])],
+    actor: MEMBER,
+    results: { syncStatus: SR.run },
+    title: "Sync run · completed",
+    call: ["syncStatus", "400", RUN_ID],
+  },
+  {
+    command: syncCommand,
+    options: [subcommand("status")],
+    actor: OFFICER,
+    results: { syncStatus: SR.officer },
+    title: "Sync status · server",
+    call: ["syncStatus", "400", null],
+  },
+  { command: pingCommand, options: [], actor: MEMBER, results: {}, title: "Pong", call: null },
+  {
+    command: channelCommand,
+    options: [],
+    actor: MEMBER,
+    results: {},
+    title: "Channel details",
+    call: null,
+  },
+];
+
+test("every guest, sync and utility command returns its presenter's one embed", async () => {
+  for (const path of WS7_PATHS) {
+    const { app, calls } = stubService(path.results);
+    const result = await run(
+      path.command,
+      path.options,
+      path.actor,
+      app,
+      stubSynchronization(path.refresh ?? refreshed(), calls),
+    );
+    if (!(result instanceof Presented)) throw new Error(`/${path.command.name} returned no reply`);
+    expect({ command: path.command.name, title: result.options.embeds[0]?.title }).toEqual({
+      command: path.command.name,
+      title: path.title,
+    });
+    expect(result.options.embeds).toHaveLength(1);
+    expect(result.options).not.toHaveProperty("flags");
+    expect(result.options.content).toBe("");
+    expect(calls.filter(([method]) => method !== "guild")).toEqual(path.call ? [path.call] : []);
+  }
+});
+
+test("a member naming someone else on /guest status is refused before any read", async () => {
+  const { app, calls } = stubService({ guestStatus: G.record });
+  const error = await run(
+    guestCommand,
+    [subcommand("status", [text("member", GUEST_ID)])],
+    MEMBER,
+    app,
+  ).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ code: "forbidden", detail: { kind: "scope", scope: "owner" } });
+  expect(calls).toEqual([]);
+});
+
+test("/refresh passes the service's refusals through to the failure presenter", async () => {
+  const refused = new Failure("forbidden", "Only officers can force a refresh.", 0, {
+    kind: "scope",
+    scope: "officer",
+  });
+  const { app } = stubService({});
+  const error = await run(
+    refreshCommand,
+    [{ type: B, name: "force", value: true }],
+    MEMBER,
+    app,
+    stubSynchronization(refused, []),
+  ).catch((caught: unknown) => caught);
+  expect(error).toBe(refused);
 });

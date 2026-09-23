@@ -69,6 +69,14 @@ export default defineComponent({
           ),
           new Date(),
         );
+      case "sync":
+        // The officer /sync status overview (approved guests#44) or one run's detail: every run,
+        // outstanding job and full diagnostic the embed summarizes or cuts at ten lines.
+        return dataReply(viewer, "sync", await app.syncStatus(actor, control.run), new Date());
+      case "guest":
+        // Another member's /guest status record: every grant, application and the ten newest
+        // deliveries, where the embed shows five, five and three. Answers are never included.
+        return dataReply(viewer, "guest", await app.guestStatus(actor, control.userId), new Date());
       default:
         throw obsolete();
     }

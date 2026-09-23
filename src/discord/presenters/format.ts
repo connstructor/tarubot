@@ -140,6 +140,17 @@ export function count(n: number | bigint, singular: string, plural = `${singular
   return `${grouping.format(n)} ${n === 1 || n === 1n ? singular : plural}`;
 }
 
+/**
+ * A configured interval in the largest whole unit that states it exactly, for copy such as 'may
+ * reapply after 24 hours' or 'roster older than 6 hours': hours, then minutes, then seconds.
+ */
+export function duration(seconds: number): string {
+  const whole = Math.max(0, Math.round(seconds));
+  if (whole >= 3_600 && whole % 3_600 === 0) return count(whole / 3_600, "hour");
+  if (whole >= 60 && whole % 60 === 0) return count(whole / 60, "minute");
+  return count(whole, "second");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Times
 

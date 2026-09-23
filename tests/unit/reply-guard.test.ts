@@ -17,12 +17,6 @@ const PENDING = new Set([
   "src/commands/configuration/config.command.ts",
   "src/commands/configuration/officer.command.ts",
   "src/commands/configuration/setup.command.ts",
-  "src/commands/guests/guest.command.ts",
-  "src/commands/synchronization/refresh.command.ts",
-  "src/commands/synchronization/sync.command.ts",
-  "src/commands/utility/channel.command.ts",
-  "src/commands/utility/ping.command.ts",
-  "src/components/guest-review.component.ts",
   // The legacy dump itself, deleted once nothing above imports it.
   "src/discord/replies.ts",
 ]);
