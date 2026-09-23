@@ -48,6 +48,39 @@ test("dump reader preserves escaped quotes, Unicode, semicolons and schema order
   expect(data.guilds[0]?.guest_role_id).toBeNull();
   expect(importReport(data, null, mappings(data)).timestamps[0]?.utc).toBe("2026-06-21T20:39:49Z");
 });
+test("import report records the legacy review channel as closed and shows every launch default", () => {
+  // Legacy settings: roles 101/102, ledger 103, officer notices 104, review channel 555.
+  const data = readDump(
+    fixture.replace(
+      "('789','','','','','9232097761132958152','')",
+      "('789','101','102','103','104','9232097761132958152','555')",
+    ),
+  );
+  const report = importReport(data, null, mappings(data));
+  // Notice channels are imported as they are; the review channel is only reported (decision 5).
+  expect(report.guildSettings).toEqual([
+    {
+      guildId: "789",
+      memberRoleId: "101",
+      guestRoleId: "102",
+      ledgerChannelId: "103",
+      officerNotificationsChannelId: "104",
+      guestApplications: { state: "closed", legacyChannelId: "555" },
+    },
+  ]);
+  expect(report.bootstrap).toMatchObject({
+    effects: "disabled",
+    guestApplications: "closed",
+    roleLayout: "disabled",
+    guestGrandfathering: "pending_first_activation",
+  });
+  // An empty legacy value still normalizes to null, and applications stay closed.
+  const empty = readDump(fixture);
+  expect(importReport(empty, null, mappings(empty)).guildSettings[0]?.guestApplications).toEqual({
+    state: "closed",
+    legacyChannelId: null,
+  });
+});
 test("broken relationships and malformed quoted values are rejected", () => {
   expect(() => readDump(fixture.replace("'123','456'", "'123','999'"))).toThrow();
   expect(() => readDump(`${fixture}\nINSERT INTO \`member\` VALUES ('unterminated`)).toThrow();

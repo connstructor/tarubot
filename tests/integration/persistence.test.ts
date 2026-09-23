@@ -2,7 +2,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { ChannelType, OverwriteType, PermissionFlagsBits as P } from "discord.js";
+import {
+  ChannelType,
+  InteractionResponseType,
+  MessageFlags,
+  OverwriteType,
+  PermissionFlagsBits as P,
+} from "discord.js";
 import type { AccessChannel } from "../../src/domain/channel-access.js";
 import { channelAccessOverwrites } from "../../src/domain/channel-access.js";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -21,7 +27,7 @@ import type { ApplicationRecord, DiscordPort, MemberView } from "../../src/appli
 import type { Configuration } from "../../src/config/env.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { desiredAccess } from "../../src/domain/policy.js";
-import { Failure } from "../../src/domain/values.js";
+import { Failure, json } from "../../src/domain/values.js";
 import { audit, Database, ensureUser, orm } from "../../src/infrastructure/postgres/database.js";
 import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
 import type { Roster } from "../../src/infrastructure/nodestone/client.js";
@@ -48,6 +54,18 @@ import applyCommand from "../../src/commands/guests/apply.command.js";
 import applyComponent from "../../src/components/guest-application.component.js";
 import reviewComponent from "../../src/components/guest-review.component.js";
 import { guestApplicationModal } from "../../src/discord/guest-application.js";
+import { GUEST_APPLICATIONS_CLOSED } from "../../src/domain/guest-application.js";
+import {
+  activateGuild,
+  assertFreshRoster,
+  GrandfatherPlanMismatch,
+} from "../../src/application/activation.js";
+import {
+  lateJoiners,
+  pendingDepartures,
+  planGrandfathering,
+} from "../../src/application/grandfathering.js";
+import { grandfatherReport, reviewedPlan } from "../../src/domain/grandfathering.js";
 
 const url = process.env.TEST_DATABASE_URL;
 // These tests deliberately recreate a disposable schema; production connections are rejected below.
@@ -230,6 +248,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.migrate();
     await db.schema();
     await importLegacy(db, source, snapshot, mappings(source));
+    // Imports now leave guest applications closed (owner decision 2026-09-23), so the form
+    // scenarios below opt in to the legacy review channel explicitly. A dedicated test covers the
+    // closed state.
+    await db.orm
+      .update(t.guilds)
+      .set({ guest_application_channel_id: legacyGuild.guest_application_channel_id })
+      .where(eq(t.guilds.id, guild));
     for (const member of snapshot.guilds[0]?.members ?? [])
       members.set(member.id, {
         ...member,
@@ -283,6 +308,50 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       (await db.query<{ provenance: string }>("SELECT provenance FROM guest_grants"))[0]
         ?.provenance,
     ).toBe("imported_guest");
+    // Launch defaults: the imported layout stays untouched and one grandfathering run is owed.
+    const [launch] = await db.orm
+      .select({
+        layout: t.guilds.role_layout_enabled,
+        grandfather: t.guilds.guest_grandfather,
+        grandfatheredAt: t.guilds.guest_grandfathered_at,
+      })
+      .from(t.guilds)
+      .where(eq(t.guilds.id, guild));
+    expect(launch).toEqual({ layout: false, grandfather: "pending", grandfatheredAt: null });
+    // Applications were imported closed (beforeAll reopens them); the audit and the stored
+    // report keep the legacy review channel for a later explicit /config choice.
+    const closed = {
+      state: "closed",
+      legacyChannelId: legacyGuild.guest_application_channel_id,
+    };
+    const [imported] = await db.orm
+      .select({ details: t.auditEvents.details })
+      .from(t.auditEvents)
+      .where(and(eq(t.auditEvents.guild_id, guild), eq(t.auditEvents.action, "migration.import")));
+    expect(imported?.details).toMatchObject({
+      guestApplications: closed,
+      roleLayout: false,
+      guestGrandfather: "pending",
+    });
+    const [stored] = await db.orm
+      .select({ report: t.imports.report })
+      .from(t.imports)
+      .where(eq(t.imports.fingerprint, source.fingerprint));
+    expect(stored?.report).toMatchObject({
+      guildSettings: [
+        {
+          guildId: guild,
+          ledgerChannelId: legacyGuild.ledger_channel_id,
+          officerNotificationsChannelId: legacyGuild.officer_notifications_channel_id,
+          guestApplications: closed,
+        },
+      ],
+      bootstrap: {
+        guestApplications: "closed",
+        roleLayout: "disabled",
+        guestGrandfathering: "pending_first_activation",
+      },
+    });
   });
   test("competing withdrawals retain funds and repeated interactions mutate once", async () => {
     const outcomes = await Promise.allSettled([
@@ -531,6 +600,128 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0]?.last_successful_roster_at,
     ).toEqual(before);
     expect(desiredAccess(await sync.facts(currentGuild, member)).member).toBe(true);
+  });
+  test("imported owners without a legacy-FC character are registered Guests with onboarding disabled", async () => {
+    // Relies on the accepted rosters the previous test published, which evaluated every imported
+    // link in the imported guild; that guild never ran /setup, so onboarding stays disabled.
+    const ownership = mappings(source).ownership;
+    const humans = new Set(snapshot.guilds[0]?.members.map((member) => member.id));
+    const owned = new Map<string, (typeof source.characters)[number][]>();
+    for (const row of source.characters)
+      if (row.owner) owned.set(row.owner, [...(owned.get(row.owner) ?? []), row]);
+    const owner = [...owned].find(
+      ([user, rows]) =>
+        !humans.has(user) &&
+        rows.every((row) => row.fc !== fc) &&
+        rows.some((row) => (ownership[row.char_id] ?? []).includes(guild)),
+    )?.[0];
+    if (!owner) throw new Error("Missing imported owner outside the legacy FC");
+    const currentGuild = await service.guild(actor);
+    expect(currentGuild.access_policy_enabled).toBe(false);
+    const member = await discord.member(guild, owner);
+    if (!member) throw new Error("Missing imported owner");
+    const facts = await sync.facts(currentGuild, member);
+    // Imported links are trusted registration; no grant, history or held role explains this Guest.
+    expect(facts).toMatchObject({
+      membership: "ineligible",
+      verified: true,
+      fresh: true,
+      former: false,
+      grant: false,
+      revoked: false,
+      hasGuest: false,
+    });
+    expect(desiredAccess(facts)).toEqual({ member: false, guest: true });
+  });
+  test("a grandfathering plan on the imported fixture is read-only and stable", async () => {
+    // Runs on the accepted rosters published above (the fixture's baseline reappeared, so no
+    // departure is pending) and never activates, so the shared fixture guild stays pending.
+    const ownership = mappings(source).ownership;
+    const humans = new Set(snapshot.guilds[0]?.members.map((member) => member.id));
+    const outsider = source.characters.find(
+      (row) =>
+        row.owner &&
+        !humans.has(row.owner) &&
+        source.characters.every((other) => other.owner !== row.owner || other.fc !== fc) &&
+        (ownership[row.char_id] ?? []).includes(guild),
+    )?.owner;
+    if (!outsider) throw new Error("Missing imported owner outside the legacy FC");
+    const currentGuild = await service.guild(actor);
+    expect(currentGuild.guest_grandfather).toBe("pending");
+    const views: MemberView[] = [
+      ...(snapshot.guilds[0]?.members ?? []).map((member) => ({
+        ...member,
+        guildId: guild,
+        joinedAt: new Date(member.joinedAt),
+        bot: false,
+      })),
+      // A registered owner present in Discord but outside the FC, and a bot.
+      {
+        id: outsider,
+        guildId: guild,
+        joinedAt: new Date("2021-01-01T00:00:00Z"),
+        nickname: null,
+        roles: [],
+        bot: false,
+      },
+      {
+        id: "999999999999999901",
+        guildId: guild,
+        joinedAt: new Date("2021-01-01T00:00:00Z"),
+        nickname: null,
+        roles: [],
+        bot: true,
+      },
+    ];
+    const counts = async () =>
+      (
+        await db.query<{ grants: bigint; audits: bigint; users: bigint }>(
+          "SELECT (SELECT count(*) FROM guest_grants) AS grants,(SELECT count(*) FROM audit) AS audits,(SELECT count(*) FROM guild_users) AS users",
+        )
+      )[0];
+    const before = await counts();
+    expect(await pendingDepartures(db.orm, currentGuild)).toEqual({ count: 0, sample: [] });
+    const first = await planGrandfathering(db.orm, currentGuild, views, 21600, new Date());
+    // A later enumeration of the same members, in another order, with changed nicknames and the
+    // planned outsider now holding Guest, reproduces the checksum (C8).
+    const second = await planGrandfathering(
+      db.orm,
+      currentGuild,
+      views
+        .map((view) => ({
+          ...view,
+          nickname: "Renamed",
+          roles:
+            view.id === outsider ? [...view.roles, currentGuild.guest_role_id ?? ""] : view.roles,
+        }))
+        .reverse(),
+      21600,
+      new Date(Date.now() + 60_000),
+    );
+    expect(second.checksum).toBe(first.checksum);
+    expect(second.candidates.find((row) => row.userId === outsider)?.heldGuest).toBe(true);
+    expect(first).toMatchObject({
+      importFingerprint: source.fingerprint,
+      humans: 3,
+      bots: 1,
+      grants: [outsider],
+    });
+    expect(first.rosterSnapshotId).toEqual(expect.any(String));
+    const report = grandfatherReport({ state: "pending", plan: first, completedAt: null });
+    expect(report).toMatchObject({
+      memberEligible: 1,
+      planned: { count: 1, sample: [outsider] },
+      plannedDetail: { registeredVisitors: { count: 1, sample: [outsider] } },
+      skipped: {
+        existingGrant: {
+          count: 1,
+          sample: ["987654321012345678"],
+          byProvenance: { imported_guest: 1 },
+        },
+        revoked: { count: 0 },
+      },
+    });
+    expect(await counts()).toEqual(before);
   });
   test("local loss overrides uncertain new links; imported nickname opt-in respects manual overrides", async () => {
     const identity = {
@@ -793,6 +984,126 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await db.query("DROP FUNCTION reject_test_import()");
     }
   });
+  test("imported guilds keep notification channels but open no guest applications", async () => {
+    // A copy with no FC, characters or source users cannot disturb shared counts, metrics or
+    // roster dedupe. 777777777777777777 is already another test's second guild.
+    const closedGuild = "555555555555555555";
+    const copy = structuredClone(source);
+    copy.fingerprint = "closed-applications-test";
+    copy.companies = [];
+    copy.characters = [];
+    copy.users = [];
+    const first = copy.guilds[0];
+    if (!first?.guest_role_id || !first.guest_application_channel_id)
+      throw new Error("The fixture guild needs a guest role and a legacy review channel");
+    copy.guilds = [{ ...first, guild_id: closedGuild, fc: null }];
+    const visitor = { id: "555555555555555001", joinedAt: "2026-01-01T00:00:00Z" };
+    members.set(visitor.id, {
+      id: visitor.id,
+      guildId: closedGuild,
+      joinedAt: new Date(visitor.joinedAt),
+      nickname: null,
+      roles: [],
+      bot: false,
+    });
+    const capture: Snapshot = {
+      capturedAt: new Date().toISOString(),
+      guilds: [
+        {
+          id: closedGuild,
+          complete: true,
+          expectedCount: 1,
+          enumeratedCount: 1,
+          members: [{ id: visitor.id, roles: [], nickname: null, joinedAt: visitor.joinedAt }],
+        },
+      ],
+    };
+    const closed = { state: "closed", legacyChannelId: first.guest_application_channel_id };
+    expect(await importLegacy(db, copy, capture, mappings(copy))).toMatchObject({
+      status: "imported",
+      report: { guildSettings: [{ guildId: closedGuild, guestApplications: closed }] },
+    });
+    // Ledger and roster notices keep their legacy destinations; only the review channel is closed.
+    const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closedGuild));
+    expect(row).toMatchObject({
+      guest_application_channel_id: null,
+      ledger_channel_id: first.ledger_channel_id,
+      officer_notifications_channel_id: first.officer_notifications_channel_id,
+      effects_enabled: false,
+      role_layout_enabled: false,
+      guest_grandfather: "pending",
+    });
+    const [imported] = await db.orm
+      .select({ details: t.auditEvents.details })
+      .from(t.auditEvents)
+      .where(
+        and(eq(t.auditEvents.guild_id, closedGuild), eq(t.auditEvents.action, "migration.import")),
+      );
+    expect(imported?.details).toMatchObject({ guestApplications: closed });
+    // The real /apply module refuses before the form opens, using one read of this database.
+    const interactions = interactionFixture();
+    interactions.member.guildId = closedGuild;
+    interactions.member.userId = visitor.id;
+    const router = new InteractionRouter(
+      {
+        client: interactions.client,
+        services: new Services().provide(applicationKey, service),
+        allowsGuild: (id) => id === closedGuild,
+        isStopping: () => false,
+        report: () => {},
+        resolveActor: async () => {
+          throw new Error("The pre-form check must not fetch an actor");
+        },
+      },
+      new Map([[applyCommand.name, applyCommand]]),
+      new Map(),
+    );
+    try {
+      await router.handle(interactions.slash());
+      expect(interactions.requests.at(-1)?.body).toMatchObject({
+        type: InteractionResponseType.ChannelMessageWithSource,
+        data: { content: GUEST_APPLICATIONS_CLOSED, flags: MessageFlags.Ephemeral },
+      });
+      // A form opened earlier, or a forged submission, is refused again at submission.
+      const applicant: Actor = {
+        guildId: closedGuild,
+        userId: visitor.id,
+        officer: false,
+        manageRoles: false,
+      };
+      await expect(
+        service.apply(applicant, await applicationInput(applicant)),
+      ).rejects.toMatchObject({ code: "setup", message: GUEST_APPLICATIONS_CLOSED });
+      const applications = () =>
+        db.orm
+          .select()
+          .from(t.guestApplications)
+          .where(eq(t.guestApplications.guild_id, closedGuild));
+      expect(await applications()).toHaveLength(0);
+      // An explicit, audited /config choice opens applications; the form then opens and a
+      // submission queues its officer review.
+      await service.configure(
+        { ...actor, guildId: closedGuild },
+        "guest_application_channel_id",
+        "81003",
+      );
+      await router.handle(interactions.slash());
+      expect(interactions.requests.at(-1)?.body).toMatchObject({
+        type: InteractionResponseType.Modal,
+      });
+      const application = await service.apply(applicant, await applicationInput(applicant));
+      expect(application).toMatchObject({ state: "pending", channel_id: "81003" });
+      expect(await applications()).toHaveLength(1);
+      expect(
+        await db.orm
+          .select({ kind: t.jobs.kind })
+          .from(t.jobs)
+          .where(eq(t.jobs.dedupe_key, `review:${application.id}`)),
+      ).toEqual([{ kind: "guest.review" }]);
+    } finally {
+      await interactions.close();
+    }
+  });
   test("expired job ownership is fenced and committed work can resume", async () => {
     // The old worker runs after recovery deliberately; its lease token must no longer authorize writes.
     await db.query("UPDATE jobs SET status='disabled'");
@@ -957,12 +1268,25 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       .parse(await service.syncStatus(requestor, requested.runId));
     expect(status.runs[0]?.status).toBe("queued");
     expect(status.runs[0]?.work_total).toBeGreaterThan(1);
-    expect(
-      await db.query(
+    const attachedLayout = () =>
+      db.query(
         "SELECT j.id FROM jobs j JOIN sync_run_jobs r ON r.job_id=j.id WHERE r.run_id=$1 AND j.kind='roles.layout'",
         [requested.runId],
-      ),
-    ).toHaveLength(1);
+      );
+    // The imported guild launches with its role layout off, so a refresh attaches no layout pass.
+    expect(await attachedLayout()).toHaveLength(0);
+    // Once the switch is on, the next guild pass attaches the coalesced layout job to the run.
+    // The switch is restored afterwards because later scenarios share the imported guild.
+    await db.orm.update(t.guilds).set({ role_layout_enabled: true }).where(eq(t.guilds.id, guild));
+    try {
+      await sync.guild(guild, run.job_id);
+      expect(await attachedLayout()).toHaveLength(1);
+    } finally {
+      await db.orm
+        .update(t.guilds)
+        .set({ role_layout_enabled: false })
+        .where(eq(t.guilds.id, guild));
+    }
     const other = z
       .object({ runs: z.array(z.unknown()) })
       .parse(await service.syncStatus({ ...requestor, userId: "90008" }, requested.runId));
@@ -1127,13 +1451,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const setupGuild = "666666666666666666";
     const manager: Actor = { ...actor, guildId: setupGuild, serverManager: true };
     const created = new Map<string, string>();
+    const hoists: boolean[] = [];
     let serial = 60000;
     const provisioner: RoleProvisioner = {
       ...discord,
       async members() {
         return [];
       },
-      async ensureRole(_guild, name, _actor, configured) {
+      async ensureRole(_guild, name, _actor, configured, _canonical, hoist) {
+        // Record the layout switch each provisioning call receives.
+        hoists.push(hoist);
         if (configured) return { id: configured, created: false };
         const existing = created.get(name);
         if (existing) return { id: existing, created: false };
@@ -1146,9 +1473,21 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await expect(
       administration.setup({ ...manager, serverManager: false }, "DevBot", fc, "Officer"),
     ).rejects.toThrow("Manage Server");
-    await administration.setup(manager, "DevBot", fc, "Officer");
+    const first = z
+      .object({ roleLayout: z.string() })
+      .parse(await administration.setup(manager, "DevBot", fc, "Officer"));
     const configured = await service.guild(manager);
     expect(configured.access_policy_enabled).toBe(true);
+    // A guild first created by /setup takes the column default: layout on, roles created hoisted.
+    expect(configured.role_layout_enabled).toBe(true);
+    expect(first.roleLayout).toStartWith("FC Leader > Officer > Member > Guest");
+    expect(hoists).toEqual([true, true, true, true]);
+    expect(
+      await db.orm
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.guild_id, setupGuild), eq(t.jobs.kind, "roles.layout"))),
+    ).toHaveLength(1);
     expect(configured.officer_notifications_channel_id).toBe(configured.officer_channel_id);
     expect(configured.guest_application_channel_id).toBe(configured.officer_channel_id);
     await administration.setup(manager, "DevBot", null, null);
@@ -1361,8 +1700,507 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(calls).toBe(2);
   });
 
-  /** A pre-existing guild captures its original public/private areas before enabling the opt-in policy. */
-  async function accessFixture(guildId: string, fcId: string | null = null) {
+  test("disabled role layout completes as skipped before activation, after requeue and after a mid-pass disable", async () => {
+    // Decision 4: with the switch off no pass reaches Discord, yet the job completes instead of
+    // parking as `disabled`, so activation or a /config change has nothing to requeue.
+    const layoutGuild = "666666666666666690";
+    await db.query(
+      "INSERT INTO guilds(id,effects_enabled,role_layout_enabled,member_role_id,guest_role_id,officer_role_id,leader_role_id) VALUES($1,false,false,'72001','72002','72003','72004')",
+      [layoutGuild],
+    );
+    let writes = 0;
+    let disableMidPass = false;
+    const layoutPort: DiscordPort = {
+      ...discord,
+      async layoutRoles(guildId, priority, guard) {
+        // An operator switching layout off mid-pass, without a revision bump, fences the next write.
+        if (disableMidPass)
+          await db.orm
+            .update(t.guilds)
+            .set({ role_layout_enabled: false })
+            .where(eq(t.guilds.id, guildId));
+        await guard();
+        writes++;
+        return { order: [...priority] };
+      },
+    };
+    const app = new Service(db, layoutPort, nodestone, config);
+    const run = dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort));
+    const queue = new Queue(db, run, () => {});
+    const outcome = async (id: string) =>
+      (
+        await db.orm
+          .select({ status: t.jobs.status, result: t.jobs.result })
+          .from(t.jobs)
+          .where(eq(t.jobs.id, id))
+      )[0];
+    const skipped = { status: "succeeded", result: { skipped: "layout disabled" } };
+    // 1. Before activation: the switch is checked before effects, so this is no `disabled` park.
+    const before = await layoutGuildRoles(db.pool, layoutGuild);
+    expect(await run(await leased(before), async () => {})).toEqual({ skipped: "layout disabled" });
+    await queue.perform(await leased(before));
+    expect(await outcome(before)).toEqual(skipped);
+    // 2. A job parked `disabled` by an older build, requeued exactly as scripts/activate.ts does.
+    const parked = await layoutGuildRoles(db.pool, layoutGuild);
+    await db.query("UPDATE jobs SET status='disabled' WHERE id=$1", [parked]);
+    await db.transaction(async (client) => {
+      const store = orm(client);
+      await store
+        .update(t.guilds)
+        .set({ effects_enabled: true, revision: sql`${t.guilds.revision}+1` })
+        .where(eq(t.guilds.id, layoutGuild));
+      await store
+        .update(t.jobs)
+        .set({ status: "queued", due_at: sql`now()`, attempts: 0 })
+        .where(
+          and(eq(t.jobs.guild_id, layoutGuild), inArray(t.jobs.status, ["disabled", "blocked"])),
+        );
+    });
+    await queue.perform(await leased(parked));
+    expect(await outcome(parked)).toEqual(skipped);
+    expect(writes).toBe(0);
+    // 3. Opting in lets the next pass write once.
+    await db.orm
+      .update(t.guilds)
+      .set({ role_layout_enabled: true })
+      .where(eq(t.guilds.id, layoutGuild));
+    const enabled = await layoutGuildRoles(db.pool, layoutGuild);
+    await queue.perform(await leased(enabled));
+    expect(await outcome(enabled)).toEqual({
+      status: "succeeded",
+      result: { order: ["72004", "72003", "72001", "72002"] },
+    });
+    expect(writes).toBe(1);
+    // 4. Disabling mid-pass supersedes the pass before its write; the retry completes skipped.
+    disableMidPass = true;
+    const fenced = await layoutGuildRoles(db.pool, layoutGuild);
+    await expect(run(await leased(fenced), async () => {})).rejects.toMatchObject({
+      code: "superseded",
+    });
+    expect(writes).toBe(1);
+    disableMidPass = false;
+    await queue.perform(await leased(fenced));
+    expect(await outcome(fenced)).toEqual(skipped);
+    expect(writes).toBe(1);
+  });
+
+  test("/config role_layout requires server-manager authority, audits, fences revisions and queues layout only when enabling", async () => {
+    const layoutGuild = "666666666666666691";
+    await db.orm.insert(t.guilds).values({
+      id: layoutGuild,
+      effects_enabled: true,
+      role_layout_enabled: false,
+      member_role_id: "73001",
+      guest_role_id: "73002",
+      officer_role_id: "73003",
+      leader_role_id: "73004",
+    });
+    // The enabling preflight repeats AUTH-03 per managed role; one role can be made unmanageable.
+    const checked: string[] = [];
+    let unmanageable: string | null = null;
+    const port: DiscordPort = {
+      ...discord,
+      async validateRole(_guild, role, actorId) {
+        checked.push(`${role}:${actorId}`);
+        if (role === unmanageable)
+          throw new Failure("forbidden", "Your highest role must be above the selected role.");
+      },
+    };
+    const app = new Service(db, port, nodestone, config);
+    const manager: Actor = { ...actor, guildId: layoutGuild, serverManager: true };
+    const state = async () =>
+      (
+        await db.orm
+          .select({ revision: t.guilds.revision, layout: t.guilds.role_layout_enabled })
+          .from(t.guilds)
+          .where(eq(t.guilds.id, layoutGuild))
+      )[0];
+    const audits = () =>
+      db.orm
+        .select({ actor: t.auditEvents.actor_id, details: t.auditEvents.details })
+        .from(t.auditEvents)
+        .where(
+          and(
+            eq(t.auditEvents.guild_id, layoutGuild),
+            eq(t.auditEvents.action, "config.role_layout"),
+          ),
+        )
+        .orderBy(t.auditEvents.id);
+    const layoutJobs = () =>
+      db.orm
+        .select({ id: t.jobs.id, status: t.jobs.status })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.guild_id, layoutGuild), eq(t.jobs.kind, "roles.layout")));
+    // Officer-only actors and managers without Manage Roles cannot change presentation.
+    await expect(
+      app.configureRoleLayout({ ...manager, serverManager: false }, true),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      app.configureRoleLayout({ ...manager, manageRoles: false }, true),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    unmanageable = "73003";
+    await expect(app.configureRoleLayout(manager, true)).rejects.toMatchObject({
+      code: "forbidden",
+    });
+    expect(await state()).toEqual({ revision: 1n, layout: false });
+    expect(await audits()).toEqual([]);
+    unmanageable = null;
+    checked.length = 0;
+    const enabled = z
+      .object({ status: z.string(), roleLayout: z.string(), layoutJob: z.string() })
+      .parse(await app.configureRoleLayout(manager, true));
+    expect(enabled).toMatchObject({ status: "saved", roleLayout: "enabled" });
+    expect(checked).toEqual(
+      ["73004", "73003", "73001", "73002"].map((r) => `${r}:${actor.userId}`),
+    );
+    expect(await state()).toEqual({ revision: 2n, layout: true });
+    expect(await audits()).toEqual([
+      { actor: actor.userId, details: { enabled: true, previous: false } },
+    ]);
+    expect(await layoutJobs()).toEqual([{ id: enabled.layoutJob, status: "queued" }]);
+    // Repeating the choice changes nothing: no revision bump, no audit, no new work.
+    expect(await app.configureRoleLayout(manager, true)).toEqual({
+      status: "unchanged",
+      roleLayout: "enabled",
+    });
+    expect(await state()).toEqual({ revision: 2n, layout: true });
+    expect(await audits()).toHaveLength(1);
+    // Disabling needs no hierarchy preflight and queues nothing; the queued pass will skip.
+    checked.length = 0;
+    expect(await app.configureRoleLayout(manager, false)).toMatchObject({
+      status: "saved",
+      roleLayout: "disabled",
+      effects: "none",
+      layoutJob: null,
+    });
+    expect(checked).toEqual([]);
+    expect(await state()).toEqual({ revision: 3n, layout: false });
+    expect((await audits()).at(-1)).toEqual({
+      actor: actor.userId,
+      details: { enabled: false, previous: true },
+    });
+    expect(await layoutJobs()).toEqual([{ id: enabled.layoutJob, status: "queued" }]);
+    const run = dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort));
+    expect(await run(await leased(enabled.layoutJob), async () => {})).toEqual({
+      skipped: "layout disabled",
+    });
+    expect(await app.validate(manager)).toMatchObject({
+      configuration: { role_layout_enabled: false },
+      roleLayout: "disabled (role display and order are not changed by the bot)",
+    });
+    // The setting never creates configuration for an unconfigured guild.
+    await expect(
+      app.configureRoleLayout({ ...manager, guildId: "666666666666666699" }, true),
+    ).rejects.toMatchObject({ code: "setup" });
+    expect(await db.query("SELECT id FROM guilds WHERE id='666666666666666699'")).toHaveLength(0);
+  });
+
+  test("layout-disabled guilds enqueue no layout work until the switch is enabled", async () => {
+    const fixture = await accessFixture("666666666666666692");
+    const guildId = fixture.guild.id;
+    await db.orm
+      .update(t.guilds)
+      .set({ role_layout_enabled: false })
+      .where(eq(t.guilds.id, guildId));
+    const events = new GuildEvents(db);
+    const jobsOf = (kind: string) =>
+      db.orm
+        .select({ id: t.jobs.id, key: t.jobs.dedupe_key, generation: t.jobs.generation })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.guild_id, guildId), eq(t.jobs.kind, kind)));
+    // A refresh run, with a member-less enumeration so only guild-wide children are attached.
+    const parent = await enqueue(db.pool, "reconcile.guild", `guild:${guildId}`, {}, guildId);
+    const [runRow] = await db.orm
+      .insert(t.syncRuns)
+      .values({ guild_id: guildId, requester_id: actor.userId, job_id: parent })
+      .returning();
+    if (!runRow) throw new Error("Missing refresh run");
+    await db.orm.insert(t.syncRunJobs).values({ run_id: runRow.id, job_id: parent });
+    const app = new Service(
+      db,
+      {
+        ...discord,
+        async members() {
+          return [];
+        },
+      },
+      nodestone,
+      config,
+    );
+    const refresh = new Synchronization(app);
+    const children = async () =>
+      (
+        await db.orm
+          .select({ kind: t.jobs.kind })
+          .from(t.syncRunJobs)
+          .innerJoin(t.jobs, eq(t.jobs.id, t.syncRunJobs.job_id))
+          .where(eq(t.syncRunJobs.run_id, runRow.id))
+      )
+        .map((row) => row.kind)
+        .sort();
+    // Every enqueue path: rejoin, role events, a role binding and a refresh pass.
+    const everyPath = async (guestRole: string) => {
+      await events.guildJoined(guildId);
+      await events.roleChanged(guildId);
+      await service.configure(fixture.manager, "guest_role_id", guestRole);
+      await refresh.guild(guildId, parent);
+    };
+    await everyPath("81902");
+    expect(await jobsOf("roles.layout")).toEqual([]);
+    // Reconciliation and channel work are unchanged, each coalesced into one job.
+    expect(await jobsOf("reconcile.guild")).toHaveLength(1);
+    expect(await jobsOf("channels.access")).toHaveLength(1);
+    expect(await children()).toEqual(["channels.access", "reconcile.guild"]);
+    // After enabling, every path feeds the single coalesced role-layout:<guild> job.
+    const enabled = z
+      .object({ layoutJob: z.string() })
+      .parse(await service.configureRoleLayout(fixture.manager, true));
+    await everyPath("81903");
+    expect(await jobsOf("roles.layout")).toEqual([
+      { id: enabled.layoutJob, key: `role-layout:${guildId}`, generation: 5 },
+    ]);
+    expect(await children()).toEqual(["channels.access", "reconcile.guild", "roles.layout"]);
+  });
+
+  test("setup keeps a layout-disabled guild's display: created roles are not hoisted and no layout is queued", async () => {
+    // An imported (layout-off) guild that later runs /setup keeps its switch and role display.
+    const setupGuild = "666666666666666693";
+    await db.orm
+      .insert(t.guilds)
+      .values({ id: setupGuild, effects_enabled: true, role_layout_enabled: false });
+    const hoists: boolean[] = [];
+    let serial = 74000;
+    const provisioner: RoleProvisioner = {
+      ...discord,
+      async members() {
+        return [];
+      },
+      async ensureRole(_guild, _name, _actor, _configured, _canonical, hoist) {
+        hoists.push(hoist);
+        return { id: String(++serial), created: true };
+      },
+    };
+    const administration = new RoleAdministration(service, provisioner, access);
+    const manager: Actor = { ...actor, guildId: setupGuild, serverManager: true };
+    const result = z
+      .object({ roleLayout: z.string() })
+      .parse(await administration.setup(manager, "Imported", null, null));
+    expect(result.roleLayout).toStartWith("disabled");
+    expect(hoists).toEqual([false, false, false, false]);
+    const configured = await service.guild(manager);
+    expect(configured).toMatchObject({ role_layout_enabled: false, access_policy_enabled: true });
+    const kinds = await db.orm
+      .select({ kind: t.jobs.kind })
+      .from(t.jobs)
+      .where(eq(t.jobs.guild_id, setupGuild));
+    expect(kinds.map((row) => row.kind).sort()).toEqual(["channels.access", "reconcile.guild"]);
+  });
+
+  test("/config roles officer adopts current holders by default and nobody with adopt_holders:false", async () => {
+    // Owner decision O1: a rank-based launch binds the legacy Officer role without adopting holders.
+    const adopting = "666666666666666694";
+    const skipping = "666666666666666695";
+    const officerRole = "75003";
+    let enumerations = 0;
+    const holder = (id: string, roles: string[], bot = false): MemberView => ({
+      id,
+      guildId: "",
+      joinedAt: new Date("2026-01-01T00:00:00Z"),
+      nickname: null,
+      roles,
+      bot,
+    });
+    const port: DiscordPort = {
+      ...discord,
+      async members(guildId) {
+        enumerations++;
+        return [
+          holder("75101", [officerRole]),
+          holder("75102", [officerRole, "75001"]),
+          holder("75103", [officerRole], true),
+          holder("75104", ["75001"]),
+        ].map((member) => ({ ...member, guildId }));
+      },
+    };
+    const app = new Service(db, port, nodestone, config);
+    for (const id of [adopting, skipping])
+      await db.orm.insert(t.guilds).values({ id, effects_enabled: true });
+    const overrides = (guildId: string) =>
+      db.orm
+        .select({ user: t.officerOverrides.user_id, state: t.officerOverrides.state })
+        .from(t.officerOverrides)
+        .where(eq(t.officerOverrides.guild_id, guildId))
+        .orderBy(t.officerOverrides.user_id);
+    const audits = (guildId: string) =>
+      db.orm
+        .select({
+          action: t.auditEvents.action,
+          target: t.auditEvents.target,
+          details: t.auditEvents.details,
+        })
+        .from(t.auditEvents)
+        .where(eq(t.auditEvents.guild_id, guildId))
+        .orderBy(t.auditEvents.id);
+    const adopter: Actor = { ...actor, guildId: adopting, serverManager: true };
+    const skipper: Actor = { ...actor, guildId: skipping, serverManager: true };
+    // Manager authority is unchanged: binding the Officer role still needs Manage Server.
+    await expect(
+      app.configure({ ...skipper, serverManager: false }, "officer_role_id", officerRole, {
+        adoptHolders: false,
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    // The option belongs to an Officer role binding only.
+    await expect(
+      app.configure(skipper, "guest_role_id", "75002", { adoptHolders: false }),
+    ).rejects.toMatchObject({ code: "input" });
+    await expect(
+      app.configure(skipper, "officer_role_id", null, { adoptHolders: true }),
+    ).rejects.toMatchObject({ code: "input" });
+    // Default (true): every current human holder gets an audited manual officer grant.
+    expect(await app.configure(adopter, "officer_role_id", officerRole)).toEqual({
+      status: "saved",
+      effects: "queued",
+      officerHolders: { adopt: true, adopted: 2 },
+    });
+    expect(enumerations).toBe(1);
+    expect(await overrides(adopting)).toEqual([
+      { user: "75101", state: "granted" },
+      { user: "75102", state: "granted" },
+    ]);
+    expect(await audits(adopting)).toEqual([
+      {
+        action: "config",
+        target: "officer_role_id",
+        details: { value: officerRole, adoptHolders: true, adopted: 2 },
+      },
+      { action: "officer.adopt", target: "75101", details: { roleId: officerRole } },
+      { action: "officer.adopt", target: "75102", details: { roleId: officerRole } },
+    ]);
+    expect((await rankAccess(db, await app.guild(adopter), "75101", 21600)).manualOfficer).toBe(
+      true,
+    );
+    // adopt_holders:false: holders are not even enumerated and nobody gains officer access.
+    expect(
+      await app.configure(skipper, "officer_role_id", officerRole, { adoptHolders: false }),
+    ).toMatchObject({ status: "saved", officerHolders: { adopt: false, adopted: 0 } });
+    expect(enumerations).toBe(1);
+    expect(await overrides(skipping)).toEqual([]);
+    expect(await audits(skipping)).toEqual([
+      {
+        action: "config",
+        target: "officer_role_id",
+        details: { value: officerRole, adoptHolders: false, adopted: 0 },
+      },
+    ]);
+    expect((await rankAccess(db, await app.guild(skipper), "75101", 21600)).manualOfficer).toBe(
+      false,
+    );
+    // Other role bindings keep their original audit shape.
+    await app.configure(skipper, "guest_role_id", "75002");
+    expect((await audits(skipping)).at(-1)).toEqual({
+      action: "config",
+      target: "guest_role_id",
+      details: { value: "75002" },
+    });
+  });
+
+  test("an officer exception granted before the Officer role is bound keeps it through adopt_holders:false", async () => {
+    // Production W15 order: record the owner-approved exceptions, then bind the legacy role without
+    // adopting holders. The binding's repair pass must not strip the role from an exception.
+    const guildId = "666666666666666696";
+    const officerRole = "75203";
+    const [exception, holder] = ["75201", "75202"];
+    for (const id of [exception, holder])
+      members.set(id, {
+        id,
+        guildId,
+        joinedAt: new Date("2026-01-01T00:00:00Z"),
+        nickname: null,
+        roles: [officerRole],
+        bot: false,
+      });
+    await db.orm.insert(t.guilds).values({ id: guildId, effects_enabled: true });
+    const manager: Actor = { ...actor, guildId, serverManager: true };
+    const provisioner: RoleProvisioner = {
+      ...discord,
+      async ensureRole() {
+        throw new Error("No role is provisioned by an officer grant.");
+      },
+    };
+    const administration = new RoleAdministration(service, provisioner, access);
+    // Manager authority is unchanged even though no role is bound yet.
+    await expect(
+      administration.officer({ ...manager, serverManager: false }, exception, true, "Exception"),
+    ).rejects.toThrow("Manage Server");
+    // No role is bound, so the grant is only recorded; there is nothing to apply yet.
+    expect(
+      await administration.officer(manager, exception, true, "Owner-approved exception"),
+    ).toEqual({ status: "granted", effects: "recorded" });
+    const before = await service.guild(manager);
+    expect(before.officer_role_id).toBeNull();
+    // Without a bound role the override confers no authority (Service.enrichActor).
+    expect(
+      (
+        await service.enrichActor({
+          guildId,
+          userId: exception,
+          officer: false,
+          serverManager: false,
+          manageRoles: false,
+          roleIds: [officerRole],
+        })
+      ).officer,
+    ).toBe(false);
+    // Nothing to reconcile yet: an unbound role is skipped, so the holder keeps the Discord role.
+    expect(await reconcileIn(guildId, exception, true)).toMatchObject({ add: [], remove: [] });
+
+    expect(
+      await service.configure(manager, "officer_role_id", officerRole, { adoptHolders: false }),
+    ).toMatchObject({ status: "saved", officerHolders: { adopt: false, adopted: 0 } });
+    // The recorded grant survives the binding, and only it: nobody was adopted.
+    expect(
+      await db.orm
+        .select({ user: t.officerOverrides.user_id, state: t.officerOverrides.state })
+        .from(t.officerOverrides)
+        .where(eq(t.officerOverrides.guild_id, guildId)),
+    ).toEqual([{ user: exception, state: "granted" }]);
+    const bound = await service.guild(manager);
+    const granted = await rankAccess(db, bound, exception, 21600);
+    expect(granted).toMatchObject({ officer: "yes", manualOfficer: true });
+    expect(desiredRankRole(granted.officer, true, granted.fresh, granted.manualOfficer)).toBe(true);
+    // The repair pass keeps the exception's role and removes it only from a holder with neither
+    // the mapped rank nor a grant.
+    expect(await reconcileIn(guildId, exception, true)).toMatchObject({ add: [], remove: [] });
+    expect(await reconcileIn(guildId, holder, true)).toMatchObject({
+      add: [],
+      remove: [officerRole],
+    });
+    // Once bound, the exception holds bot-officer authority through the role.
+    expect(
+      (
+        await service.enrichActor({
+          guildId,
+          userId: exception,
+          officer: false,
+          serverManager: false,
+          manageRoles: false,
+          roleIds: [officerRole],
+        })
+      ).officer,
+    ).toBe(true);
+    // A later grant against the bound role is queued as before.
+    expect(await administration.officer(manager, holder, true, "Second exception")).toEqual({
+      status: "granted",
+      effects: "queued",
+    });
+  });
+
+  /**
+   * A pre-existing guild captures its original public/private areas before enabling the opt-in
+   * channel policy. `onboarding=false` models a /config-only or imported guild: the same roles and
+   * review channel, but no lobby/staff rooms, no @everyone baseline and no channel snapshots.
+   */
+  async function accessFixture(guildId: string, fcId: string | null = null, onboarding = true) {
     const port = new FakeGuildAccess();
     const remote = port.state(guildId);
     const room = (
@@ -1393,21 +2231,24 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ];
     const policy = new GuildAccess(service, port);
     await db.transaction(async (client) => {
-      await orm(client).insert(t.guilds).values({
-        id: guildId,
-        fc_id: fcId,
-        effects_enabled: true,
-        member_role_id: "81101",
-        guest_role_id: "81102",
-        officer_role_id: "81103",
-        leader_role_id: "81104",
-        lobby_channel_id: "81001",
-        officer_channel_id: "81002",
-        access_policy_enabled: true,
-        access_everyone_before: remote.everyonePermissions,
-        guest_application_channel_id: "81002",
-      });
-      await policy.remember(client, guildId, structuredClone(remote), "81001", "81002", false);
+      await orm(client)
+        .insert(t.guilds)
+        .values({
+          id: guildId,
+          fc_id: fcId,
+          effects_enabled: true,
+          member_role_id: "81101",
+          guest_role_id: "81102",
+          officer_role_id: "81103",
+          leader_role_id: "81104",
+          lobby_channel_id: onboarding ? "81001" : null,
+          officer_channel_id: onboarding ? "81002" : null,
+          access_policy_enabled: onboarding,
+          access_everyone_before: onboarding ? remote.everyonePermissions : null,
+          guest_application_channel_id: "81002",
+        });
+      if (onboarding)
+        await policy.remember(client, guildId, structuredClone(remote), "81001", "81002", false);
     });
     const manager = { ...actor, guildId, serverManager: true };
     return { port, remote, policy, manager, guild: await service.guild(manager) };
@@ -1804,21 +2645,31 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     }
   });
 
-  test("verified visitors get derived Guest access while revocation, FC membership, staleness and unlink remain authoritative", async () => {
-    const fixture = await accessFixture("666666666666666674", fc);
+  /**
+   * Registered-visitor Guest is computed identically with lobby onboarding enabled or disabled
+   * (ROLE-07, ACCESS-04); each pass uses its own guild, users and characters.
+   */
+  const verifiedVisitorScenario = async (pass: {
+    onboarding: boolean;
+    guild: string;
+    users: readonly [string, string];
+    characters: readonly [string, string];
+  }) => {
+    const [firstUser, secondUser] = pass.users;
+    const fixture = await accessFixture(pass.guild, fc, pass.onboarding);
     await db.orm
       .update(t.freeCompanies)
       .set({ last_successful_roster_at: sql`now()` })
       .where(eq(t.freeCompanies.id, fc));
     const visitor = {
-      id: "77777200",
+      id: pass.characters[0],
       name: "Verified Visitor",
       world: "Diabolos",
       dc: "Crystal",
       fcId: fc,
     };
-    await service.assign(fixture.manager, "94001", visitor, "Trusted visitor");
-    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(false);
+    await service.assign(fixture.manager, firstUser, visitor, "Trusted visitor");
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, firstUser)).toBe(false);
     const reconcile = async (user: string) =>
       sync.user(
         await leased(
@@ -1833,36 +2684,38 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         ),
         async () => {},
       );
-    await reconcile("94001");
-    expect(members.get("94001")?.roles).toContain(fixture.guild.guest_role_id ?? "");
-    expect(members.get("94001")?.roles).not.toContain(fixture.guild.member_role_id ?? "");
-    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(true);
+    await reconcile(firstUser);
+    expect(members.get(firstUser)?.roles).toContain(fixture.guild.guest_role_id ?? "");
+    expect(members.get(firstUser)?.roles).not.toContain(fixture.guild.member_role_id ?? "");
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, firstUser)).toBe(true);
     expect(
       await db.orm
         .select()
         .from(t.guestGrants)
         .where(
-          and(eq(t.guestGrants.guild_id, fixture.guild.id), eq(t.guestGrants.user_id, "94001")),
+          and(eq(t.guestGrants.guild_id, fixture.guild.id), eq(t.guestGrants.user_id, firstUser)),
         ),
     ).toEqual([]);
     await expect(
       service.apply(
-        { ...fixture.manager, userId: "94001", officer: false, serverManager: false },
-        await applicationInput({ ...fixture.manager, userId: "94001" }),
+        { ...fixture.manager, userId: firstUser, officer: false, serverManager: false },
+        await applicationInput({ ...fixture.manager, userId: firstUser }),
       ),
     ).rejects.toMatchObject({ code: "eligible" });
-    await service.guestAction(fixture.manager, "94001", true, "Explicit revoke", randomUUID());
-    await reconcile("94001");
-    expect(members.get("94001")?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+    await service.guestAction(fixture.manager, firstUser, true, "Explicit revoke", randomUUID());
+    await reconcile(firstUser);
+    expect(members.get(firstUser)?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
     const events = new GuildEvents(db);
-    await events.memberLeft(fixture.guild.id, "94001");
-    const rejoined = members.get("94001");
+    await events.memberLeft(fixture.guild.id, firstUser);
+    const rejoined = members.get(firstUser);
     if (!rejoined) throw new Error("Missing rejoining visitor");
     rejoined.joinedAt = new Date();
-    await events.memberJoined(fixture.guild.id, "94001", rejoined.joinedAt);
+    await events.memberJoined(fixture.guild.id, firstUser, rejoined.joinedAt);
     const restarted = new Service(db, discord, nodestone, config);
-    expect(await restarted.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(false);
-    await reconcile("94001");
+    expect(await restarted.registrationGuestEligible(db.pool, fixture.guild, firstUser)).toBe(
+      false,
+    );
+    await reconcile(firstUser);
     expect(rejoined.roles).not.toContain(fixture.guild.guest_role_id ?? "");
     // Positive accepted roster evidence grants Member even though the independent Guest revoke persists.
     const [positive] = await db.orm
@@ -1889,40 +2742,121 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           eq(t.membership.fc_id, fc),
         ),
       );
-    await reconcile("94001");
-    expect(members.get("94001")?.roles).toContain(fixture.guild.member_role_id ?? "");
-    expect(members.get("94001")?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
-    const second = { ...visitor, id: "77777201" };
-    await service.assign(fixture.manager, "94002", second, "Second visitor");
-    await reconcile("94002");
-    const current = members.get("94002");
+    await reconcile(firstUser);
+    expect(members.get(firstUser)?.roles).toContain(fixture.guild.member_role_id ?? "");
+    expect(members.get(firstUser)?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+    const second = { ...visitor, id: pass.characters[1] };
+    await service.assign(fixture.manager, secondUser, second, "Second visitor");
+    await reconcile(secondUser);
+    const current = members.get(secondUser);
     if (!current) throw new Error("Missing second visitor");
     expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
     await db.orm
       .update(t.freeCompanies)
       .set({ last_successful_roster_at: sql`now()-interval '7 hours'` })
       .where(eq(t.freeCompanies.id, fc));
-    await reconcile("94002");
+    await reconcile(secondUser);
     expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
     current.roles = [];
-    await reconcile("94002");
+    await reconcile(secondUser);
     expect(current.roles).toEqual([]);
     await db.orm
       .update(t.freeCompanies)
       .set({ last_successful_roster_at: sql`now()` })
       .where(eq(t.freeCompanies.id, fc));
-    await reconcile("94002");
+    await reconcile(secondUser);
     expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
     await service.unclaim(
-      { ...fixture.manager, userId: "94002", officer: false },
-      "94002",
+      { ...fixture.manager, userId: secondUser, officer: false },
+      secondUser,
       second.id,
     );
-    await reconcile("94002");
+    await reconcile(secondUser);
     expect(current.roles).not.toContain(fixture.guild.guest_role_id ?? "");
-  });
+  };
+  for (const pass of [
+    {
+      onboarding: true,
+      guild: "666666666666666674",
+      users: ["94001", "94002"],
+      characters: ["77777200", "77777201"],
+    },
+    {
+      onboarding: false,
+      guild: "666666666666666682",
+      users: ["94011", "94012"],
+      characters: ["77777210", "77777211"],
+    },
+  ] as const)
+    test(`verified visitors get derived Guest access while revocation, FC membership, staleness and unlink remain authoritative (onboarding ${pass.onboarding ? "enabled" : "disabled"})`, () =>
+      verifiedVisitorScenario(pass));
 
-  test("registered visitor access is opt-in, guild-scoped and works before linking an FC", async () => {
+  /** Run one leased user pass exactly as the worker would (or as a preview), without a queue loop. */
+  async function reconcileIn(guildId: string, user: string, preview = false) {
+    const work = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${guildId}:${user}`,
+      {},
+      guildId,
+      user,
+    );
+    return sync.user(await leased(work), async () => {}, preview);
+  }
+
+  /**
+   * Publish one accepted roster for an isolated FC through the real acquisition path. An explicit
+   * observation instant lets departure confirmation (two absences 60 s apart) run without waiting.
+   */
+  async function publishRoster(fcId: string, roster: Roster["members"], observedAt = new Date()) {
+    nodestone.rosterValue = {
+      company: {
+        id: fcId,
+        name: "Isolated FC",
+        tag: "ISO",
+        world: "Diabolos",
+        dc: "Crystal",
+        count: roster.length,
+      },
+      members: roster,
+      startedAt: new Date(observedAt.getTime() - 1000),
+      observedAt,
+      pages: 1,
+    };
+    await db.orm
+      .update(t.freeCompanies)
+      .set({ last_attempt_at: sql`now()-interval '61 seconds'` })
+      .where(eq(t.freeCompanies.id, fcId));
+    // The dedupe key coalesces with an early acquisition that seedFreshLink may already have queued.
+    const key = await enqueue(db.pool, "roster", `roster:${fcId}`, { fcId });
+    try {
+      await sync.roster(await leased(key), async () => {});
+    } finally {
+      await db.orm
+        .update(t.jobs)
+        .set({ status: "succeeded", lease_until: null })
+        .where(eq(t.jobs.id, key));
+    }
+    return key;
+  }
+
+  /** No onboarding means no channel-visibility work at all: no queued job and no snapshot rows. */
+  async function expectNoChannelWork(guildId: string) {
+    expect(
+      await db.orm
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.guild_id, guildId), eq(t.jobs.kind, "channels.access"))),
+    ).toEqual([]);
+    expect(
+      await db.orm
+        .select({ channel_id: t.channelAccessPolicies.channel_id })
+        .from(t.channelAccessPolicies)
+        .where(eq(t.channelAccessPolicies.guild_id, guildId)),
+    ).toEqual([]);
+  }
+
+  test("registered visitor access applies with onboarding disabled, is guild-scoped and works before linking an FC", async () => {
     const fixture = await accessFixture("666666666666666675");
     const character = {
       id: "77777202",
@@ -1933,26 +2867,993 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     };
     await service.assign(fixture.manager, "94003", character, "FC-less registration");
     expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94003")).toBe(true);
-    const work = await enqueue(
-      db.pool,
-      "reconcile.user",
-      `user:${fixture.guild.id}:94003`,
-      {},
-      fixture.guild.id,
-      "94003",
-    );
-    await sync.user(await leased(work), async () => {});
+    await reconcileIn(fixture.guild.id, "94003");
     expect(members.get("94003")?.roles).toContain(fixture.guild.guest_role_id ?? "");
     const other = await accessFixture("666666666666666676");
     expect(await service.registrationGuestEligible(db.pool, other.guild, "94003")).toBe(false);
+    // A /config-only guild (no /setup, so no onboarding) with active effects and no linked FC.
     const legacy = { ...fixture.manager, guildId: "666666666666666678" };
-    await db.orm
-      .insert(t.guilds)
-      .values({ id: legacy.guildId, member_role_id: "81201", guest_role_id: "81202" });
+    await db.orm.insert(t.guilds).values({
+      id: legacy.guildId,
+      effects_enabled: true,
+      member_role_id: "81201",
+      guest_role_id: "81202",
+    });
     await service.assign(legacy, "94003", character, "Legacy local link");
     const configured = await service.guild(legacy);
     expect(configured.access_policy_enabled).toBe(false);
-    expect(await service.registrationGuestEligible(db.pool, configured, "94003")).toBe(false);
+    // Registration alone is a Guest credential in every configured guild (ROLE-07).
+    expect(await service.registrationGuestEligible(db.pool, configured, "94003")).toBe(true);
+    await reconcileIn(legacy.guildId, "94003");
+    expect(members.get("94003")?.roles).toContain("81202");
+    // Guild reconciliation still covers the user but performs no channel-visibility work.
+    const visitor = members.get("94003");
+    if (!visitor) throw new Error("Missing registered visitor");
+    const enumerating = new Synchronization(
+      new Service(
+        db,
+        {
+          ...discord,
+          async members() {
+            return [visitor];
+          },
+        },
+        nodestone,
+        config,
+      ),
+    );
+    const parent = await enqueue(
+      db.pool,
+      "reconcile.guild",
+      `guild:${legacy.guildId}`,
+      {},
+      legacy.guildId,
+    );
+    expect(await enumerating.guild(legacy.guildId, parent)).toMatchObject({ humans: 1 });
+    await expectNoChannelWork(legacy.guildId);
+  });
+
+  test("multi-character union grants Member, Officer and registered Guest with onboarding disabled", async () => {
+    // An isolated FC keeps this roster from moving links in guilds bound to the legacy fixture FC.
+    const unionFc = "9232097761132950001";
+    await db.orm
+      .insert(t.freeCompanies)
+      .values({ id: unionFc, name: "Union FC", world: "Diabolos", dc: "Crystal" });
+    const fixture = await accessFixture("666666666666666683", unionFc, false);
+    await service.configureOfficerRank(fixture.manager, "Officer");
+    const ranked = (id: string, rank: string) => ({
+      id,
+      name: `Union ${rank} ${id}`,
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId: unionFc,
+      fcRankName: rank,
+      isFcLeader: false,
+    });
+    const outside = (id: string) => ({
+      id,
+      name: `Union Visitor ${id}`,
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId: null,
+    });
+    const officerA = ranked("88000001", "Officer");
+    const memberB = ranked("88000002", "Member");
+    const officerC = ranked("88000007", "Officer");
+    await publishRoster(unionFc, [officerA, memberB, officerC]);
+    // Each user links one or more characters; the FC characters gain evidence from the fresh roster
+    // at assignment, and the outside characters are evaluated absent by seedFreshLink.
+    await service.assign(fixture.manager, "95001", officerA, "Union officer character");
+    await service.assign(fixture.manager, "95001", outside("88000003"), "Union alt character");
+    await service.assign(fixture.manager, "95002", memberB, "Union member character");
+    await service.assign(fixture.manager, "95002", outside("88000004"), "Union alt character");
+    await service.assign(fixture.manager, "95003", outside("88000005"), "Registered visitor");
+    await service.assign(fixture.manager, "95003", outside("88000006"), "Registered visitor alt");
+    // A bot-only officer can vouch for membership but cannot make anyone an officer.
+    const botOfficer = { ...fixture.manager, userId: "95090", serverManager: false };
+    await service.assign(botOfficer, "95004", officerC, "Bot-only officer assignment");
+    for (const user of ["95001", "95002", "95003", "95004"])
+      await reconcileIn(fixture.guild.id, user);
+    const roles = (user: string) => members.get(user)?.roles ?? [];
+    const {
+      member_role_id: member,
+      guest_role_id: guest,
+      officer_role_id: officer,
+    } = fixture.guild;
+    expect(roles("95001")).toContain(member ?? "");
+    expect(roles("95001")).toContain(officer ?? "");
+    expect(roles("95001")).not.toContain(guest ?? "");
+    expect(roles("95002")).toContain(member ?? "");
+    expect(roles("95002")).not.toContain(officer ?? "");
+    expect(roles("95002")).not.toContain(guest ?? "");
+    expect(roles("95003")).toEqual([guest ?? ""]);
+    // The Guest is derived from registration alone: no durable grant and no former-member history.
+    expect(
+      await db.orm
+        .select({ id: t.guestGrants.id })
+        .from(t.guestGrants)
+        .where(
+          and(eq(t.guestGrants.guild_id, fixture.guild.id), eq(t.guestGrants.user_id, "95003")),
+        ),
+    ).toEqual([]);
+    expect(
+      await db.orm
+        .select({ id: t.membershipHistory.id })
+        .from(t.membershipHistory)
+        .where(
+          and(
+            eq(t.membershipHistory.guild_id, fixture.guild.id),
+            eq(t.membershipHistory.user_id, "95003"),
+          ),
+        ),
+    ).toEqual([]);
+    expect(roles("95004")).toContain(member ?? "");
+    expect(roles("95004")).not.toContain(officer ?? "");
+    // Unlinking the only FC character leaves an outside link: Member and Officer end, Guest begins.
+    await service.unclaim(fixture.manager, "95001", officerA.id, "Officer character moved");
+    await reconcileIn(fixture.guild.id, "95001");
+    expect(roles("95001")).not.toContain(member ?? "");
+    expect(roles("95001")).not.toContain(officer ?? "");
+    expect(roles("95001")).toContain(guest ?? "");
+    expect(
+      (
+        await db.orm
+          .select({ local_member_loss: t.guildUsers.local_member_loss })
+          .from(t.guildUsers)
+          .where(
+            and(eq(t.guildUsers.guild_id, fixture.guild.id), eq(t.guildUsers.user_id, "95001")),
+          )
+      )[0]?.local_member_loss,
+    ).toBe(true);
+    await expectNoChannelWork(fixture.guild.id);
+  });
+
+  test("unknown and stale evidence delay registered Guest in onboarding-disabled guilds", async () => {
+    // No accepted snapshot is newer than the freshness window, so a new link stays unevaluated.
+    const staleFc = "9232097761132950002";
+    await db.orm.insert(t.freeCompanies).values({
+      id: staleFc,
+      name: "Stale FC",
+      world: "Diabolos",
+      dc: "Crystal",
+      last_successful_roster_at: new Date(Date.now() - 7 * 60 * 60 * 1000),
+    });
+    const fixture = await accessFixture("666666666666666684", staleFc, false);
+    const character = {
+      id: "88000008",
+      name: "Stale Visitor",
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId: null,
+    };
+    await service.assign(
+      fixture.manager,
+      "95005",
+      character,
+      "Registration while evidence is stale",
+    );
+    await reconcileIn(fixture.guild.id, "95005");
+    expect(members.get("95005")?.roles).toEqual([]);
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "95005")).toBe(false);
+    // seedFreshLink requested an early acquisition instead of guessing from stale evidence.
+    const early = await db.orm
+      .select({ id: t.jobs.id })
+      .from(t.jobs)
+      .where(
+        and(
+          eq(t.jobs.kind, "roster"),
+          eq(t.jobs.dedupe_key, `roster:${staleFc}`),
+          eq(t.jobs.status, "queued"),
+        ),
+      );
+    expect(early).toHaveLength(1);
+    expect(
+      await publishRoster(staleFc, [
+        {
+          id: "88000009",
+          name: "Stale Member",
+          world: "Diabolos",
+          dc: "Crystal",
+          fcId: staleFc,
+          fcRankName: "Member",
+        },
+      ]),
+    ).toBe(early[0]?.id ?? "");
+    // Preview and the worker agree once the link is evaluated against fresh accepted evidence.
+    expect(await reconcileIn(fixture.guild.id, "95005", true)).toMatchObject({
+      desired: { member: false, guest: true },
+      add: [fixture.guild.guest_role_id],
+    });
+    await reconcileIn(fixture.guild.id, "95005");
+    expect(members.get("95005")?.roles).toEqual([fixture.guild.guest_role_id ?? ""]);
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "95005")).toBe(true);
+    await expectNoChannelWork(fixture.guild.id);
+  });
+
+  test("onboarding-disabled reconciliation supersedes a pending application once the applicant registers", async () => {
+    const fixture = await accessFixture("666666666666666685", null, false);
+    const applicant = { ...fixture.manager, userId: "95006", officer: false, serverManager: false };
+    const pending = await service.apply(applicant, await applicationInput(applicant));
+    const review = and(
+      eq(t.jobs.kind, "guest.review"),
+      eq(t.jobs.dedupe_key, `review:${pending.id}`),
+    );
+    // Treat the submission's review message as delivered, so a new job can only come from reconcile.
+    await db.orm.update(t.jobs).set({ status: "succeeded" }).where(review);
+    await service.assign(
+      fixture.manager,
+      applicant.userId,
+      { id: "88000010", name: "Late Registration", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Applicant registered a character",
+    );
+    await reconcileIn(fixture.guild.id, applicant.userId);
+    expect(
+      (
+        await db.orm
+          .select({ state: t.guestApplications.state })
+          .from(t.guestApplications)
+          .where(eq(t.guestApplications.id, pending.id))
+      )[0]?.state,
+    ).toBe("superseded");
+    expect(
+      await db.orm
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(and(review, eq(t.jobs.status, "queued"))),
+    ).toHaveLength(1);
+    expect(members.get(applicant.userId)?.roles).toContain(fixture.guild.guest_role_id ?? "");
+    expect(
+      await db.orm
+        .select({ id: t.guestGrants.id })
+        .from(t.guestGrants)
+        .where(
+          and(
+            eq(t.guestGrants.guild_id, fixture.guild.id),
+            eq(t.guestGrants.user_id, applicant.userId),
+          ),
+        ),
+    ).toEqual([]);
+    await expectNoChannelWork(fixture.guild.id);
+  });
+
+  /**
+   * A synthetic imported guild awaiting its first activation: its own FC (so its rosters never move
+   * other tests' links), four managed roles, applications closed unless a legacy review channel is
+   * given, the 'pending' marker, effects off, and a migration.import audit an hour old, so a roster
+   * published now counts as post-import evidence.
+   */
+  async function importedGuild(guildId: string, fcId: string, channel: string | null = null) {
+    await db.orm
+      .insert(t.freeCompanies)
+      .values({ id: fcId, name: `Cutover FC ${fcId}`, world: "Diabolos", dc: "Crystal" })
+      .onConflictDoNothing();
+    await db.orm.insert(t.guilds).values({
+      id: guildId,
+      fc_id: fcId,
+      member_role_id: "82101",
+      guest_role_id: "82102",
+      officer_role_id: "82103",
+      leader_role_id: "82104",
+      guest_application_channel_id: channel,
+      role_layout_enabled: false,
+      guest_grandfather: "pending",
+      effects_enabled: false,
+    });
+    await db.orm.insert(t.auditEvents).values({
+      guild_id: guildId,
+      action: "migration.import",
+      target: `fingerprint:${guildId}`,
+      details: { guestGrandfather: "pending" },
+      event_at: sql`now()-interval '1 hour'`,
+    });
+    const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, guildId));
+    if (!row) throw new Error("Missing imported guild fixture");
+    return row;
+  }
+
+  /** An imported human (guild_users.imported), optionally owning one active character link. */
+  async function importedHuman(guildId: string, user: string, character?: string) {
+    await ensureUser(db.pool, guildId, user, new Date("2026-01-01T00:00:00Z"));
+    await db.orm
+      .update(t.guildUsers)
+      .set({ imported: true })
+      .where(and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, user)));
+    if (character) return linkCharacter(guildId, user, character);
+    return null;
+  }
+
+  /** An active link to a new character, as the importer or /assign would store it. */
+  async function linkCharacter(guildId: string, user: string, character: string) {
+    await db.orm
+      .insert(t.characters)
+      .values({ id: character, name: `Cutover ${character}`, world: "Diabolos", dc: "Crystal" })
+      .onConflictDoNothing();
+    const [link] = await db.orm
+      .insert(t.links)
+      .values({
+        guild_id: guildId,
+        user_id: user,
+        character_id: character,
+        provenance: "imported_link",
+      })
+      .returning({ id: t.links.id });
+    if (!link) throw new Error("Missing link fixture");
+    return link.id;
+  }
+
+  /** A roster member of the given FC, as Nodestone reports one. */
+  const rosterMember = (id: string, fcId: string) => ({
+    id,
+    name: `Cutover ${id}`,
+    world: "Diabolos",
+    dc: "Crystal",
+    fcId,
+    fcRankName: "Member",
+  });
+
+  /** A current Discord member view; bots are enumerated too and must never be grandfathered. */
+  const memberView = (
+    guildId: string,
+    id: string,
+    roles: string[] = [],
+    joinedAt = new Date("2026-01-01T00:00:00Z"),
+    bot = false,
+  ): MemberView => ({ id, guildId, joinedAt, nickname: null, roles, bot });
+
+  /** Everything a refused activation must leave untouched in a pending guild. */
+  async function expectNotActivated(guildId: string) {
+    const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, guildId));
+    expect(row).toMatchObject({
+      guest_grandfather: "pending",
+      guest_grandfathered_at: null,
+      effects_enabled: false,
+    });
+    expect(
+      await db.orm
+        .select({ id: t.guestGrants.id })
+        .from(t.guestGrants)
+        .where(
+          and(eq(t.guestGrants.guild_id, guildId), eq(t.guestGrants.provenance, "grandfathered")),
+        ),
+    ).toEqual([]);
+    expect(
+      await db.orm
+        .select({ action: t.auditEvents.action })
+        .from(t.auditEvents)
+        .where(
+          and(
+            eq(t.auditEvents.guild_id, guildId),
+            inArray(t.auditEvents.action, [
+              "activation",
+              "guest.grandfather",
+              "guest.grandfather.completed",
+            ]),
+          ),
+        ),
+    ).toEqual([]);
+  }
+
+  /** Audit rows of one action in one guild. */
+  const auditsOf = (guildId: string, action: string) =>
+    db.orm
+      .select({ target: t.auditEvents.target, details: t.auditEvents.details })
+      .from(t.auditEvents)
+      .where(and(eq(t.auditEvents.guild_id, guildId), eq(t.auditEvents.action, action)));
+
+  // The first-activation scenario: the first test activates it, the second reconciles it.
+  const cutover = {
+    guild: "666666666666666700",
+    fc: "9232097761132950010",
+    present: "97001",
+    memberWithoutLink: "97002",
+    roleless: "97003",
+    importedGuest: "97004",
+    revoked: "97005",
+    absentLink: "97006",
+    uncertain: "97007",
+    newcomer: "97008",
+    bot: "97090",
+    lateJoiner: "97009",
+  } as const;
+  let cutoverEnumeratedAt: Date | null = null;
+
+  test("first activation grandfathers current non-member humans exactly once with audit", async () => {
+    const { guild: id, fc: fcId } = cutover;
+    const row = await importedGuild(id, fcId);
+    const member = row.member_role_id ?? "";
+    const guest = row.guest_role_id ?? "";
+    await importedHuman(id, cutover.present, "88100001");
+    for (const user of [
+      cutover.memberWithoutLink,
+      cutover.roleless,
+      cutover.importedGuest,
+      cutover.revoked,
+      cutover.uncertain,
+    ])
+      await importedHuman(id, user);
+    await importedHuman(id, cutover.absentLink, "88100006");
+    await db.orm.insert(t.guestGrants).values({
+      guild_id: id,
+      user_id: cutover.importedGuest,
+      provenance: "imported_guest",
+      source_key: `import:cutover:guest:${id}:${cutover.importedGuest}`,
+    });
+    await db.orm
+      .insert(t.guestState)
+      .values({ guild_id: id, user_id: cutover.revoked, revoked: true, reason: "Imported ban" });
+    // The accepted post-import roster: the present link is observed, the other link is absent.
+    await publishRoster(fcId, [rosterMember("88100001", fcId)]);
+    // A link stored after that roster has no evidence yet, so its owner is uncertain.
+    await linkCharacter(id, cutover.uncertain, "88100007");
+    const views = [
+      memberView(id, cutover.present, [member]),
+      memberView(id, cutover.memberWithoutLink, [member]),
+      memberView(id, cutover.roleless),
+      memberView(id, cutover.importedGuest, [guest]),
+      memberView(id, cutover.revoked),
+      memberView(id, cutover.absentLink),
+      memberView(id, cutover.uncertain, [member]),
+      // Joined after the cutover snapshot: no guild_users row yet.
+      memberView(id, cutover.newcomer, [], new Date("2026-09-20T00:00:00Z")),
+      memberView(id, cutover.bot, [], new Date("2026-01-01T00:00:00Z"), true),
+    ];
+    for (const view of views) members.set(view.id, structuredClone(view));
+    const enumeratedAt = new Date();
+    cutoverEnumeratedAt = enumeratedAt;
+    const plan = await planGrandfathering(db.orm, row, views, 21600, enumeratedAt);
+    const planned = [
+      cutover.memberWithoutLink,
+      cutover.roleless,
+      cutover.absentLink,
+      cutover.uncertain,
+      cutover.newcomer,
+    ];
+    expect(plan.grants).toEqual(planned);
+    expect(grandfatherReport({ state: "pending", plan, completedAt: null })).toMatchObject({
+      humans: 8,
+      bots: 1,
+      memberEligible: 1,
+      planned: { count: 5 },
+      plannedDetail: {
+        // The uncertain holder keeps Member behind a dormant grant; only the unlinked one loses it.
+        memberRoleRemoved: { count: 1, sample: [cutover.memberWithoutLink] },
+        uncertainKeepsMember: { count: 1, sample: [cutover.uncertain] },
+        registeredVisitors: { count: 2, sample: [cutover.absentLink, cutover.uncertain] },
+        newSinceImport: { count: 1, sample: [cutover.newcomer] },
+      },
+      skipped: {
+        existingGrant: { count: 1, sample: [cutover.importedGuest] },
+        revoked: { count: 1, sample: [cutover.revoked] },
+      },
+    });
+    const [revocation] = await db.orm
+      .select()
+      .from(t.guestState)
+      .where(and(eq(t.guestState.guild_id, id), eq(t.guestState.user_id, cutover.revoked)));
+    const result = await activateGuild(db, {
+      guildId: id,
+      freshnessSeconds: 21600,
+      resourcesValidated: true,
+      members: views,
+      enumeratedAt,
+      grandfatherPlan: plan.checksum,
+    });
+    expect(result).toMatchObject({
+      status: "activated",
+      requeued: false,
+      revision: row.revision + 1n,
+      grandfathering: { state: "completed", planChecksum: plan.checksum, granted: 5 },
+      guestApplications: "closed",
+      onboarding: false,
+      roleLayout: "disabled",
+    });
+    const grants = await db.orm
+      .select({
+        user: t.guestGrants.user_id,
+        key: t.guestGrants.source_key,
+        actor: t.guestGrants.actor_id,
+        source: t.guestGrants.source,
+      })
+      .from(t.guestGrants)
+      .where(and(eq(t.guestGrants.guild_id, id), eq(t.guestGrants.provenance, "grandfathered")));
+    expect(grants.map((grant) => grant.user).sort()).toEqual(planned);
+    for (const grant of grants) {
+      expect(grant.key).toBe(`grandfather:${id}:${grant.user}`);
+      expect(grant.actor).toBeNull();
+      expect(grant.source).toMatchObject({
+        planChecksum: plan.checksum,
+        enumeratedAt: enumeratedAt.toISOString(),
+      });
+    }
+    expect(await auditsOf(id, "guest.grandfather")).toHaveLength(5);
+    // The completion audit keeps enumeratedAt for the late-joiner report (C9).
+    expect(await auditsOf(id, "guest.grandfather.completed")).toEqual([
+      {
+        target: id,
+        details: expect.objectContaining({
+          planChecksum: plan.checksum,
+          granted: 5,
+          enumeratedAt: enumeratedAt.toISOString(),
+          counts: expect.objectContaining({ humans: 8, bots: 1, planned: 5, revoked: 1 }),
+        }),
+      },
+    ]);
+    expect(await auditsOf(id, "activation")).toEqual([
+      {
+        target: id,
+        details: expect.objectContaining({
+          grandfathering: { state: "completed", planChecksum: plan.checksum, granted: 5 },
+        }),
+      },
+    ]);
+    const [activated] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, id));
+    expect(activated).toMatchObject({
+      guest_grandfather: "completed",
+      effects_enabled: true,
+      active: true,
+    });
+    expect(activated?.guest_grandfathered_at).toBeInstanceOf(Date);
+    expect(
+      await db.orm
+        .select({ status: t.jobs.status })
+        .from(t.jobs)
+        .where(and(eq(t.jobs.kind, "reconcile.guild"), eq(t.jobs.dedupe_key, `guild:${id}`))),
+    ).toEqual([{ status: "queued" }]);
+    // The revocation stands untouched, and the newcomer's guild row now exists.
+    expect(
+      (
+        await db.orm
+          .select()
+          .from(t.guestState)
+          .where(and(eq(t.guestState.guild_id, id), eq(t.guestState.user_id, cutover.revoked)))
+      )[0],
+    ).toEqual(revocation);
+    expect(
+      (
+        await db.orm
+          .select({ present: t.guildUsers.present, imported: t.guildUsers.imported })
+          .from(t.guildUsers)
+          .where(and(eq(t.guildUsers.guild_id, id), eq(t.guildUsers.user_id, cutover.newcomer)))
+      )[0],
+    ).toEqual({ present: true, imported: false });
+
+    // A rerun on the live guild, even with a new joiner, is a no-op (amendment C11).
+    const state = async () => ({
+      revision: (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, id)))[0]?.revision,
+      audits: (
+        await db.query<{ count: bigint }>("SELECT count(*) FROM audit WHERE guild_id=$1", [id])
+      )[0]?.count,
+      jobs: await db.query("SELECT id,status,generation FROM jobs WHERE guild_id=$1 ORDER BY id", [
+        id,
+      ]),
+      grants: (
+        await db.query<{ count: bigint }>("SELECT count(*) FROM guest_grants WHERE guild_id=$1", [
+          id,
+        ])
+      )[0]?.count,
+    });
+    const settled = await state();
+    const withJoiner = [...views, memberView(id, cutover.lateJoiner, [], new Date())];
+    expect(
+      await activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: false,
+        members: withJoiner,
+        enumeratedAt: new Date(),
+        grandfatherPlan: plan.checksum,
+      }),
+    ).toMatchObject({
+      status: "already_active",
+      revision: row.revision + 1n,
+      grandfathering: { state: "completed", granted: 0 },
+    });
+    expect(await state()).toEqual(settled);
+    // An explicit requeue repeats only the activation writes; grandfathering never runs again.
+    expect(
+      await activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: withJoiner,
+        enumeratedAt: new Date(),
+        requeue: true,
+      }),
+    ).toMatchObject({
+      status: "activated",
+      requeued: true,
+      revision: row.revision + 2n,
+      grandfathering: { state: "completed", planChecksum: null, granted: 0 },
+    });
+    expect((await state()).grants).toBe(settled.grants);
+    expect(await auditsOf(id, "guest.grandfather")).toHaveLength(5);
+    expect(await auditsOf(id, "activation")).toHaveLength(2);
+  });
+
+  test("grandfathered grants behave like approved grants", async () => {
+    const id = cutover.guild;
+    if (!cutoverEnumeratedAt) throw new Error("Run the first-activation test first");
+    const current = await service.guild({ ...actor, guildId: id });
+    const member = current.member_role_id ?? "";
+    const guest = current.guest_role_id ?? "";
+    const roles = (user: string) => members.get(user)?.roles ?? [];
+    for (const user of [
+      cutover.present,
+      cutover.memberWithoutLink,
+      cutover.roleless,
+      cutover.importedGuest,
+      cutover.revoked,
+      cutover.absentLink,
+      cutover.uncertain,
+      cutover.newcomer,
+    ])
+      await reconcileIn(id, user);
+    expect(roles(cutover.present)).toEqual([member]);
+    expect(roles(cutover.memberWithoutLink)).toEqual([guest]);
+    expect(roles(cutover.roleless)).toEqual([guest]);
+    expect(roles(cutover.importedGuest)).toEqual([guest]);
+    expect(roles(cutover.revoked)).toEqual([]);
+    expect(roles(cutover.absentLink)).toEqual([guest]);
+    // Once the uncertain link is evaluated absent, the dormant grant replaces Member with Guest.
+    expect(roles(cutover.uncertain)).toEqual([guest]);
+    expect(roles(cutover.newcomer)).toEqual([guest]);
+    const officer = { ...actor, guildId: id };
+    // /guest status lists the new provenance.
+    expect(await service.guestStatus(officer, cutover.memberWithoutLink)).toMatchObject({
+      grants: [{ provenance: "grandfathered", reason: "Grandfathered Guest at first activation" }],
+    });
+    // Explicit revocation suppresses the grant through departure, rejoin and a new process.
+    await service.guestAction(
+      officer,
+      cutover.roleless,
+      true,
+      "Grandfathered access withdrawn",
+      randomUUID(),
+    );
+    await reconcileIn(id, cutover.roleless);
+    expect(roles(cutover.roleless)).toEqual([]);
+    const events = new GuildEvents(db);
+    await events.memberLeft(id, cutover.roleless);
+    await events.memberJoined(id, cutover.roleless, new Date("2026-01-01T00:00:00Z"));
+    await reconcileIn(id, cutover.roleless);
+    expect(roles(cutover.roleless)).toEqual([]);
+    const restarted = new Synchronization(new Service(db, discord, nodestone, config));
+    const work = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${id}:${cutover.roleless}`,
+      {},
+      id,
+      cutover.roleless,
+    );
+    await restarted.user(await leased(work), async () => {});
+    expect(roles(cutover.roleless)).toEqual([]);
+    // An explicit officer grant restores it with a manual grant and an audited restore.
+    await service.guestAction(officer, cutover.roleless, false, "Welcome back", randomUUID());
+    await reconcileIn(id, cutover.roleless);
+    expect(roles(cutover.roleless)).toEqual([guest]);
+    expect(await auditsOf(id, "guest.restore")).toHaveLength(1);
+    // Positive roster evidence gives Member precedence over the grant.
+    await publishRoster(cutover.fc, [
+      rosterMember("88100001", cutover.fc),
+      rosterMember("88100006", cutover.fc),
+    ]);
+    await reconcileIn(id, cutover.absentLink);
+    expect(roles(cutover.absentLink)).toEqual([member]);
+    // Someone joining after activation gets nothing automatically and is listed for officers.
+    const late = memberView(id, cutover.lateJoiner, [], new Date());
+    members.set(late.id, structuredClone(late));
+    await events.memberJoined(id, late.id, late.joinedAt);
+    await reconcileIn(id, late.id);
+    expect(roles(late.id)).toEqual([]);
+    // Two more late joiners the report leaves out: one registered, one already gone again.
+    const registered = memberView(id, "97010", [], new Date());
+    const departed = memberView(id, "97011", [], new Date());
+    for (const view of [registered, departed]) {
+      members.set(view.id, structuredClone(view));
+      await events.memberJoined(id, view.id, view.joinedAt);
+    }
+    await linkCharacter(id, registered.id, "88100010");
+    await events.memberLeft(id, departed.id);
+    expect(await lateJoiners(db.orm, id)).toEqual({
+      guildId: id,
+      state: "completed",
+      enumeratedAt: cutoverEnumeratedAt.toISOString(),
+      count: 1,
+      users: [{ userId: late.id, joinedAt: late.joinedAt }],
+    });
+    await service.guestAction(officer, late.id, false, "Late joiner welcomed", randomUUID());
+    expect(await lateJoiners(db.orm, id)).toMatchObject({ count: 0, users: [] });
+    // A guild that was never grandfathered has nothing to report.
+    expect(await lateJoiners(db.orm, guild)).toMatchObject({ state: "pending", count: 0 });
+  });
+
+  test("grandfathering fails closed and rolls activation back", async () => {
+    const id = "666666666666666701";
+    const fcId = "9232097761132950011";
+    const row = await importedGuild(id, fcId);
+    const user = "97101";
+    await importedHuman(id, user);
+    await publishRoster(fcId, []);
+    const views = [memberView(id, user)];
+    const reviewed = await planGrandfathering(db.orm, row, views, 21600, new Date());
+    const activate = (input: Partial<Parameters<typeof activateGuild>[1]>) =>
+      activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: views,
+        enumeratedAt: new Date(),
+        grandfatherPlan: reviewed.checksum,
+        ...input,
+      });
+    // No complete enumeration, or no Discord validation, while grandfathering is pending.
+    await expect(activate({ members: null, enumeratedAt: null })).rejects.toMatchObject({
+      code: "incomplete",
+    });
+    await expect(activate({ resourcesValidated: false })).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expectNotActivated(id);
+    // A missing checksum returns the full report and the checksum to confirm.
+    const missing = await activate({ grandfatherPlan: undefined }).catch((error) => error);
+    expect(missing).toBeInstanceOf(GrandfatherPlanMismatch);
+    expect(missing).toMatchObject({
+      checksum: reviewed.checksum,
+      difference: null,
+      report: { state: "pending", planned: { count: 1, sample: [user] } },
+    });
+    await expectNotActivated(id);
+    // Against the reviewed plan file, a new joiner shows up as the only addition (C8).
+    const file = reviewedPlan(JSON.parse(json(reviewed, 2)), reviewed.checksum);
+    const joined = await activate({
+      members: [...views, memberView(id, "97102", [], new Date())],
+      reviewedPlan: file,
+    }).catch((error) => error);
+    expect(joined).toBeInstanceOf(GrandfatherPlanMismatch);
+    expect(joined.difference).toEqual({
+      added: ["97102"],
+      removed: [],
+      guildChanged: false,
+      importChanged: false,
+      rosterSnapshotChanged: false,
+    });
+    await expectNotActivated(id);
+    // Any newer accepted roster changes the checksum even when the planned users do not.
+    await publishRoster(fcId, []);
+    const acquired = await activate({ reviewedPlan: file }).catch((error) => error);
+    expect(acquired).toBeInstanceOf(GrandfatherPlanMismatch);
+    expect(acquired.difference).toMatchObject({
+      added: [],
+      removed: [],
+      rosterSnapshotChanged: true,
+    });
+    expect(acquired.checksum).not.toBe(reviewed.checksum);
+    await expectNotActivated(id);
+    const confirmed = (await planGrandfathering(db.orm, row, views, 21600, new Date())).checksum;
+    // A roster that is not newer than the import is refused.
+    await db.orm
+      .update(t.auditEvents)
+      .set({ event_at: sql`now()+interval '1 minute'` })
+      .where(and(eq(t.auditEvents.guild_id, id), eq(t.auditEvents.action, "migration.import")));
+    await expect(activate({ grandfatherPlan: confirmed })).rejects.toMatchObject({ code: "stale" });
+    await db.orm
+      .update(t.auditEvents)
+      .set({ event_at: sql`now()-interval '1 hour'` })
+      .where(and(eq(t.auditEvents.guild_id, id), eq(t.auditEvents.action, "migration.import")));
+    // So is a roster older than the freshness window.
+    await db.orm
+      .update(t.freeCompanies)
+      .set({ last_successful_roster_at: sql`now()-interval '7 hours'` })
+      .where(eq(t.freeCompanies.id, fcId));
+    await expect(activate({ grandfatherPlan: confirmed })).rejects.toMatchObject({ code: "stale" });
+    await expectNotActivated(id);
+    // A guild that was never imported activates without grandfathering.
+    const plain = "666666666666666702";
+    await db.orm.insert(t.guilds).values({ id: plain, guest_role_id: "82102" });
+    expect(
+      await activateGuild(db, {
+        guildId: plain,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: null,
+        enumeratedAt: null,
+      }),
+    ).toMatchObject({
+      status: "activated",
+      grandfathering: { state: "not_applicable", planChecksum: null, granted: 0 },
+    });
+    expect(await auditsOf(plain, "guest.grandfather.completed")).toEqual([]);
+  });
+
+  test("first activation never opens guest applications implicitly", async () => {
+    const legacyChannel = "82201";
+    const setup = async (id: string, fcId: string) => {
+      const row = await importedGuild(id, fcId, legacyChannel);
+      await publishRoster(fcId, []);
+      const plan = await planGrandfathering(db.orm, row, [], 21600, new Date());
+      return { row, plan };
+    };
+    const activate = (id: string, checksum: string, choice?: "open" | "closed") =>
+      activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: [],
+        enumeratedAt: new Date(),
+        grandfatherPlan: checksum,
+        guestApplications: choice,
+      });
+    // A 2.12.x import still carries its review channel: activation needs an explicit choice.
+    const kept = await setup("666666666666666703", "9232097761132950012");
+    await expect(activate(kept.row.id, kept.plan.checksum)).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expectNotActivated(kept.row.id);
+    expect(await activate(kept.row.id, kept.plan.checksum, "open")).toMatchObject({
+      status: "activated",
+      guestApplications: "open",
+    });
+    expect(
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, kept.row.id)))[0]
+        ?.guest_application_channel_id,
+    ).toBe(legacyChannel);
+    expect(await auditsOf(kept.row.id, "config")).toEqual([]);
+    const closed = await setup("666666666666666704", "9232097761132950013");
+    expect(await activate(closed.row.id, closed.plan.checksum, "closed")).toMatchObject({
+      status: "activated",
+      guestApplications: "closed",
+      revision: closed.row.revision + 1n,
+    });
+    expect(
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closed.row.id)))[0]
+        ?.guest_application_channel_id,
+    ).toBeNull();
+    expect(await auditsOf(closed.row.id, "config")).toEqual([
+      {
+        target: "guest_application_channel_id",
+        details: { value: null, source: "activation" },
+      },
+    ]);
+    // A guild imported closed (2.13.0) needs no flag; the first scenario above activates one.
+  });
+
+  test("pending departures block grandfathering until a confirming roster settles them", async () => {
+    const id = "666666666666666705";
+    const fcId = "9232097761132950014";
+    const row = await importedGuild(id, fcId);
+    const [departing, staying] = ["97201", "97202"];
+    // Imported Member holders keep a 'present' baseline for their legacy FC character.
+    for (const [user, character] of [
+      [departing, "88100201"],
+      [staying, "88100202"],
+    ] as const) {
+      const link = await importedHuman(id, user, character);
+      if (!link) throw new Error("Missing imported link");
+      await db.orm
+        .insert(t.membershipHistory)
+        .values({ guild_id: id, user_id: user, fc_id: fcId, link_id: link });
+      await db.orm
+        .insert(t.membership)
+        .values({ guild_id: id, fc_id: fcId, character_id: character, state: "present" });
+    }
+    const views = [
+      memberView(id, departing, [row.member_role_id ?? ""]),
+      memberView(id, staying, [row.member_role_id ?? ""]),
+    ];
+    const first = new Date();
+    await publishRoster(fcId, [rosterMember("88100202", fcId)], first);
+    // One absence only marks the departing character missing; it still counts as membership.
+    expect(await pendingDepartures(db.orm, row)).toEqual({ count: 1, sample: [departing] });
+    await expect(planGrandfathering(db.orm, row, views, 21600, new Date())).rejects.toMatchObject({
+      code: "stale",
+    });
+    await expect(
+      activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: views,
+        enumeratedAt: new Date(),
+        grandfatherPlan: "0".repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: "stale" });
+    await expectNotActivated(id);
+    // The confirming acquisition at least 60 s later settles the departure.
+    await publishRoster(fcId, [rosterMember("88100202", fcId)], new Date(first.getTime() + 61_000));
+    expect(await pendingDepartures(db.orm, row)).toEqual({ count: 0, sample: [] });
+    const enumeratedAt = new Date();
+    const plan = await planGrandfathering(db.orm, row, views, 21600, enumeratedAt);
+    expect(plan.grants).toEqual([departing]);
+    expect(plan.candidates).toEqual([
+      expect.objectContaining({
+        userId: departing,
+        basis: "grant",
+        former: true,
+        heldMember: true,
+        projected: { member: false, guest: true },
+      }),
+      expect.objectContaining({ userId: staying, basis: "member" }),
+    ]);
+    expect(
+      await activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: views,
+        enumeratedAt,
+        grandfatherPlan: plan.checksum,
+      }),
+    ).toMatchObject({ status: "activated", grandfathering: { state: "completed", granted: 1 } });
+    expect(
+      await db.orm
+        .select({ user: t.guestGrants.user_id })
+        .from(t.guestGrants)
+        .where(and(eq(t.guestGrants.guild_id, id), eq(t.guestGrants.provenance, "grandfathered"))),
+    ).toEqual([{ user: departing }]);
+  });
+
+  test("an imported guild with no linked FC gets a reviewable plan that activation accepts", async () => {
+    // The importer accepts a guild without an FC and marks it pending. Preview and activation gate
+    // on the same freshness predicate, which has no roster to wait for here, so preview can still
+    // produce the plan and checksum that activation confirms (MIG-14).
+    const id = "666666666666666706";
+    await db.orm.insert(t.guilds).values({
+      id,
+      fc_id: null,
+      member_role_id: "82301",
+      guest_role_id: "82302",
+      role_layout_enabled: false,
+      guest_grandfather: "pending",
+      effects_enabled: false,
+    });
+    await db.orm.insert(t.auditEvents).values({
+      guild_id: id,
+      action: "migration.import",
+      target: `fingerprint:${id}`,
+      details: { guestGrandfather: "pending" },
+      event_at: sql`now()-interval '1 hour'`,
+    });
+    const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, id));
+    if (!row) throw new Error("Missing no-FC guild fixture");
+    const user = "97301";
+    await importedHuman(id, user);
+    const views = [memberView(id, user, [row.member_role_id ?? ""])];
+    // The preview's gate (scripts/preview.ts) and the departure check both pass without an FC.
+    await assertFreshRoster(db.orm, row, 21600);
+    expect(await pendingDepartures(db.orm, row)).toEqual({ count: 0, sample: [] });
+    const enumeratedAt = new Date();
+    // Read-only on the pool, exactly as preview plans it.
+    const plan = await planGrandfathering(db.orm, row, views, 21600, enumeratedAt);
+    expect(plan).toMatchObject({
+      guildId: id,
+      importFingerprint: `fingerprint:${id}`,
+      rosterSnapshotId: null,
+      grants: [user],
+    });
+    await expectNotActivated(id);
+    // The reviewed plan file and its checksum are what activation confirms.
+    const file = reviewedPlan(JSON.parse(json(plan, 2)), plan.checksum);
+    expect(
+      await activateGuild(db, {
+        guildId: id,
+        freshnessSeconds: 21600,
+        resourcesValidated: true,
+        members: views,
+        enumeratedAt,
+        grandfatherPlan: plan.checksum,
+        reviewedPlan: file,
+      }),
+    ).toMatchObject({
+      status: "activated",
+      grandfathering: { state: "completed", planChecksum: plan.checksum, granted: 1 },
+    });
+    expect(
+      await db.orm
+        .select({ user: t.guestGrants.user_id })
+        .from(t.guestGrants)
+        .where(and(eq(t.guestGrants.guild_id, id), eq(t.guestGrants.provenance, "grandfathered"))),
+    ).toEqual([{ user }]);
   });
 
   test("Drizzle mappings agree with every migrated application column", async () => {

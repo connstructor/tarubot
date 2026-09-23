@@ -1,6 +1,6 @@
 /** Pure policy/value regression tests: precision, role precedence, evidence timing, and Unicode. */
 import { expect, test } from "bun:test";
-import { departure, desiredAccess } from "../../src/domain/policy.js";
+import { departure, desiredAccess, membershipClass } from "../../src/domain/policy.js";
 import { gil, id, lodestoneId, nickname } from "../../src/domain/values.js";
 
 test("IDs preserve unsigned 64-bit values and reject unsafe numbers", () => {
@@ -91,6 +91,53 @@ test("verified visitors require current classification; revocation wins and unce
   });
   expect(desiredAccess({ ...visitor, membership: "member", revoked: true })).toEqual({
     member: true,
+    guest: false,
+  });
+});
+
+test("FC membership is the union of trusted links", () => {
+  // Counts mirror accessFacts: confirmed = present/missing links, unknown = links never evaluated.
+  const counts = { fcLinked: true, confirmed: 0n, unknown: 0n, localLoss: false };
+  expect(membershipClass({ ...counts, fcLinked: false, confirmed: 1n })).toBe("ineligible");
+  expect(membershipClass({ ...counts, confirmed: 1n, unknown: 1n })).toBe("member");
+  expect(membershipClass({ ...counts, confirmed: 1n, localLoss: true })).toBe("member");
+  expect(membershipClass(counts)).toBe("ineligible");
+  expect(membershipClass({ ...counts, unknown: 1n })).toBe("uncertain");
+  // A local unlink of the last confirmed character stops later unevaluated links from protecting access.
+  expect(membershipClass({ ...counts, unknown: 1n, localLoss: true })).toBe("ineligible");
+});
+
+test("registered users are Guest whatever their other links, and Member wins", () => {
+  // `verified` means at least one active trusted link, in onboarding-enabled and -disabled guilds.
+  const registered = {
+    fresh: true,
+    former: false,
+    grant: false,
+    revoked: false,
+    hasMember: false,
+    hasGuest: false,
+    verified: true,
+  };
+  const union = (confirmed: bigint, unknown: bigint) =>
+    membershipClass({ fcLinked: true, confirmed, unknown, localLoss: false });
+  // One character present in the FC and one outside it: Member, never both roles.
+  expect(desiredAccess({ ...registered, membership: union(1n, 0n) })).toEqual({
+    member: true,
+    guest: false,
+  });
+  // Two characters, both evaluated outside the FC: registered Guest from fresh evidence.
+  expect(desiredAccess({ ...registered, membership: union(0n, 0n) })).toEqual({
+    member: false,
+    guest: true,
+  });
+  expect(desiredAccess({ ...registered, membership: union(0n, 0n), revoked: true })).toEqual({
+    member: false,
+    guest: false,
+  });
+  // One absent plus one unevaluated character: uncertain, so no new Guest is created.
+  expect(union(0n, 1n)).toBe("uncertain");
+  expect(desiredAccess({ ...registered, membership: union(0n, 1n) })).toEqual({
+    member: false,
     guest: false,
   });
 });

@@ -97,6 +97,12 @@ export function dispatcher(
         and(job.guild_id ? eq(t.guilds.id, job.guild_id) : sql`false`, eq(t.guilds.active, true)),
       );
     if (!guild) return { skipped: "guild inactive" };
+    // Role presentation is a per-guild opt-in and this is its authoritative gate: every enqueue
+    // path, retry, activation requeue and /config requeue reaches it. It precedes the effects
+    // check so an unactivated imported guild completes the job as skipped rather than parking it
+    // as `disabled`, which activation or a later /config change would requeue.
+    if (job.kind === "roles.layout" && !guild.role_layout_enabled)
+      return { skipped: "layout disabled" };
     if (!app.config.ENABLE_EFFECTS || !guild.effects_enabled)
       throw new Failure("disabled", "Discord effects are disabled pending activation.");
     if (job.kind === "roles.layout") {
@@ -118,6 +124,8 @@ export function dispatcher(
           .from(t.guilds)
           .where(and(eq(t.guilds.id, guild.id), eq(t.guilds.active, true)));
         if (!current) return { skipped: "guild inactive" };
+        // Re-read under the setup lock: the switch may have been turned off while the job waited.
+        if (!current.role_layout_enabled) return { skipped: "layout disabled" };
         const currentGuard = async () => {
           await guard();
           const valid = await app.db.orm
@@ -129,6 +137,9 @@ export function dispatcher(
                 eq(t.guilds.revision, current.revision),
                 eq(t.guilds.active, true),
                 eq(t.guilds.effects_enabled, true),
+                // A mid-pass disable fences the next hoist/position write even without a revision
+                // bump (for example a direct operator edit); the retry then completes as skipped.
+                eq(t.guilds.role_layout_enabled, true),
               ),
             );
           if (!valid.length)

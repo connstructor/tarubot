@@ -3,6 +3,13 @@ import { z } from "zod";
 
 export const GUEST_ANSWER_MIN = 10;
 export const GUEST_ANSWER_MAX = 300;
+/**
+ * Visitor-facing refusal when a server has no review channel, which is how imported servers start
+ * (owner launch decision 2026-09-23). /apply shows it before the form opens, and Service.apply
+ * repeats it at submission, so both paths tell a visitor the same thing.
+ */
+export const GUEST_APPLICATIONS_CLOSED =
+  "Guest applications are not open in this server. Ask an officer about Guest access.";
 const answer = z
   .string()
   .trim()

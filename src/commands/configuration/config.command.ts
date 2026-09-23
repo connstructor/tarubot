@@ -29,15 +29,26 @@ data.addSubcommandGroup((group) =>
 data.addSubcommandGroup((group) => {
   group.setName("roles").setDescription("Bot-managed access roles");
   for (const name of ["member", "guest", "officer", "leader"])
-    group.addSubcommand((sub) =>
+    group.addSubcommand((sub) => {
       sub
         .setName(name)
         .setDescription(`Set or clear the ${name} role`)
         .addRoleOption((option) => option.setName("role").setDescription("Access role"))
         .addBooleanOption((option) =>
           option.setName("clear").setDescription("Clear the configuration and clean up this role"),
-        ),
-    );
+        );
+      // Binding an existing staff role normally grants its current holders officer access; a
+      // rank-based launch binds it with adopt_holders:false instead (owner decision O1).
+      if (name === "officer")
+        sub.addBooleanOption((option) =>
+          option
+            .setName("adopt_holders")
+            .setDescription(
+              "Grant the role's current human holders officer access (default: true)",
+            ),
+        );
+      return sub;
+    });
   return group;
 });
 // Role-based officers cannot be represented by Discord's static default permission bitfield.
@@ -49,6 +60,18 @@ data.addSubcommand((sub) =>
     .addStringOption(string("rank", "Exact in-game FC rank name"))
     .addBooleanOption((option) =>
       option.setName("clear").setDescription("Use manual officer grants only"),
+    ),
+);
+// Managed-role display/ordering is a per-guild opt-in; server managers with Manage Roles change it.
+data.addSubcommand((sub) =>
+  sub
+    .setName("role_layout")
+    .setDescription("Turn automatic display and ordering of the managed roles on or off")
+    .addBooleanOption((option) =>
+      option
+        .setName("enabled")
+        .setDescription("Show managed roles separately in one ordered block")
+        .setRequired(true),
     ),
 );
 for (const name of ["ledger", "officer_notifications", "guest_applications"])
@@ -96,6 +119,8 @@ export default defineCommand({
         throw new Failure("input", "Supply exactly one rank or clear:true.");
       return dataReply(await app.configureOfficerRank(actor, rank));
     }
+    if (sub === "role_layout")
+      return dataReply(await app.configureRoleLayout(actor, options.getBoolean("enabled", true)));
     const value =
       group === "roles" ? options.getRole("role")?.id : options.getChannel("channel")?.id;
     const clear = options.getBoolean("clear") === true;
@@ -106,7 +131,17 @@ export default defineCommand({
         : sub === "guest_applications"
           ? "guest_application_channel_id"
           : `${sub}_channel_id`;
-    // The service independently validates the field allowlist, ManageRoles, and hierarchy.
-    return dataReply(await app.configure(actor, field, value ?? null));
+    // Only /config roles officer declares adopt_holders; omitted means the service default (true).
+    const adoptHolders = group === "roles" ? options.getBoolean("adopt_holders") : null;
+    // The service independently validates the field allowlist, ManageRoles, hierarchy, and that
+    // adopt_holders accompanies an Officer role binding.
+    return dataReply(
+      await app.configure(
+        actor,
+        field,
+        value ?? null,
+        adoptHolders === null ? {} : { adoptHolders },
+      ),
+    );
   },
 });

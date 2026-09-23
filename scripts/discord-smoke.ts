@@ -1,30 +1,29 @@
 /** Credentialed DevBot probe: verify deployed routes, member coverage, and bot-owned delivery. */
 import { ChannelType, Events, PermissionFlagsBits } from "discord.js";
 import { loadCommands } from "../src/bot/discovery.js";
+import { assertAuthenticatedApplication, assertToolScope } from "../src/config/deployment.js";
 import { configuration } from "../src/config/env.js";
 import { DiscordGateway } from "../src/discord/gateway.js";
+import { commandPaths } from "../src/discord/inspection.js";
 import { id, json } from "../src/domain/values.js";
 
 const config = configuration();
 if (!config.TEST_GUILD_ID) throw new Error("TEST_GUILD_ID is required for this development probe.");
+// DevBot only: the probe sends (and deletes) a message, so it never runs under another profile.
+const deployment = assertToolScope(process.env, {
+  tool: "discord-smoke",
+  guilds: [config.TEST_GUILD_ID],
+  discord: "write",
+  databases: [],
+});
+if (deployment.name !== "devbot")
+  throw new Error("discord-smoke runs only under the devbot profile.");
 const args = process.argv.slice(2);
 /** All optional mutation targets are explicit; the only write is a temporary message by DevBot. */
 const option = (name: string): string | undefined => {
   const index = args.indexOf(name);
   return index < 0 ? undefined : args[index + 1];
 };
-interface Option {
-  type: number;
-  name: string;
-  options?: readonly Option[] | undefined;
-}
-/** Compare command paths rather than Discord-generated IDs or omitted default properties. */
-function paths(name: string, options: readonly Option[] = []): string[] {
-  const children = options.filter((entry) => entry.type === 1 || entry.type === 2);
-  return children.length
-    ? children.flatMap((entry) => paths(`${name} ${entry.name}`, entry.options))
-    : [name];
-}
 
 const gateway = new DiscordGateway();
 try {
@@ -41,6 +40,7 @@ try {
       });
     });
   const application = gateway.client.application;
+  assertAuthenticatedApplication(deployment, application?.id);
   if (
     !application ||
     application.id !== config.DISCORD_APPLICATION_ID ||
@@ -56,11 +56,11 @@ try {
   const expected = [...definitions.values()]
     .flatMap((command) => {
       const data = command.toJSON();
-      return paths(data.name, data.options);
+      return commandPaths(data.name, data.options);
     })
     .sort();
   const actual = [...registered.values()]
-    .flatMap((command) => paths(command.name, command.options))
+    .flatMap((command) => commandPaths(command.name, command.options))
     .sort();
   if (json(expected) !== json(actual))
     throw new Error("Deployed DevBot command inventory differs from discovered modules.");

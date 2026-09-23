@@ -1,6 +1,6 @@
 /** Transport-only interaction dispatch: lookup, acknowledgement, actor checks, and replies. */
 import { PermissionFlagsBits } from "discord.js";
-import type { AutocompleteInteraction, Interaction } from "discord.js";
+import type { AutocompleteInteraction, ChatInputCommandInteraction, Interaction } from "discord.js";
 import { z } from "zod";
 import { authorize, type Actor } from "../domain/policy.js";
 import { Failure, message } from "../domain/values.js";
@@ -10,12 +10,21 @@ import type { BotContext } from "./context.js";
 import { ServiceKey } from "./services.js";
 import { replyAcknowledgement } from "./reply-visibility.js";
 
+/**
+ * Time allowed for a modal command's pre-modal check. Discord gives the first acknowledgement three
+ * seconds from interaction creation, and gateway delivery plus the response request both use part
+ * of that. After this budget the form opens anyway, which is what happened before the check existed.
+ */
+export const MODAL_GATE_BUDGET_MS = 1500;
+
 /** Feature behavior lives in discovered modules, so new routes never require a switch edit. */
 export class InteractionRouter {
   constructor(
     private readonly context: BotContext,
     private readonly commands: ReadonlyMap<string, Command>,
     private readonly components: ReadonlyMap<string, Component>,
+    /** Tests shorten this; production uses the default. */
+    private readonly modalGateBudgetMs = MODAL_GATE_BUDGET_MS,
   ) {
     for (const module of [...commands.values(), ...components.values()])
       context.services.require(module.requires);
@@ -57,6 +66,18 @@ export class InteractionRouter {
       if (interaction.isChatInputCommand()) {
         const command = this.commands.get(interaction.commandName);
         if (command?.modal) {
+          // A pre-modal check can refuse a closed feature before the user writes answers that
+          // cannot be submitted. The refusal is the interaction's only acknowledgement, and the
+          // default visibility applies (ephemeral unless the observed test guild overrides it).
+          const refusal = await this.modalRefusal(command, interaction, interaction.guildId);
+          if (refusal !== null) {
+            await interaction.reply({
+              ...acknowledgement,
+              content: refusal.slice(0, 1700),
+              allowedMentions: { parse: [] },
+            });
+            return;
+          }
           // No authority or state change is granted by opening a form. Its separate submission
           // follows the normal fresh-actor path below; Discord forbids showing a modal after defer.
           await interaction.showModal(command.modal(interaction));
@@ -94,6 +115,44 @@ export class InteractionRouter {
       };
       if (interaction.deferred || interaction.replied) await interaction.editReply(response);
       else await interaction.reply({ ...acknowledgement, ...response });
+    }
+  }
+
+  /**
+   * Run a modal command's optional pre-modal check within the acknowledgement budget. It returns
+   * refusal text, or null to open the form. It fails open: an error or a slow read is reported
+   * and the form opens as before, because opening a form grants nothing and the submission path
+   * repeats the check authoritatively.
+   */
+  private async modalRefusal(
+    command: Command,
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+  ): Promise<string | null> {
+    if (!command.beforeModal) return null;
+    // A private sentinel cannot collide with any refusal text the check might return.
+    const overrun = Symbol("pre-modal budget overrun");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const budget = new Promise<typeof overrun>((resolve) => {
+        timer = setTimeout(() => resolve(overrun), this.modalGateBudgetMs);
+      });
+      // Promise.race also subscribes to the check, so a late rejection is never unhandled.
+      const outcome = await Promise.race([
+        Promise.resolve(command.beforeModal({ ...this.context, guildId, interaction })),
+        budget,
+      ]);
+      if (outcome !== overrun) return outcome;
+      this.context.report(
+        new Failure("unavailable", "The pre-form check overran its budget; the form opened."),
+        interaction.id,
+      );
+      return null;
+    } catch (error) {
+      this.context.report(error, interaction.id);
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

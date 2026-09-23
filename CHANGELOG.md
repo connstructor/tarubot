@@ -1,6 +1,21 @@
 # Version history
 
-The current application version is **2.12.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.13.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.13.0 — Launch policy and cutover tooling
+
+- Record the owner's 2026-09-23 launch decisions as requirement amendments: the multi-character union (any FC character gives Member, any officer-rank character gives Officer, linked characters outside the FC give Guest), first-activation grandfathering, the role-layout switch, `/apply` and onboarding off at launch, App Platform with a managed PostgreSQL cluster, and the guest-form deferral.
+- Give registered visitors (trusted links, none in the FC) Guest in every guild, independent of lobby onboarding; channel visibility stays governed by onboarding alone.
+- Add migration `005_launch_access_policy.sql`: the `grandfathered` grant provenance, a per-guild first-activation grandfathering marker, and `role_layout_enabled` (on by default, off for imported guilds; DevBot's guild keeps its layout).
+- Grandfather every human who does not qualify as Member at an imported guild's first activation with a durable, approved-equivalent Guest grant, created once inside the activation transaction from a checksum-reviewed preview plan. Preview and activation refuse unsettled roster evidence (pending departures), report late joiners, and a repeated activation is a no-op unless `--requeue` is given.
+- Gate every role hoist/order path behind `/config role_layout`, and let `/config roles officer adopt_holders:false` bind an Officer role without turning its holders into permanent grants; `/officer grant` now works before the role is bound.
+- Start imported guilds with guest applications closed, and refuse `/apply` before its form opens when applications are closed.
+- Hold a PostgreSQL single-writer lease before the bot logs in or starts work, check it on its own session, and exit for a supervisor restart if it is lost. Server-side TCP keepalive lets PostgreSQL free an orphaned lease within about a minute after a host loss or partition.
+- Add a deployment-identity guard for every operator tool (DevBot, rehearsal and production profiles; exact database, host, user and CA rules; env-file leak checks), `scripts/commands.ts` for fingerprint-confirmed cleanup of leftover guild commands, a read-only production mode for `discord-inspect`, and identity checks in `register.js`.
+- Attach the App Platform spec to an owner-provisioned managed PostgreSQL cluster, with foundation and maintenance phases derived by `scripts/app-spec.ts` and validated in CI; rewrite the cutover runbook (rehearsal, window order, abort limits, token handling) in docs/MIGRATION.md.
+- Reject malformed user and character IDs as input errors instead of a raw `SyntaxError` (seen on DevBot `/assign` with a typed name), and add a working `CLAUDE.md` alongside the updated AGENTS.md.
+- Temporarily print the Claude Code Review transcript (`show_full_output`) to diagnose reviews that post nothing on large pull requests; the assistant workflow is unchanged.
+- Record the 2.12.3 DevBot rollout and launch-scope session so far, and the release sequence: 2.14.0 reply presentation, then 2.15.0 telemetry and officer alerts before cutover.
 
 ## 2.12.3 — Queue outcome logging and retained role changes
 

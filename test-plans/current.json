@@ -1,22 +1,23 @@
 {
-  "title": "Session: Launch-scope ledger, authorization, and role transitions",
-  "objective": "Validate version 2.12.3 queue logging plus the ledger, officer authorization, assignment, role-removal, and Guest grant/revoke paths that go live at production cutover. Guest forms and onboarding changes are out of scope.",
+  "title": "Session: 2.13.0 launch policy on DevBot",
+  "objective": "Validate version 2.13.0 on schema 005: the role-layout switch, the multi-character union with onboarding-independent registered Guest, closed guest applications, officer grants before binding, and the deployment-guard refusals, while keeping DevBot's existing roles, layout and access.",
   "user": [
-    "Deploy 2.12.3 (no migration) with a stopped-writer backup and command registration, then run `/config validate`.",
-    "Ledger: `/ledger initialize`, deposit as a member, withdraw and adjust as an officer, then check `/ledger balance` and paged `/ledger history`.",
-    "As a non-officer, try `/ledger withdraw`, `/ledger adjust`, `/assign`, and `/config`; each must be refused.",
-    "As an officer, `/assign` a character to a test user, then `/unassign` it; Member or Guest should follow the link.",
-    "Remove an FC member's last link and confirm Member is removed; hand-add Member to an ineligible user and confirm drift repair.",
-    "`/guest revoke` then `/guest grant` a test user; revocation must survive `/refresh`."
+    "Deploy 2.13.0: stopped-writer backup, restore rehearsal with `migrate.js --restore-rehearsal`, migration 005, guild command registration.",
+    "Run `/config show` and `/config validate`; role layout should read on.",
+    "As a non-manager officer, try `/config role_layout enabled:false` (refused); as owner, turn it off, `/refresh`, confirm roles keep order, then turn it back on.",
+    "With `/assign` (numeric IDs), link an FC and a non-FC character to one test user (Member only), then unassign the FC one (Guest).",
+    "`/config guest_applications clear:true`, then `/apply` as a visitor: refused before the form opens.",
+    "`/guest revoke` then `/guest grant` the test user; revocation must survive `/refresh`."
   ],
   "assistant": [
-    "Confirm expected queue waits log at debug, lost leases at warn, and reconcile results keep applied role deltas across supersession.",
-    "Record ledger entry IDs and balances, authorization denials, role transitions, and any blocked or failed work."
+    "Verify schema 005 rows (layout on, grandfather marker empty), command inventory via `commands.js list`, and startup layout convergence.",
+    "Confirm guard refusals: `register.js --global`, and `preview.js`/`activate.js` for the production guild under the DevBot env.",
+    "Record backup, migration time, job and audit IDs, and readbacks."
   ],
   "bot": [
-    "Run compiled version 2.12.3 on schema 004, logging job outcomes by severity with timing and cause.",
-    "Apply each ledger decision exactly once with ordered notifications, and enforce officer and owner authorization.",
-    "Reconcile Member/Guest removals and manual drift authoritatively while preserving unrelated roles.",
+    "Run compiled version 2.13.0 behind the single-writer database lease on schema 005.",
+    "Grant Guest to linked non-FC users in every guild and Member for any FC character; gate role layout per guild.",
+    "Refuse /apply before the modal when applications are closed; keep channel visibility tied to onboarding.",
     "Post this responsibility-separated session plan in the configured development channel."
   ]
 }

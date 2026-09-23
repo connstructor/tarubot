@@ -1,28 +1,28 @@
-# Legacy import and cutover
+# Legacy import and production cutover (App Platform + Managed PostgreSQL)
 
-## Preconditions
+This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14** and the "Approved launch amendments (2026-09-23)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [OPERATIONS.md](OPERATIONS.md#single-database-writer).
 
-- Use one authorized application writer during activation and recovery.
-- Retain the supplied fixture for rehearsal. If legacy state continues changing, capture a final consistent dump for cutover and reconcile its independently derived counts and balances.
-- Freeze legacy database writes and managed Discord role changes during final capture.
-- Have the production application's credentials and privileged Guild Members intent available for the complete Discord snapshot.
-- Legacy `DATETIME` values use the owner-approved **UTC** interpretation. Their original values and UTC conversion remain in import provenance/reporting. New application instants use `timestamptz`.
+2.13.0 supplies the launch policy and the cutover tooling used below. **The cutover itself uses a published release at or above 2.15.0**: 2.14.0 replaces every JSON reply with the approved embeds, and 2.15.0 adds operational telemetry and officer alerts (OPS-10, OPS-11). `X.Y.Z` below is that release.
 
-The importer reads MySQL/MariaDB dump syntax as data. Its reader handles escaped quoted values, doubled quotes, Unicode, NULL, comments/directives, explicit or schema-derived column ordering, and forward relationships. Input is bounded to 64 MiB. Foreign keys, canonical IDs, balances, and mappings are validated before publication. PostgreSQL publication is one transaction.
+Every provider action (cluster, databases, grants, trusted sources, app create/update), the token reset, and command registration is a separately authorized owner step. Generating or validating a spec authorizes none of them.
 
-## Rehearse
+## The importer
+
+The importer reads MySQL/MariaDB dump syntax as data. Its reader handles escaped quoted values, doubled quotes, Unicode, NULL, comments/directives, explicit or schema-derived column ordering, and forward relationships. Input is bounded to 64 MiB. Foreign keys, canonical IDs, balances, and mappings are validated before publication, and PostgreSQL publication is one transaction. Legacy `DATETIME` values use the owner-approved **UTC** interpretation; their original values and UTC conversion remain in the import report.
+
+### Fixture rehearsal (local, no credentials)
 
 ```sh
 git submodule update --init --recursive
 bun install --frozen-lockfile
 bun run build
 bun run test:docker
-bun run import:legacy --file tarubot_backup.sql --source-timezone UTC --dry-run
+bun dist/scripts/import.js --file tarubot_backup.sql --source-timezone UTC --dry-run
 ```
 
-The supplied acceptance fixture must report 40 FCs, 4,251 characters, 241 users, 161 ownership links, 36 known balances, and four unknown balances. The linked FC is `9232097761132958152`; its recorded opening is **349,279,945 gil**.
+A dry run uses no database or Discord credentials. The supplied acceptance fixture must report 40 FCs, 4,251 characters, 241 users, 161 ownership links, 36 known balances, and four unknown balances. The linked FC is `9232097761132958152`; its recorded opening is **349,279,945 gil**.
 
-The single source guild is `1036062273631952955`. All 161 ownership links and 40 source ledger states map to it. The report records this mapping. A multi-guild input requires `--mapping FILE.json`:
+The single source guild is `1036062273631952955`. All 161 ownership links and 40 source ledger states map to it, and the report records this mapping. A multi-guild input requires `--mapping FILE.json`:
 
 ```json
 {
@@ -31,65 +31,221 @@ The single source guild is `1036062273631952955`. All 161 ownership links and 40
 }
 ```
 
-Every supplied ownership record needs explicit destination guilds; every source FC balance maps once. Guilds observing the same FC still have independent accounts and policy state.
+Every supplied ownership record needs explicit destination guilds, and every source FC balance maps once. Guilds observing the same FC still have independent accounts and policy state.
 
-## Final capture and import
+### What a published import contains
 
-These examples use local Bun tooling with the explicit loopback-port override. Set `.env` with production application credentials and matching local-tool PostgreSQL/sidecar URLs, and run the commands from the project directory.
+- **Links and users.** Imported links use trusted `imported_link` provenance, including owners absent from Discord. Snapshot-only users are additional records, reported separately from the 241 SQL users.
+- **Guests.** Every captured human holder of the configured guest role receives an explicit `imported_guest` grant. Snapshot enumeration must be complete.
+- **Ledger.** Known balances become immutable import opening entries, including known zero. NULL balances produce uninitialized accounts.
+- **History.** Source character/FC relationships remain historical cache facts. Imported historical membership exists only where supplied trusted ownership and the source guild's linked FC match. Imported Member-role holders with that evidence get two-observation departure protection.
+- **Preferences.** Imported users have no primary character and nickname management disabled; captured nicknames are retained.
+- **Launch defaults** (owner decisions of 2026-09-23). The guild row starts with effects disabled, onboarding off (`access_policy_enabled=false`), the role-layout switch off (`role_layout_enabled=false`), grandfathering pending (`guest_grandfather='pending'`), and guest applications closed (`guest_application_channel_id` NULL). The legacy review channel is recorded in the report's `guildSettings[].guestApplications.legacyChannelId` and in the `migration.import` audit, not applied. The report's `bootstrap` block lists the same defaults.
+- **Guilds without a linked FC.** Such a guild is imported with grandfathering pending too. `acquire.js` does not apply to it (there is no roster), and preview and activation skip the roster-freshness and departure gates, so `preview.js GUILD_ID --output PLAN.json` still writes the plan and checksum that activation confirms. With no roster evidence, every present human without a revocation or an existing grant is planned a grant.
+- **Idempotency.** The same fingerprint returns the committed import report and preserves later links, financial entries, preferences, and access decisions. A changed dump targeting an already populated guild produces an explicit conflict for an operator mapping/migration decision.
 
-```sh
-docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --wait postgres nodestone
-bun run db:migrate
-bun run snapshot --dump tarubot_backup.sql --output artifacts/discord-snapshot.json
-bun run import:legacy --file tarubot_backup.sql --snapshot artifacts/discord-snapshot.json --source-timezone UTC --dry-run
-bun run import:legacy --file tarubot_backup.sql --snapshot artifacts/discord-snapshot.json --source-timezone UTC
-```
+## E0. Conventions
 
-Retain command output as the import report in your operational records. The database also retains the report, source checksum, timestamp interpretation, stable input keys, and snapshot checksum.
-
-Snapshot enumeration must complete. Every captured human holder of the configured guest role receives an explicit `imported_guest` grant. Snapshot-only users are additional records reported separately from the 241 SQL users. Imported links use trusted `imported_link` provenance, including owners absent from Discord.
-
-Known balances become immutable import opening entries, including known zero. NULL balances produce uninitialized accounts. The imported ledger begins with those opening entries. Source character/FC relationships remain historical cache facts. Imported historical membership is created only where supplied trusted ownership and the source guild's linked FC match.
-
-Imported users have no selected primary character and nickname management disabled. Their captured nicknames are retained. Successful live roster state starts pending, and imported guild effects start disabled.
-
-The same fingerprint is idempotent: rerunning it returns the committed import report and preserves later links, financial entries, preferences, and access decisions. A changed dump targeting an already populated guild produces an explicit conflict for an operator mapping/migration decision.
-
-## Acquire evidence and preview
-
-During the maintenance window, with the old writer stopped:
+**Source.** Build a clean clone outside the DevBot checkout, at the merge commit that published release X.Y.Z:
 
 ```sh
-bun run roster:acquire 1036062273631952955
-bun run preview 1036062273631952955
+mkdir -p ~/tarubot-cutover/work/{rehearsal,backups} && chmod -R go-rwx ~/tarubot-cutover
+git clone --recurse-submodules https://github.com/connstructor/tarubot.git ~/tarubot-cutover/src
+cd ~/tarubot-cutover/src
+ln -s ../work work   # clone-relative work/ is ~/tarubot-cutover/work, which the pg container mounts at /work
+git checkout RELEASE_MERGE_SHA && git submodule update --init --recursive
+jq -r .version package.json   # must print X.Y.Z
+bun install --frozen-lockfile && bun run build
 ```
 
-`roster:acquire` publishes fresh evidence and queues reconciliation without applying Discord effects. `preview` reads that evidence and current complete Discord membership, displaying role deltas and nickname targets. Resolve blocked/missing resource configuration before activation.
+Run every tool from the clone root: migrations and schema checks read `migrations/` relative to it, and every `work/…` path below goes through the `work` symlink to `~/tarubot-cutover/work`, so tool outputs and the `pg` container's `/work` files land in one directory. The clone has no `.env`. `bun install` creates the clone's `.cache/` (the tracked `bunfig.toml` keeps Bun's cache there), which W13 writes spec copies into.
 
-Imported member-role holders supported by matching imported membership evidence receive two-observation departure protection. The first complete absence starts confirmation; a second at least 60 seconds later can demote them. New member grants require fresh accepted evidence.
+**Environment files.** Copy [`production.env.example`](../production.env.example) to `~/tarubot-cutover/production.env` (`chmod 600`) and fill the cluster host, the `tarubot` password, and the cluster CA. It carries every key, so nothing falls back to a development value. Leave `DISCORD_TOKEN` empty until the reset at W3.
 
-## Activate the existing production application
+Before the window, every use of the production token runs from a second file, `~/tarubot-cutover/rehearsal.env` (`chmod 600`): a copy of `production.env` with `TARUBOT_ENVIRONMENT=rehearsal`, the database name `tarubot_rehearsal` in `DATABASE_URL`, and the current (pre-reset) token. The deployment guard keeps the rehearsal profile read-only on Discord and confines it to `*_rehearsal` databases. Delete `rehearsal.env` after E2.
 
-Register exactly the declared command set for the existing application, review the preview, and activate the imported guild:
+**Invocation.** Never use `bun run` with these files, and never name a copy `.env` or `.env.production`. A `bun run` child reloads a checkout's `.env` for any key the file leaves out, and shell variables override the file ([CONFIGURATION.md](CONFIGURATION.md#maintenance-tool-profiles)). zsh does not word-split a variable that holds a command, so use functions:
 
 ```sh
-bun run commands:register --global
-bun run activate 1036062273631952955
+prod()     { env -i HOME="$HOME" PATH="$PATH" bun --env-file="$HOME/tarubot-cutover/production.env" "$@"; }
+rehearse() { env -i HOME="$HOME" PATH="$PATH" bun --env-file="$HOME/tarubot-cutover/rehearsal.env" "$@"; }
 ```
 
-Set `ENABLE_EFFECTS=true` in `.env`, clear the development-only `TEST_GUILD_ID` restriction for production, and start the sole writer:
+Each tool checks its deployment profile before any Discord or database I/O. It refuses a mismatched application, test-guild scope, guild, or database, and a checkout's auto-loaded env files. Its messages name settings, hosts, and database names only.
+
+**Direct SQL** for gates, backups, and restores uses a PostgreSQL 18 client over verified TLS as `tarubot`, never `doadmin`:
 
 ```sh
-docker compose up -d tarubot
-docker compose logs -f tarubot
+cp CA_CERTIFICATE_PEM ~/tarubot-cutover/work/ca-certificate.crt
+export PGHOST=CLUSTER_HOST PGPORT=25060 PGUSER=tarubot PGSSLMODE=verify-full PGSSLROOTCERT=/work/ca-certificate.crt
+read -rs 'PGPASSWORD?tarubot password: '; export PGPASSWORD
+pg() { docker run --rm -i -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD -e PGSSLMODE -e PGSSLROOTCERT \
+  -v "$HOME/tarubot-cutover/work:/work" postgres:18.4-alpine "$@"; }
 ```
 
-Check `/config validate`, `/sync status`, `/guest status`, and `/ledger balance`. Verify representative proof/assignment, access transitions, nickname opt-in, guest review, and ledger delivery. Imported users can opt in using `/main character:ID` followed by `/nickname enabled:true`; newcomers can use `/apply`.
+`prod` and `rehearse` start from `env -i`, so `PGPASSWORD` never reaches a tool.
 
-## Recovery boundary
+**Writer-lease gate.** Before migrate, import, activate, or a restore, this must print nothing. A row means a bot writer is connected; stop it with the maintenance phase first ([APP_PLATFORM.md](APP_PLATFORM.md#single-writer-updates-and-migrations)).
 
-Before activation, restore the pre-import database or recreate the disposable rehearsal database and rerun the import. The original dump and captured snapshot remain immutable inputs.
+```sh
+pg psql -d tarubot -At -c "SELECT l.pid FROM pg_locks l WHERE l.locktype='advisory' AND l.granted
+  AND l.database=(SELECT oid FROM pg_database WHERE datname=current_database())
+  AND l.classid=0 AND l.objid=714882494 AND l.objsubid=1"
+```
 
-After live decisions have been acknowledged, recovery must retain those decisions. Preserve a current PostgreSQL backup plus any newer WAL/PITR data or exported ledger entries, links, grants/revocations, applications, and job decisions. Restore/reconcile those changes before restarting the writer. Re-importing the legacy opening snapshot is not a post-activation recovery mechanism.
+**Sidecar.** Run an isolated Nodestone on loopback port 18080, matching `NODESTONE_URL` in both files:
 
-See [OPERATIONS.md](OPERATIONS.md) for the backup/restore and retry procedure.
+```sh
+docker run -d --rm --name tarubot-cutover-nodestone -p 127.0.0.1:18080:8080 ghcr.io/connstructor/tarubot-nodestone:X.Y.Z
+```
+
+Do not use `docker-compose.tools.yml`: it would recreate DevBot's default-project containers, and its PostgreSQL is not the production database.
+
+**Artifacts.** Keep every dump, snapshot, report, preview, plan, activation output, and backup in `~/tarubot-cutover/work/`, and record `shasum -a 256` for each.
+
+## E1. Preconditions
+
+1. **Releases.** 2.12.3, 2.13.0, 2.14.0, and X.Y.Z (at least 2.15.0) are merged and published, and the DevBot validation and pre-activation smoke test of X.Y.Z passed.
+2. **Owner actions.**
+   - Remove the production application `965294750741692416` from the development guild `1040379370159743139`. It must not be installed there: with `TEST_GUILD_ID` empty, its global commands would appear there, and a `/config` there would create an effects-enabled production guild row.
+   - Record where the legacy bot runs and how its supervisor restart is disabled (W2).
+   - Decide which holders of the legacy Officer role keep officer authority without the in-game Officer rank; they receive `/officer grant` at W15.
+   - Make the legacy Officer role (and an FC Leader role, if one will be bound at W15) bindable. `/config roles` refuses a role that grants Administrator, Manage Server or Manage Roles, or that sits at or above the bot's highest role (`DiscordGateway.validateRole`). If step 6 reports either, remove those permissions or move the role below the bot before the window, or choose another Officer role. The W15 manager must also be the guild owner or have a highest role above @Officer.
+3. **Managed cluster** (owner-authorized; details in [APP_PLATFORM.md](APP_PLATFORM.md#provider-prerequisites-owner-authorized)). Cluster `tarubot-pg` runs PostgreSQL 18. `doadmin` creates the user `tarubot` and the databases `tarubot`, `tarubot_rehearsal`, and `tarubot_restore_test`. Connected to each database as `doadmin`, it grants:
+
+   ```sql
+   GRANT CONNECT ON DATABASE tarubot TO tarubot;  -- name the database being granted
+   GRANT USAGE, CREATE ON SCHEMA public TO tarubot;
+   SELECT has_schema_privilege('tarubot','public','USAGE') AS usage,
+          has_schema_privilege('tarubot','public','CREATE') AS "create";
+   ```
+
+   Every schema-changing or writing tool connects as `tarubot`; tables created by `doadmin` would be unusable by the app.
+4. **Trusted sources and CA.** Add the operator's IP as a trusted source before the app exists, then confirm the `app:` rule after creating it. Save the cluster CA as `work/ca-certificate.crt` and in both env files.
+5. **Foundation app.** Create the app from the worker-free `foundation` phase ([APP_PLATFORM.md](APP_PLATFORM.md#creating-the-app-without-a-writer)). Its pre-deploy job proves the binding, TLS, and grants. Expect `Schema ready.` in the job log, and check that `pg psql -d tarubot -At -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1" -c "SELECT count(*) FROM guilds"` prints the release's `SCHEMA_VERSION` and `0`.
+6. **Read-only production inspection** (authorized pre-window token use). Take a read-only dump of the live legacy database, `mysqldump --single-transaction --default-character-set=utf8mb4 LEGACY_DATABASE > work/legacy-rehearsal.sql`, and record its checksum. Then run these REST-only reads:
+
+   ```sh
+   rehearse dist/scripts/discord-inspect.js --guild 1036062273631952955 --dump work/legacy-rehearsal.sql \
+     --role LEGACY_OFFICER_ROLE_ID [--role LEADER_ROLE_ID] > work/inspect-before.json
+   rehearse dist/scripts/commands.js list > work/commands-before.json   # exits 2 while legacy commands exist
+   ```
+
+   Check that `application.intents.guildMembers` is `enabled` or `limited` (an unverified app in fewer than 100 guilds reports `limited`; `disabled` means the Server Members Intent is off in the Developer Portal) and that `application.intents.probe` is `ok`. The guild list must contain only the production guild. Check the bot's permissions with and without Administrator, that the managed roles are below the bot, and access to the destination channels. The legacy dump names only the Member and Guest roles, so the `--role` flags add the roles W15 binds. Every `target.managedRoles[]` entry, including those with `field: "role"`, must show `exists: true`, `belowBot: true` and `blockingPermissions: []`; otherwise W15's binding is refused (see step 2). From the command read-back, record the legacy global set and any guild-scoped leftovers. An Activity entry-point command (type 4) in the global scope would make W12's bulk registration fail with Discord error 50240; resolve it before the window.
+
+## E2. Rehearsal (before the window; the legacy bot keeps running)
+
+The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, and `rehearsal.env`. The owner authorized its gateway logins (snapshot and preview) and the roster acquisition while the legacy bot is still connected. The guard refuses every Discord write (registration, command cleanup) under this profile.
+
+1. Use the E1 dump, or take a newer one the same way.
+2. Run the writer-lease gate against `tarubot_rehearsal` (`pg psql -d tarubot_rehearsal …`), then `rehearse dist/scripts/migrate.js`.
+3. `rehearse dist/scripts/snapshot.js --dump work/legacy-rehearsal.sql --output work/rehearsal/discord-snapshot.json`
+4. Run `rehearse dist/scripts/import.js --file work/legacy-rehearsal.sql --snapshot work/rehearsal/discord-snapshot.json --source-timezone UTC --dry-run`, then run it again without `--dry-run` and save the output as `work/rehearsal/import-report.json`.
+5. Acquire twice, at least 60 seconds apart. `rehearse dist/scripts/acquire.js 1036062273631952955`, wait, then run it again. The second observation confirms imported members who are absent from the live roster.
+6. `rehearse dist/scripts/preview.js 1036062273631952955 --output work/rehearsal/plan.json > work/rehearsal/preview.json`
+7. Only if the owner separately authorizes its gateway login, run `rehearse dist/scripts/activate.js 1036062273631952955 --grandfather-plan SHA --grandfather-plan-file work/rehearsal/plan.json`. It validates the production roles and channels and exercises the one-time grandfathering, writing only to `tarubot_rehearsal`. Never point a worker or spec at `tarubot_rehearsal`.
+8. Rehearse restore on the same cluster (E4 limit (b)). Dump `tarubot_rehearsal` with `pg pg_dump -d tarubot_rehearsal -Fc -f /work/rehearsal/rehearsal.dump`, then `pg pg_restore -d tarubot_restore_test --no-owner --no-privileges --exit-on-error /work/rehearsal/rehearsal.dump`. Add `RESTORE_DATABASE_URL=…/tarubot_restore_test` to `rehearsal.env`, then run `rehearse dist/scripts/check-restore.js`.
+9. Time every step. The import is one long transaction over the WAN.
+10. Owner review, from `preview.json`:
+    - **Member removals:** `roleTotals` entries whose `binding` is `member` (`remove`), plus `pendingDepartures`. This covers Member holders without a qualifying link, including those who already hold a grant.
+    - **Guest additions:** registered users and former members (`grandfathering.plannedDetail.registeredVisitors`, `formerMembers`, `guestRoleAdded`).
+    - **Grandfathering:** `grandfathering.planned`, `skipped.existingGrant.byProvenance` (overlap with `imported_guest`), and `skipped.revoked` (expected 0).
+    - **Nicknames:** nickname targets are expected to be zero.
+    - **Later layout:** `roleLayout.ifEnabled` shows what enabling the layout would change.
+11. Clean up. `doadmin` drops `tarubot_rehearsal` and `tarubot_restore_test`. After a rehearsal activation the database holds effects-enabled queued work, so drop it promptly. Delete `rehearsal.env`. Keep the timings and outputs.
+
+## E3. Maintenance window
+
+**Time budget.** Activation (W11) must commit within `ROSTER_INTERVAL_SECONDS` (21,600 in `production.env`) of the confirming acquisition at W8. Any acquisition after the W9 preview needs a new preview and checksum; the checksum binds the roster snapshot, so activation refuses the old one.
+
+- **W1. Announce.** Staff freeze Member, Guest, and Officer role edits.
+- **W2. Stop the legacy bot.** Stop the legacy process, disable its supervisor restart, and confirm the bot is offline. A legacy restart after this point would re-sync its commands and change roles.
+- **W3. Reset the token.** The owner resets the token of `965294750741692416` in the Developer Portal. The new token goes into `production.env` and, at W13, the App Platform secret. The legacy process can no longer connect.
+- **W4. Final dump.** Run `mysqldump --single-transaction --default-character-set=utf8mb4 LEGACY_DATABASE > work/legacy-final.sql` and record the checksum. Run `prod dist/scripts/import.js --file work/legacy-final.sql --source-timezone UTC --dry-run > work/import-dry-run.json`, then reconcile counts and balances independently of the report.
+- **W5. Migrate.** Run the writer-lease gate, then `prod dist/scripts/migrate.js`. It prints `Schema ready.`; after the foundation deploy it changes nothing.
+- **W6. Snapshot.** Run `prod dist/scripts/snapshot.js --dump work/legacy-final.sql --output work/discord-snapshot.json` and record the checksum. This is also the record of pre-cutover roles for E4.
+- **W7. Import.** Repeat the dry run with `--snapshot work/discord-snapshot.json`. Run the writer-lease gate, then publish with `prod dist/scripts/import.js --file work/legacy-final.sql --snapshot work/discord-snapshot.json --source-timezone UTC > work/import-report.json`. Verify the launch defaults:
+
+  ```sh
+  pg psql -d tarubot -c "SELECT effects_enabled, access_policy_enabled, role_layout_enabled, guest_grandfather,
+    guest_application_channel_id, officer_role_id, leader_role_id, officer_rank_name FROM guilds"
+  ```
+
+  Expect `f, f, f, pending` followed by four NULLs. The publish output is `{status: "imported", report}`, and its `report.guildSettings[0].guestApplications.legacyChannelId` is `1196246221682131017`.
+- **W8. Acquire twice.** With the sidecar running, run `prod dist/scripts/acquire.js 1036062273631952955 > work/roster-1.json`. Wait at least 60 seconds, then run it again with output to `work/roster-2.json`. Note the time of the second run; the time budget starts here.
+- **W9. Preview.** Run `prod dist/scripts/preview.js 1036062273631952955 --output work/grandfather-plan.json > work/preview.json`. The plan checksum is printed on stderr and appears as `grandfathering.planChecksum`.
+  - If `pendingDepartures.count` is not zero, the plan is blocked. Acquire again at least 60 seconds after the previous acquisition, then preview again.
+  - Review the same totals as E2 step 10 and compare them with the rehearsal.
+  - Expect `guestApplications: "closed"`, `onboarding: false`, and a `roleLayout` of `{enabled:false, wouldRun:false, skipped:"layout disabled"}`.
+  - The owner gives go or no-go. Record the checksum.
+- **W10. Backups.** Record the UTC time `T_pre` as the point-in-time-recovery target and confirm the cluster's backups. Take an independent logical backup with `pg pg_dump -d tarubot -Fc -f /work/backups/pre-activation.dump`, record its checksum, and copy it off the provider.
+- **W11. Activate.** Activation writes only to PostgreSQL; it reads Discord to validate roles and channels and to enumerate members. Run the writer-lease gate, then `prod dist/scripts/activate.js 1036062273631952955 --grandfather-plan SHA --grandfather-plan-file work/grandfather-plan.json > work/activation.json`.
+  - **Success:** the output reports `status: "activated"`; `grandfathering` shows `completed` with the planChecksum and `granted`; applications are closed, onboarding is false, and roleLayout is disabled. `lateJoiners` lists humans who joined between the enumeration and the commit.
+  - **Plan mismatch:** `status: "plan_mismatch"`, exit 1, and nothing is written. The output shows the added and removed users relative to the reviewed file and whether the roster snapshot or the import changed. If either changed, return to W9. Otherwise the owner reviews only that difference, then either rerun W9 or rerun activate with `--grandfather-plan NEW_SHA` alone; the old plan file describes the previous plan.
+  - **Stale roster or pending departures:** return to W8.
+  - The commit ends abort limit (a) in E4.
+- **W12. Commands.** Run `prod dist/scripts/register.js --global`; it prints the application, `scope: "global"`, 19 roots, and 41 paths.
+  - Read back with `prod dist/scripts/commands.js list > work/commands-registered.json`.
+  - For each guild scope that still holds commands, run a dry run, for example `prod dist/scripts/commands.js clear-guild 1036062273631952955 --application 965294750741692416`, review the listed commands, then rerun the printed command with `--confirm FINGERPRINT`.
+  - Finally, `prod dist/scripts/commands.js list > work/commands-final.json` must exit 0.
+  - v2 commands are visible now with nothing answering them, so continue straight to W13.
+- **W13. Start the only writer.** Copy the release's `.do/app.yaml` to `.cache/app-platform-full.yaml` (`chmod 600`) and put the new token in `DISCORD_TOKEN`. The foundation app holds no worker secrets; re-add registry credentials if the packages are private. Then:
+
+  ```sh
+  bun dist/scripts/app-spec.js full .cache/app-platform-full.yaml .cache/app-platform-full.checked.yaml
+  doctl apps spec validate .cache/app-platform-full.checked.yaml --schema-only > /dev/null
+  doctl apps update APP_ID --spec .cache/app-platform-full.checked.yaml
+  ```
+
+  The `full` phase refuses leftover placeholders and anything other than one non-autoscaled worker. The pre-deploy migration is a no-op. The worker takes the writer lease, then logs in. In its console, `/health/ready` must report the writer lease, the database, and Discord as ready, with effects enabled.
+
+  Once `/health/ready` reports ready, run `rm -f .cache/app-platform-full.yaml .cache/app-platform-full.checked.yaml`. Both hold the new token in plaintext. Later `full` updates start from the exported live spec, where the token appears only as `EV[...]`.
+- **W14. Smoke checks.**
+  - `/config show` and `/config validate`: onboarding off, role layout disabled, no guest review channel, and roles/channels available.
+  - `/sync status`: the activation reconcile drains with nothing blocked.
+  - `/ledger balance` equals the final dump's opening balance.
+  - `/guest status` for one imported guest and one grandfathered user (provenance `grandfathered`).
+  - `/apply` as a visitor answers "Guest applications are not open in this server. Ask an officer about Guest access." without opening the form.
+  - Managed-role hoist and positions are unchanged. Compare `prod dist/scripts/discord-inspect.js --guild 1036062273631952955 --dump work/legacy-final.sql --role LEGACY_OFFICER_ROLE_ID [--role LEADER_ROLE_ID]`, with the same `--role` flags as E1, against E1's output. The Officer entry must still be bindable before W15.
+  - A non-officer is denied an officer operation, and a representative `/claim` and `/verify` work.
+  - After the first guild reconciliation completes, run `prod dist/scripts/preview.js 1036062273631952955 --late-joiners > work/late-joiners.json`, which reads only the database. Officers decide `/guest grant` for each listed user.
+- **W15. Officer configuration.** A server manager with Manage Server and Manage Roles, who is the guild owner or whose highest role is above @Officer, runs these in order:
+  1. `/config officer_rank rank:Officer`
+  2. `/officer grant member:… reason:…` for each exception the owner approved in E1. With no Officer role bound yet, each reply shows `effects: "recorded"`.
+  3. `/config roles officer role:@Officer adopt_holders:false`. The reply shows `officerHolders.adopt: false`.
+
+  Binding the role queues an immediate repair pass. Mapping the rank first and recording the grants before the binding means neither rank holders nor approved exceptions lose Officer in between. Holders with neither the rank nor a grant lose the Officer role once reconciliation runs. Optionally run `/config roles leader role:@…`. Do not run `/setup`: it would enable onboarding, open `/apply`, and adopt every Officer-role holder. Staff change access with `/officer` and `/guest grant|revoke`; hand edits to managed roles are treated as drift.
+- **W16. Close the window.**
+  - Remove the operator's trusted-source IP, unless the owner keeps a narrow rule for exports, and stop the sidecar.
+  - Export the live spec to `.cache/` (`chmod 600`), and archive `work/` with its checksums off the provider. Confirm that `.cache/app-platform-full.yaml` and `.cache/app-platform-full.checked.yaml` are gone (W13), and remove the token from `production.env` unless local tools still need it.
+  - Post the MIG-10 announcement: members opt in with `/main character:ID` and `/nickname enabled:true`. Visitors get Guest by verifying a character with `/claim` and `/verify`, or by asking an officer for `/guest grant`. `/apply` is not open yet.
+
+## E4. Recovery and abort limits
+
+**(a) Before the activation commit (W11).** Abort. Give the legacy bot the new token from W3, restart it, and re-enable its supervisor; its command sync restores its commands. Unfreeze role edits. Keep the production database for a retry. If the legacy data changes before the next attempt, `doadmin` drops and recreates `tarubot` and repeats the grants, and the retry starts again at W2.
+
+**(b) After the activation commit, before the worker starts (W13).** Discord roles are unchanged because no writer has run. Continue forward if the problem can be fixed. To abort instead, return the database to its pre-activation state first. On a managed cluster, `doadmin` owns this:
+- **Restore in place.** Rename or drop `tarubot`, recreate it with the grants, and restore the W10 backup as `tarubot`: `pg pg_restore -d tarubot --no-owner --no-privileges --exit-on-error /work/backups/pre-activation.dump`.
+- **Or fork.** A DigitalOcean point-in-time restore to `T_pre` forks a **new cluster** (new host and CA, trusted sources to recheck). Repoint the spec's `cluster_name` and the local production tooling (env file host and CA, `work/ca-certificate.crt`, `PGHOST`, the writer-lease gate) to the fork, and retire the original database by renaming it, as in [APP_PLATFORM.md](APP_PLATFORM.md#backups-pitr-and-recovery). At W13 of a retry, set `databases[0].cluster_name` in `.cache/app-platform-full.yaml` to the fork, because the release template names `tarubot-pg`. Restoring in place keeps the host, CA and template cluster name, so prefer it before the worker has started.
+
+Then restart the legacy bot as in (a). If W12 already ran, the legacy command sync replaces the v2 global set, and the next attempt registers it again.
+
+**(c) After the worker has applied effects.** Recovery is forward-only. A database restore does not revert Discord role changes, and recovery must retain acknowledged decisions (MIG-13), so never restore to before activation once any user decision has been acknowledged. Correct individual outcomes with `/guest revoke`, `/guest grant`, `/officer`, and `/config`. To stop the writer, apply the maintenance phase.
+
+For role repairs, compare current managed roles with the W6 snapshot. Capture a fresh snapshot with `prod dist/scripts/snapshot.js --dump work/legacy-final.sql --output work/role-check.json`; it is a read-only gateway login. Then list every user whose managed roles differ, with `null` meaning absent:
+
+```sh
+jq -n --slurpfile before work/discord-snapshot.json --slurpfile after work/role-check.json \
+  --arg guild 1036062273631952955 \
+  --argjson managed '["MEMBER_ROLE_ID","GUEST_ROLE_ID","OFFICER_ROLE_ID","LEADER_ROLE_ID"]' '
+  def managedRoles($snapshot):
+    $snapshot[0].guilds[] | select(.id == $guild) | .members
+    | map({key: .id, value: ([.roles[] | select(IN($managed[]))] | sort)}) | from_entries;
+  managedRoles($before) as $b | managedRoles($after) as $a
+  | [($b + $a | keys[]) as $user | {user: $user, before: $b[$user], after: $a[$user]}
+     | select(.before != .after)]' > work/role-diff.json
+```
+
+Take the role IDs from `SELECT member_role_id, guest_role_id, officer_role_id, leader_role_id FROM guilds`. Officers resolve each difference explicitly through the commands above, never by hand-editing managed roles.
+
+Re-importing the legacy opening snapshot is never a post-activation recovery mechanism. Keep the dumps, snapshots, reports, and backups as immutable inputs. See [OPERATIONS.md](OPERATIONS.md) for backups, restore checks, and retries.

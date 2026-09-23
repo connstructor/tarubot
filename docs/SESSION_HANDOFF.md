@@ -23,6 +23,12 @@ The handoff's documentation version is not evidence of a deployed image. **2.12.
 
 **Update later on 2026-09-23:** DevBot now runs the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
 
+**Update, 2.13.0 (current version):**
+- **Branch.** `feat/launch-policy-2.13.0` starts from `main` at `341c6ed` (2.12.3, PR #10). It implements the owner's launch decisions of 2026-09-23, recorded in [REQUIREMENTS.md](../REQUIREMENTS.md) under "Approved launch amendments", and adds migration `005_launch_access_policy.sql`.
+- **Status.** Not yet merged, published, or deployed. DevBot still runs the last recorded release; recheck it.
+- **Cutover.** The production cutover follows the rewritten [MIGRATION.md](MIGRATION.md) on App Platform with the managed PostgreSQL cluster, using a release at or above 2.15.0 (2.14.0 reply presentation, then 2.15.0 OPS-10/OPS-11).
+- **Owner action.** Before local tools run against DevBot, the owner points the DevBot `.env` `DATABASE_URL` at `…/tarubot_dev`. The DevBot tool profile refuses `…/tarubot`.
+
 **Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock; the recovery command below is available if that recurs. This documentation branch has not been pushed or given a PR at this checkpoint.
 
 ### Verified runtime observations
@@ -57,7 +63,14 @@ The last Discord permission check confirmed **Administrator disabled** and the d
 
 Keep these owner-approved decisions intact:
 
-- **Manual guest applications are for unverified visitors only.** Trusted verified/imported/assigned non-FC users retain automatic Guest eligibility under the onboarding/freshness policy; FC members retain Member precedence. Explicit Guest revocation remains authoritative.
+- **Manual guest applications are for unverified visitors only.** Trusted verified/imported/assigned non-FC users retain automatic Guest eligibility in every guild under the freshness policy (ROLE-07), with or without onboarding; FC members retain Member precedence. Access is the union over a user's linked characters. Explicit Guest revocation remains authoritative.
+- **Launch decisions (2026-09-23):**
+  - Production uses App Platform with the managed cluster, and exactly one database writer (the writer lease).
+  - First activation of the imported guild grants a durable `grandfathered` Guest to every non-member present, once.
+  - The role-layout switch is off for imported guilds and on for DevBot.
+  - `/apply` and onboarding are off at launch, and `/setup` is not run in production.
+  - Officers come from the in-game rank, with the legacy Officer role bound `adopt_holders:false`.
+  - The production app leaves the dev guild before cutover. Guest-form acceptance is deferred until after launch.
 - The modal asks for a short introduction and why the visitor wants to join/how they found the community, 10–300 characters each. Officers use durable Approve/Deny buttons or commands. Submission alone grants no access.
 - The bot owns managed lobby/member/staff visibility. **Leave the configured community-updates channel and Admin category alone.** Their exclusion is by Discord resource IDs, not names.
 - Preserve the original Member/Guest role IDs and consecutive Leader → Officer → Member → Guest grouping.
@@ -104,7 +117,7 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubo
 
 ### Live acceptance
 
-- [ ] **Guest forms:** submit as an unverified visitor; inspect both answers; approve/deny as an officer; verify role/DM outcomes, duplicate submissions, denial cooldown, stale forms after rejoin, original buttons after restart, deleted-review repair, blocked DMs, and denial of visitor self-approval.
+- [ ] **Guest forms (on hold until after launch):** submit as an unverified visitor; inspect both answers; approve/deny as an officer; verify role/DM outcomes, duplicate submissions, denial cooldown, stale forms after rejoin, original buttons after restart, deleted-review repair, blocked DMs, and denial of visitor self-approval.
 - [ ] **Visibility/access:** ordinary accounts exercise newcomer, Member, Guest, Officer, and FC Leader visibility; verify automatic registered-visitor access, revocation/rejoin, private-area retention, excluded community resources, drift repair, and restart behavior.
 - [ ] **Ledger:** initialize the isolated test account; deposit/withdraw/adjust; check exact balances/history and officer/private-read authorization; retry blocked notifications without a second financial mutation; verify account history across FC unlink/relink.
 - [ ] **Characters and authorization:** name/world selection, private autocomplete, officer assignment, offline unassignment, multiple links/primary selection, expired/replaced proofs, rank-derived Officer access, grant/revoke precedence, and manager-only operations.
@@ -117,11 +130,11 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubo
 
 - [ ] Establish recurring backups and operational ownership for alerts, failures, and upstream updates.
 - [ ] Rehearse backup/restore on the current schema with representative ledger/link/guest/job state. Recovery must retain acknowledged decisions newer than the original legacy import; establish WAL/PITR or an equivalent replay/reconciliation procedure.
-- [ ] If using App Platform, provision/test the selected inline PostgreSQL **dev database**, verified provider TLS, internal Nodestone routing, command registration, backup procedure, and single-writer updates. The spec is validated, but no DO resources have been created. Provisioning needs separate authorization.
+- [ ] Provision the owner-authorized **Managed PostgreSQL cluster** `tarubot-pg` (database/user `tarubot`, public-schema grants, trusted sources) and create the worker-free `foundation` app; prove verified TLS, the pre-deploy migration, internal Nodestone routing, backups/PITR plus independent exports, and single-writer updates ([APP_PLATFORM.md](APP_PLATFORM.md)). The spec and its phases are validated offline, but no DO resources have been created.
 - [ ] In the production maintenance window, stop the legacy writer and freeze managed-role changes; obtain a fresh consistent dump and complete production Discord snapshot.
 - [ ] Import with effects disabled, reconcile actual counts/balances, and preserve ownership, existing guest grants, nicknames, and provenance. The supplied historical fixture is rehearsal input, not automatically the final production state.
 - [ ] Validate production identities/permissions/configuration, acquire a fresh roster, review role/nickname deltas, and resolve blocked resources before activation.
-- [ ] Register production commands, use private reply defaults and the intended production scope, then activate exactly one writer and run smoke checks. Follow [MIGRATION.md](MIGRATION.md).
+- [ ] Follow the rewritten [MIGRATION.md](MIGRATION.md) runbook (E0 conventions, E1 preconditions, E2 rehearsal, E3 window W1–W16, E4 recovery limits). Activate with the confirmed grandfathering checksum, then register the global commands, clear guild leftovers, start the single worker, and run the smoke checks and officer configuration.
 
 ## 5. Evidence and implementation pointers
 
@@ -138,6 +151,8 @@ The 2.12.1 maintenance change passed build, type checking, lint, formatting, Sem
 | Operational alerts/telemetry | `src/application/synchronization.ts`, `src/application/metrics.ts`, `src/jobs/queue.ts`, `src/jobs/dispatch.ts`, `src/main.ts` |
 | Access policy | `src/application/access-facts.ts`, `src/application/guild-access.ts`, `src/discord/guild-access.ts`, `src/domain/policy.ts` |
 | Persistence boundary | `src/infrastructure/postgres/schema.ts`, `database.ts`, `connection.ts`; [PERSISTENCE.md](PERSISTENCE.md) |
+| Launch policy and cutover (2.13.0) | `src/application/activation.ts`, `src/application/grandfathering.ts`, `src/domain/grandfathering.ts`, `scripts/preview.ts`, `scripts/activate.ts`; the layout gate in `src/jobs/dispatch.ts`; `migrations/005_launch_access_policy.sql` |
+| Production tooling and hosting | `src/config/deployment.ts`, `scripts/commands.ts`, `scripts/discord-inspect.ts`, `src/discord/inspection.ts`, `scripts/app-spec.ts`, `.do/app.yaml`, `production.env.example`; the writer lease in `src/application/lifecycle.ts` |
 | Regression evidence | `tests/unit/guest-application.test.ts`, `tests/integration/persistence.test.ts`, [VERIFICATION.md](VERIFICATION.md) |
 
 Known pre-rollout backups, local and ignored:
@@ -166,4 +181,4 @@ Take a fresh backup for the next migration. Keep `.env`, supplied dumps, backups
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md and docs/SESSION_HANDOFF.md. Check the handoff branch/commit, release publication, and running DevBot state. Continue the v2 release checklist, starting with the published guest-form release, migration 004, officer-chat review destination, and the human guest/access test session. Preserve automatic verified Guest access and excluded community resources. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. Check the 2.13.0 branch or pull request, its publication, and the running DevBot state. After 2.13.0 is published, run its DevBot validation session (migration 005, the layout switch, the multi-character union, closed applications, and the tool-guard refusals). Then deliver 2.14.0 (the owner-approved reply embeds replacing JSON dumps; plan in the 2026-09-23 session) and 2.15.0 (OPS-10/OPS-11), and follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover. Preserve automatic registered Guest access, excluded community resources, and the owner's launch decisions in REQUIREMENTS.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.

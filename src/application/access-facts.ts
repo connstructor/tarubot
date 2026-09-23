@@ -1,11 +1,14 @@
 /** Shared persisted eligibility facts for command decisions and Discord role reconciliation. */
 import { and, eq, exists, gt, sql } from "drizzle-orm";
-import type { AccessFacts } from "../domain/policy.js";
+import { type AccessFacts, membershipClass } from "../domain/policy.js";
 import type { Orm } from "../infrastructure/postgres/database.js";
 import * as t from "../infrastructure/postgres/schema.js";
 import type { GuildRecord } from "./records.js";
 
-/** Active trusted links establish registration; accepted roster evidence separately establishes FC access. */
+/**
+ * Active trusted links establish registration in every guild; accepted roster evidence separately
+ * establishes FC access. Both are unions over all of the user's active links (ROLE-07).
+ */
 export async function accessFacts(
   db: Orm,
   guild: GuildRecord,
@@ -100,14 +103,17 @@ export async function accessFacts(
     ...state,
     // With no linked FC, registration is a local Guest credential and needs no roster acquisition.
     fresh: !guild.fc_id || state.fresh,
-    verified: guild.access_policy_enabled && links.total > 0n,
-    membership: !guild.fc_id
-      ? "ineligible"
-      : links.confirmed > 0n
-        ? "member"
-        : links.unknown > 0n && !state.local_loss
-          ? "uncertain"
-          : "ineligible",
+    // Any active trusted link registers the user in every guild (ROLE-07); lobby onboarding
+    // (access_policy_enabled) governs only channel visibility, so it no longer gates this Guest basis.
+    verified: links.total > 0n,
+    // Membership is the union over every active link for the currently linked FC; the truthiness
+    // test matches the fresh/join conditions above, so no linked FC always classifies ineligible.
+    membership: membershipClass({
+      fcLinked: Boolean(guild.fc_id),
+      confirmed: links.confirmed,
+      unknown: links.unknown,
+      localLoss: state.local_loss,
+    }),
     hasMember: roles.includes(guild.member_role_id ?? ""),
     hasGuest: roles.includes(guild.guest_role_id ?? ""),
   };

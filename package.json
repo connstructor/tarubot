@@ -1,6 +1,6 @@
 {
   "name": "tarubot",
-  "version": "2.12.3",
+  "version": "2.13.0",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -26,12 +26,15 @@
     "compatibility": "bun test tests/contract",
     "db:migrate": "bun dist/scripts/migrate.js",
     "commands:register": "bun dist/scripts/register.js",
+    "commands:list": "bun dist/scripts/commands.js list",
+    "commands:clear-guild": "bun dist/scripts/commands.js clear-guild",
     "import:legacy": "bun dist/scripts/import.js",
     "snapshot": "bun dist/scripts/snapshot.js",
     "preview": "bun dist/scripts/preview.js",
     "roster:acquire": "bun dist/scripts/acquire.js",
     "activate": "bun dist/scripts/activate.js",
     "jobs:retry": "bun dist/scripts/retry.js",
+    "app:spec": "bun dist/scripts/app-spec.js",
     "test:docker": "bun scripts/test-docker.ts",
     "test:fixture": "bun tests/fixtures/legacy.ts",
     "ci:version": "bun scripts/ci-version.ts",

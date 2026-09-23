@@ -1,19 +1,53 @@
 /** Read-only restore verification: compare complete data and schema support objects exactly.
  * Catalog SQL is intentional: an independent restore check must include tables absent from ORM mappings.
+ *
+ *   bun dist/scripts/check-restore.js [--schema-version NNN_name.sql]
+ *
+ * Both databases must normally be at this build's SCHEMA_VERSION. A pre-migration rehearsal runs
+ * from the currently deployed build; with a newer build, --schema-version names the earlier
+ * migration both databases must still report (with this build's checksum for that file) instead.
  */
-import { Database } from "../src/infrastructure/postgres/database.js";
-import { json } from "../src/domain/values.js";
+import { assertToolScope, restoreCertificate, type ToolScope } from "../src/config/deployment.js";
+import {
+  Database,
+  MIGRATION_FILE,
+  SCHEMA_VERSION,
+} from "../src/infrastructure/postgres/database.js";
+import { Failure, json } from "../src/domain/values.js";
 
-const original = process.env.DATABASE_URL;
-const recovered = process.env.RESTORE_DATABASE_URL;
-if (!original || !recovered) throw new Error("DATABASE_URL and RESTORE_DATABASE_URL are required.");
-const source = new Database(original);
-const target = new Database(recovered);
+/** Parse the optional --schema-version; anything else is an error. */
+export function restoreArguments(argv: readonly string[]): { schemaVersion: string } {
+  if (!argv.length) return { schemaVersion: SCHEMA_VERSION };
+  const [flag, value, ...rest] = argv;
+  if (flag !== "--schema-version" || value === undefined || rest.length)
+    throw new Failure("input", "Use check-restore.js [--schema-version NNN_name.sql].");
+  if (!MIGRATION_FILE.test(value))
+    throw new Failure("input", "--schema-version takes a migration filename such as 004_name.sql.");
+  return { schemaVersion: value };
+}
+
+/**
+ * The deployment guard's view of a restore check: both databases, no Discord. Exported so tests
+ * check exactly what check-restore.js declares.
+ */
+export function restoreToolScope(): ToolScope {
+  return {
+    tool: "check-restore",
+    guilds: [],
+    discord: "none",
+    databases: ["DATABASE_URL", "RESTORE_DATABASE_URL"],
+  };
+}
+
 /** Catalog identifiers still need SQL quoting; unlike values, identifiers cannot be bind parameters. */
-const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
-try {
-  await source.schema();
-  await target.schema();
+function quote(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+/** Compare every table's rows, then sequences, triggers and constraints. */
+async function verify(source: Database, target: Database, schemaVersion: string): Promise<void> {
+  await source.schema(schemaVersion);
+  await target.schema(schemaVersion);
   const catalog = "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename";
   const tables = await source.query<{ tablename: string }>(catalog);
   if (json(tables) !== json(await target.query(catalog)))
@@ -36,9 +70,27 @@ try {
     }
   }
   console.log(
-    "Restore verified: every application row, sequence, trigger, and constraint matches.",
+    `Restore verified at ${schemaVersion}: every application row, sequence, trigger, and constraint matches.`,
   );
-} finally {
-  await source.close();
-  await target.close();
+}
+
+if (import.meta.main) {
+  const { schemaVersion } = restoreArguments(process.argv.slice(2));
+  if (!(await Bun.file(`migrations/${schemaVersion}`).exists()))
+    throw new Error(`This build has no migrations/${schemaVersion}.`);
+  // Both databases must belong to this env's deployment profile before any connection.
+  assertToolScope(process.env, restoreToolScope());
+  const original = process.env.DATABASE_URL;
+  const recovered = process.env.RESTORE_DATABASE_URL;
+  if (!original || !recovered)
+    throw new Error("DATABASE_URL and RESTORE_DATABASE_URL are required.");
+  const source = new Database(original);
+  // A PITR fork is a new cluster whose CA can differ from the primary's.
+  const target = new Database(recovered, restoreCertificate(process.env));
+  try {
+    await verify(source, target, schemaVersion);
+  } finally {
+    await source.close();
+    await target.close();
+  }
 }

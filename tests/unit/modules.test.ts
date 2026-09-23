@@ -1,7 +1,7 @@
 /** Behavior tests for the generic extension mechanism, independent of Discord credentials. */
 import { expect, test } from "bun:test";
-import { Client, Events, SlashCommandBuilder } from "discord.js";
-import { defineCommand } from "../../src/bot/command.js";
+import { Client, Events, ModalBuilder, SlashCommandBuilder } from "discord.js";
+import { Command, defineCommand } from "../../src/bot/command.js";
 import type { BotContext } from "../../src/bot/context.js";
 import { bindEvents, loadCommands, loadComponents, loadEvents } from "../../src/bot/discovery.js";
 import { InteractionRouter } from "../../src/bot/router.js";
@@ -44,6 +44,24 @@ test("duplicate routes and malformed exports fail discovery with useful diagnost
     "Duplicate command: duplicate",
   );
   await expect(loadCommands(new URL("invalid/", fixtures))).rejects.toThrow("broken.command.ts");
+});
+
+test("pre-modal checks are accepted only as functions on modal commands", () => {
+  const data = new SlashCommandBuilder().setName("gated").setDescription("Contract fixture");
+  const modal = () => new ModalBuilder().setCustomId("gated").setTitle("Gated");
+  expect(typeof defineCommand({ data, modal, beforeModal: () => null }).beforeModal).toBe(
+    "function",
+  );
+  expect(defineCommand({ data, modal }).beforeModal).toBeUndefined();
+  // Discovered modules are untyped at runtime; Reflect.construct bypasses the compile-time union
+  // to prove the constructor rejects what the option types already forbid.
+  for (const options of [
+    { data, execute: () => ({ content: "ready" }), beforeModal: () => null },
+    { data, modal, beforeModal: "closed" },
+  ])
+    expect(() => Reflect.construct(Command, [options])).toThrow(
+      "A pre-modal check must be a function on a modal command.",
+    );
 });
 
 test("service dependencies are checked before a router can accept interactions", () => {

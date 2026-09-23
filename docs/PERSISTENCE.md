@@ -1,12 +1,12 @@
 # Drizzle persistence
 
-TaruBot uses pinned **Drizzle ORM 0.45.3** with **node-postgres 8.23.0**. `src/infrastructure/postgres/schema.ts` maps application tables; `database.ts` owns the pool, transaction lifecycle, migration checks, and shared audit/user writes. `connection.ts` supports provider-supplied CA certificates through `DATABASE_CA_CERT`, retaining certificate/hostname verification despite URL SSL settings. Persisted application record contracts and leased-job fields derive from these mappings.
+TaruBot uses pinned **Drizzle ORM 0.45.3** with **node-postgres 8.23.0**. `src/infrastructure/postgres/schema.ts` maps application tables; `database.ts` owns the pool, transaction lifecycle, migration checks, and shared audit/user writes. `connection.ts` supports provider-supplied CA certificates through `DATABASE_CA_CERT` (or a per-connection CA, as `check-restore` uses for a PITR fork), retaining certificate/hostname verification despite URL SSL settings. Persisted application record contracts and leased-job fields derive from these mappings.
 
 ## Query and transaction conventions
 
 - Use `db.orm` for pooled application reads/writes. Use Drizzle selections, joins, conflict targets, `returning`, and explicit row locks for ordinary persistence.
 - Inside `db.transaction(async (client) => ...)`, obtain `const store = orm(client)` and use it for every part of that decision. Pass the same `client` to `audit`, `ensureUser`, `enqueue`, and reconciliation helpers. The adapter is cached by connection identity; a pooled query would escape the transaction.
-- Keep Discord and Lodestone requests outside decision transactions. Existing session advisory locks serialize FC acquisition, user delivery, and setup/layout across remote calls. Always release those locks and checked-out clients in `finally`.
+- Keep Discord and Lodestone requests outside decision transactions. Existing session advisory locks serialize FC acquisition, user delivery, and setup/layout across remote calls, and the bot's writer lease (key `714882494`) holds one dedicated session for the process lifetime ([OPERATIONS.md](OPERATIONS.md#single-database-writer)). Always release those locks and checked-out clients in `finally`. Session locks need a direct connection, never a transaction-mode pool.
 - Use schema column objects in `sql` expressions. Bind dynamic values through Drizzle; do not interpolate user strings as SQL identifiers or fragments. Alias computed selections when composing subqueries or insert-from-select operations.
 - The work queue uses a typed CTE with `FOR UPDATE OF jobs SKIP LOCKED` and one `UPDATE ... RETURNING` claim. Preserve lease-token, expiry, generation, and configuration guards when changing queue or delivery queries. Active-job upserts use the literal predicate from the partial unique index so prepared plans can infer it.
 
@@ -34,13 +34,23 @@ For a future schema change:
 3. Verify migration/schema parity and relevant behavior in disposable PostgreSQL with both migration fixtures.
 4. Increment the application version/changelog and follow the PR/check/publication workflow. Apply the matching migration during the documented deployment window.
 
-The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Migration `003_guild_access.sql` added opt-in channel policy bindings and first-observed recovery snapshots. The current **2.12.3** source uses `004_guest_application_form.sql`, introduced in **2.12.0**: paired nullable introduction/interest fields preserve existing applications, and a database constraint bounds supplied answers. New form answers, submission audit, and review work commit on the same client. It still maps 25 application tables and keeps all prior migration checksums immutable. The 2.12.1 documentation and 2.12.2 CI/security maintenance milestones add no schema change. `bun run db:migrate` remains the deployment command; there is no Drizzle Kit push or automatic runtime schema mutation. See [SETUP.md](SETUP.md) and [APP_PLATFORM.md](APP_PLATFORM.md) for deployment.
+The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Migration `003_guild_access.sql` added opt-in channel policy bindings and first-observed recovery snapshots. `004_guest_application_form.sql`, introduced in **2.12.0**, added paired nullable introduction/interest fields that preserve existing applications, with a database constraint bounding supplied answers; new form answers, submission audit, and review work commit on the same client. The 2.12.1–2.12.3 releases add no schema change.
+
+The current **2.13.0** source requires `SCHEMA_VERSION=005_launch_access_policy.sql`. It is additive and needs no superuser privileges:
+
+- **Provenance.** It replaces `guest_grants_provenance_check` so provenance may also be `grandfathered`.
+- **Grandfathering marker.** It adds `guilds.guest_grandfather`, NULL, `pending`, or `completed`. The completion time `guilds.guest_grandfathered_at` is set exactly when the marker is `completed`.
+- **Role layout.** It adds `guilds.role_layout_enabled boolean NOT NULL DEFAULT true`.
+- **Backfill.** Guilds with a `migration.import` audit get the layout switch off. Imported guilds with effects off and no `activation` audit become `pending`. Other guilds keep layout on and a NULL marker, so DevBot is never grandfathered.
+- **Revisions.** The backfill changes no revision.
+
+Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client. The Drizzle mapping still covers 25 application tables, and all prior migration checksums stay immutable. `bun run db:migrate` remains the deployment command; there is no Drizzle Kit push or automatic runtime schema mutation. See [SETUP.md](SETUP.md) and [APP_PLATFORM.md](APP_PLATFORM.md) for deployment.
 
 Raw SQL is limited to transaction/migration control, advisory locks, health probes, and independent catalog/restore verification. The dump reader still decodes legacy SQL as data. Integration tests also use independent SQL observations and fault injection to validate ORM behavior rather than relying exclusively on the same mappings under test.
 
 ## Regression coverage
 
-The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths.
+The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths. `tests/integration/migrations.test.ts` applies 005 over 001–004 in private schemas: it checks each backfill case, the constraints, grants written under the old provenances, an empty database, and a real `Database.migrate` upgrade that a second run leaves unchanged. `tests/integration/managed-privileges.test.ts` runs every migration as a non-owner login holding only the documented managed-cluster grants.
 
 ```sh
 bun run test:docker

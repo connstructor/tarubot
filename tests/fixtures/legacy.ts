@@ -22,10 +22,12 @@ export function syntheticLegacyDump(): string {
     "2025-01-01 00:00:00",
   ]);
   const users = Array.from({ length: 241 }, (_, index) => [String(userBase + BigInt(index))]);
+  // The last owned character belongs to another FC, so, like the supplied dump, one imported owner
+  // has no character in the guild's linked FC (a registered Guest under the launch policy).
   const characters = Array.from({ length: 4251 }, (_, index) => [
     String(60000001 + index),
     index < 161 ? String(userBase + BigInt(index)) : null,
-    String(companyBase + BigInt(index < 161 ? 0 : index % 40)),
+    String(companyBase + BigInt(index < 160 ? 0 : index === 160 ? 1 : index % 40)),
     index === 0 ? "Élise" : `Fixture${index + 1}`,
     index === 0 ? "O'Brien" : "Character",
     "Diabolos",

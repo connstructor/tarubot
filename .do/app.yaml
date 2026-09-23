@@ -1,26 +1,36 @@
-# Creation template: App Platform provisions the PostgreSQL dev database automatically.
-# Fill the Discord credentials in an untracked copy or the DO control panel.
-# See docs/APP_PLATFORM.md before deployment, especially the single-writer update procedure.
+# Production spec: attaches the owner-provisioned DigitalOcean Managed PostgreSQL cluster.
+# Prerequisites (cluster, database/user, public-schema grant, trusted sources, CA) and every
+# deployment phase are in docs/APP_PLATFORM.md; generating or validating a spec creates nothing.
+# Never create the app from this file directly: derive the worker-free foundation phase
+# (bun dist/scripts/app-spec.js foundation .do/app.yaml OUT). The worker is added only at
+# activation, from an untracked copy whose Discord token is filled and checked by the `full` phase.
 name: tarubot
 region: nyc
 alerts:
   - rule: DEPLOYMENT_FAILED
 
-# No cluster_name: this creates a new DO-hosted dev PostgreSQL database, not a container.
+# production: true attaches the existing cluster; App Platform neither creates nor resizes it.
+# db_name/db_user are the dedicated application database and login, never defaultdb or doadmin.
+# Bind the direct connection only: no connection pool (session advisory locks and the writer
+# lease need a real session) and no DATABASE_PRIVATE_URL at launch.
 databases:
   - name: db
     engine: PG
     version: "18"
-    production: false
+    production: true
+    cluster_name: tarubot-pg
+    db_name: tarubot
+    db_user: tarubot
 
-# Only the bot consumes Discord gateway events. Keep a single instance and no autoscaling.
+# Only the bot consumes Discord gateway events. Keep a single instance and no autoscaling; the
+# PostgreSQL writer lease also makes an overlapping replacement wait for the previous worker.
 workers:
   - name: tarubot
     image: &bot-image
       registry_type: GHCR
       registry: connstructor
       repository: tarubot
-      tag: &release "2.12.3"
+      tag: &release "2.13.0"
       # For private packages, add registry_credentials in your untracked deployment copy.
     run_command: bun dist/src/main.js
     instance_count: 1
@@ -46,9 +56,10 @@ workers:
         scope: RUN_TIME
         type: SECRET
         value: REPLACE_WITH_DISCORD_BOT_TOKEN
+      # The production application's public ID; startup refuses a token of any other application.
       - key: DISCORD_APPLICATION_ID
         scope: RUN_TIME
-        value: REPLACE_WITH_DISCORD_APPLICATION_ID
+        value: "965294750741692416"
       - key: NODESTONE_URL
         scope: RUN_TIME
         value: http://nodestone:8080
@@ -58,16 +69,22 @@ workers:
       - key: LOG_LEVEL
         scope: RUN_TIME
         value: info
-      # Enable delivery after the intended guild/data have been configured or imported.
+      # The worker exists only from activation onward, so it starts effect-enabled and no second,
+      # overlapping deployment is needed. Imported guilds still need their persisted activation flag.
       - key: ENABLE_EFFECTS
         scope: RUN_TIME
-        value: "false"
+        value: "true"
+      # Production never carries development scoping (and never TEST_PLAN_CHANNEL_ID).
       - key: TEST_GUILD_ID
         scope: RUN_TIME
         value: ""
       - key: PUBLIC_TEST_RESPONSES
         scope: RUN_TIME
         value: "false"
+      # Maintenance tools run from this container's console resolve the production tool profile.
+      - key: TARUBOT_ENVIRONMENT
+        scope: RUN_TIME
+        value: production
 
 # An internal-only service: no http_port and no ingress rules expose Nodestone publicly.
 services:
@@ -113,7 +130,8 @@ services:
         scope: RUN_TIME
         value: "3600"
 
-# Migrate with exactly the bot image. No Discord token is needed by this job.
+# Migrate with exactly the bot image. No Discord token is needed by this job. The production
+# profile makes migrate.js's tool guard require the managed direct port, the tarubot login and a CA.
 jobs:
   - name: migrate
     kind: PRE_DEPLOY
@@ -129,3 +147,6 @@ jobs:
       - key: DATABASE_CA_CERT
         scope: RUN_TIME
         value: ${db.CA_CERT}
+      - key: TARUBOT_ENVIRONMENT
+        scope: RUN_TIME
+        value: production

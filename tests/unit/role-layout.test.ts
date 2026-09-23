@@ -3,7 +3,11 @@ import { expect, spyOn, test } from "bun:test";
 import { Client } from "discord.js";
 import { z } from "zod";
 import { DiscordGateway } from "../../src/discord/gateway.js";
-import { managedRoleOrder, rolePositionChanges } from "../../src/domain/role-layout.js";
+import {
+  managedRoleOrder,
+  roleLayoutPlan,
+  rolePositionChanges,
+} from "../../src/domain/role-layout.js";
 
 test("managed priority is leader, officer, member, guest with partial configurations supported", () => {
   expect(
@@ -189,6 +193,120 @@ test("Discord readback rejects interleaving despite correct priority, then conve
   } finally {
     get.mockRestore();
     patch.mockRestore();
+    validate.mockRestore();
+    await gateway.client.destroy();
+  }
+});
+
+test("layout plan lists only unhoisted managed roles and changed positions", () => {
+  // Mixed hoist flags and an interleaved hierarchy; unrelated roles are never hoisted.
+  const ascending = [
+    { id: "everyone", name: "@everyone", hoist: false },
+    { id: "leader", name: "FC Leader", hoist: true },
+    { id: "unrelated-low", name: "Low", hoist: false },
+    { id: "guest", name: "Guest", hoist: false },
+    { id: "officer", name: "Officer", hoist: true },
+    { id: "unrelated-high", name: "High", hoist: false },
+    { id: "member", name: "Member", hoist: false },
+    { id: "bot", name: "Bot", hoist: false },
+  ];
+  const priority = ["leader", "officer", "member", "guest"];
+  const plan = roleLayoutPlan(ascending, priority);
+  expect(plan.order).toEqual(priority);
+  expect(plan.hoist).toEqual([
+    { id: "member", name: "Member" },
+    { id: "guest", name: "Guest" },
+  ]);
+  // The planner sends exactly what a real pass would send.
+  expect(plan.positions).toEqual(
+    rolePositionChanges(
+      ascending.map((role) => role.id),
+      priority,
+    ),
+  );
+  // Target: everyone, guest, member, officer, leader, unrelated-low, unrelated-high, bot.
+  expect(plan.moved).toEqual([
+    { id: "guest", name: "Guest", from: 3, to: 1 },
+    { id: "member", name: "Member", from: 6, to: 2 },
+    { id: "officer", name: "Officer", from: 4, to: 3 },
+    { id: "leader", name: "FC Leader", from: 1, to: 4 },
+    { id: "unrelated-low", name: "Low", from: 2, to: 5 },
+    { id: "unrelated-high", name: "High", from: 5, to: 6 },
+  ]);
+  // A converged hierarchy with every managed role displayed separately plans nothing.
+  const converged = plan.positions.map(({ role }) => ({
+    ...(ascending.find((entry) => entry.id === role) ?? { id: role, name: role }),
+    hoist: priority.includes(role),
+  }));
+  expect(roleLayoutPlan(converged, priority)).toEqual({
+    order: priority,
+    hoist: [],
+    moved: [],
+    positions: [],
+  });
+  expect(roleLayoutPlan([], [])).toEqual({ order: [], hoist: [], moved: [], positions: [] });
+  expect(() => roleLayoutPlan(ascending.slice(0, 3), priority)).toThrow("missing");
+});
+
+test("planRoleLayout reports hoist and position changes without writing to Discord", async () => {
+  // The same REST fixture shape as the interleaving test, but with unhoisted managed roles.
+  const gateway = new DiscordGateway();
+  const roles = ["100", "204", "101", "203", "102", "202", "103", "201", "300"].map(
+    (id, position) => ({
+      id,
+      name: `role-${id}`,
+      position,
+      permissions: "0",
+      hoist: id === "201" || id === "203",
+    }),
+  );
+  const priority = ["201", "202", "203", "204"];
+  const get = spyOn(gateway.client.rest, "get").mockImplementation(async (route) => {
+    if (route === "/guilds/100")
+      return { id: "100", name: "Plan fixture", roles: structuredClone(roles) };
+    if (route === "/guilds/100/roles") return structuredClone(roles);
+    throw new Error("Unexpected fixture read");
+  });
+  const patch = spyOn(gateway.client.rest, "patch").mockRejectedValue(
+    new Error("The planner must not write"),
+  );
+  const post = spyOn(gateway.client.rest, "post").mockRejectedValue(
+    new Error("The planner must not create"),
+  );
+  const validate = spyOn(gateway, "validateRole").mockResolvedValue();
+  try {
+    const plan = await gateway.planRoleLayout("100", priority);
+    expect(plan.order).toEqual(priority);
+    expect(plan.hoist).toEqual([
+      { id: "202", name: "role-202" },
+      { id: "204", name: "role-204" },
+    ]);
+    expect(plan.positions.map((entry) => entry.role)).toEqual([
+      "100",
+      "204",
+      "203",
+      "202",
+      "201",
+      "101",
+      "102",
+      "103",
+      "300",
+    ]);
+    expect(plan.moved.map((entry) => entry.id)).toEqual(["203", "202", "201", "101", "102", "103"]);
+    // Blocked diagnostics come from the same per-role checks a real pass makes.
+    expect(validate).toHaveBeenCalledTimes(4);
+    expect(await gateway.planRoleLayout("100", [])).toEqual({
+      order: [],
+      hoist: [],
+      moved: [],
+      positions: [],
+    });
+    expect(patch).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  } finally {
+    get.mockRestore();
+    patch.mockRestore();
+    post.mockRestore();
     validate.mockRestore();
     await gateway.client.destroy();
   }

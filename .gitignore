@@ -9,6 +9,8 @@ coverage/
 .env
 .env.*
 !.env.example
+# Operator env files such as production.env; the production.env.example template stays tracked.
+*.env
 # Captures, reports, and diagnostics may contain guild-owned operational information.
 artifacts/
 # The supplied database dump is a local migration fixture and may contain private records.

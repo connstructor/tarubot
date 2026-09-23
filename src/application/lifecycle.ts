@@ -1,5 +1,6 @@
 /** TaruBot's application lifecycle is separate from module discovery and gateway wiring. */
 import type { Logger } from "pino";
+import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
 import type { Configuration } from "../config/env.js";
 import type { DiscordGateway } from "../discord/gateway.js";
 import { Failure } from "../domain/values.js";
@@ -11,12 +12,87 @@ import type { Service } from "./service.js";
 import type { Synchronization } from "./synchronization.js";
 import { capabilityMetrics } from "./metrics.js";
 
+/**
+ * Session advisory lock key that makes one bot process the database's only writer (amendment C3).
+ * It is distinct from the transaction locks for migrations (714882490), character claims (714882491)
+ * and legacy import (714882492). Operators probe it in pg_locks before migrate, import, activate or
+ * restore; docs/OPERATIONS.md has the query.
+ */
+export const WRITER_LEASE_LOCK = 714882494;
+
+/** Writer-lease timing and the lost-lease exit; production uses the defaults, tests shorten them. */
+export interface LifecycleOptions {
+  /** Delay between lease attempts while another writer holds the lock. */
+  readonly leaseRetryMs: number;
+  /** Continuous wait after which each waiting log escalates from info to warn. */
+  readonly leaseWarnAfterMs: number;
+  /** Interval between checks that the held lease's own session still answers and holds the lock. */
+  readonly leaseCheckMs: number;
+  /**
+   * Client-side deadline for every statement on the lease session: each wait attempt and holder
+   * probe, the periodic check and the unlock. A silently dead socket (failover, dropped NAT flow)
+   * never raises an error, and the server-side statement_timeout cannot fire on a connection that
+   * is gone, so only this bounds the wait.
+   */
+  readonly leaseQueryTimeoutMs: number;
+  /**
+   * Deadline for shutdown, after which the process exits anyway (with status 1 once the lease was
+   * lost). A half-open socket can also hang pool.end() on a worker's checked-out client.
+   */
+  readonly stopDeadlineMs: number;
+  /** Ends the process: after shutdown when a held lease's session was lost, or at the deadline. */
+  readonly exit: (code: number) => void;
+}
+const LIFECYCLE_DEFAULTS: LifecycleOptions = {
+  leaseRetryMs: 5000,
+  leaseWarnAfterMs: 60000,
+  // A silent loss is noticed within about leaseCheckMs + leaseQueryTimeoutMs (40 s).
+  leaseCheckMs: 30000,
+  leaseQueryTimeoutMs: 10000,
+  // Below the 30 s grace period supervisors allow between SIGTERM and SIGKILL.
+  stopDeadlineMs: 27000,
+  exit: (code) => process.exit(code),
+};
+
+/** Only pg_locks identifies the holder; a single bigint key is classid 0, objid key, objsubid 1. */
+const LEASE_HOLDER = `SELECT pid FROM pg_locks
+  WHERE locktype = 'advisory' AND granted
+    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    AND classid = 0 AND objid = $1::bigint::oid AND objsubid = 1`;
+
+/** The periodic lease check: does this very session (pg_backend_pid) still hold the lock? */
+const LEASE_HELD = `SELECT EXISTS (SELECT 1 FROM pg_locks
+  WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()
+    AND classid = 0 AND objid = $1::bigint::oid AND objsubid = 1) AS held`;
+
+/**
+ * node-postgres honours a per-query read timeout (`query_timeout`, client.js), which its QueryConfig
+ * type omits; every statement on the lease session carries one.
+ */
+type TimedQuery = QueryConfig & { query_timeout: number };
+
 /** Owns readiness, application scheduling, and graceful release of durable work resources. */
 export class ApplicationLifecycle {
   private readonly initialized = Promise.withResolvers<void>();
+  /** Resolved once shutdown begins so a lease wait wakes at once instead of after its retry delay. */
+  private readonly halted = Promise.withResolvers<void>();
   private readonly health: Bun.Server<undefined>;
+  private readonly options: LifecycleOptions;
   private monitor: ReturnType<typeof setInterval> | undefined;
   private stopPromise: Promise<void> | undefined;
+  /** The writer-lease acquisition that prepare() awaits; close() lets it settle before releasing. */
+  private leasing: Promise<void> | undefined;
+  /** Dedicated pool client whose session holds WRITER_LEASE_LOCK for the process lifetime. */
+  private lease: PoolClient | undefined;
+  private leaseHeld = false;
+  /** Periodic check of the held lease session; see checkWriterLease. */
+  private leaseCheck: ReturnType<typeof setInterval> | undefined;
+  /** The in-flight check, which release awaits so the unlock never queues behind it. */
+  private leaseChecking: Promise<void> | undefined;
+  /** Set once the lease session errored, went silent or lost the lock; release then destroys it. */
+  private leaseBroken = false;
+  /** Exit status the shutdown deadline uses; a lost or failed lease session makes it 1. */
+  private exitCode = 0;
   private ready = false;
   private databaseReady = false;
   private stopping = false;
@@ -31,12 +107,19 @@ export class ApplicationLifecycle {
     private readonly queue: Queue,
     private readonly log: Logger,
     private readonly report: (error: unknown, operation: string) => void,
+    options: Partial<LifecycleOptions> = {},
   ) {
+    this.options = { ...LIFECYCLE_DEFAULTS, ...options };
     // Probes depend on local readiness, never on a live Lodestone acquisition.
     this.health = Bun.serve<undefined>({
       port: config.HEALTH_PORT,
       fetch: (request) => this.probe(request),
     });
+  }
+
+  /** The probe server's bound address; tests listen on port 0 and read the chosen port here. */
+  get healthUrl(): URL {
+    return this.health.url;
   }
 
   /** Shared scope gate for every installed feature's guild-specific event handling. */
@@ -49,10 +132,159 @@ export class ApplicationLifecycle {
     return this.stopping;
   }
 
-  /** Check migrations before login can deliver any persisted guild observations. */
+  /**
+   * Check migrations, then wait for the single-writer lease. main.ts logs in only after this
+   * resolves, so no gateway event, startup write or queue worker runs before the lease is held.
+   */
   async prepare(): Promise<void> {
     await this.db.schema();
     this.databaseReady = true;
+    this.leasing ??= this.acquireWriterLease();
+    await this.leasing;
+  }
+
+  /**
+   * Hold WRITER_LEASE_LOCK on a dedicated pool client for the process lifetime. While another
+   * writer (for example an overlapping deployment) holds it, retry every leaseRetryMs; liveness
+   * stays 200 and readiness stays false until this process holds it.
+   */
+  private async acquireWriterLease(): Promise<void> {
+    const client = await this.db.pool.connect();
+    this.lease = client;
+    // Losing this session frees the lock for another writer; see leaseLost.
+    client.on("error", this.leaseLost);
+    const started = performance.now();
+    const waited = () => Math.round(performance.now() - started);
+    for (;;) {
+      if (this.stopping) throw this.stoppedBeforeLease();
+      const attempt = await this.waitStatement<{ locked: boolean }>(
+        client,
+        "SELECT pg_try_advisory_lock($1::bigint) AS locked",
+      );
+      if (attempt.rows[0]?.locked) {
+        this.leaseHeld = true;
+        // A shutdown that began during the attempt still unlocks in close(); never report success.
+        if (this.stopping) throw this.stoppedBeforeLease();
+        this.log.info(
+          { lock: WRITER_LEASE_LOCK, waitedMs: waited() },
+          "Database writer lease acquired",
+        );
+        // The session is otherwise idle, so only a query shows that it is still alive.
+        this.leaseCheck = setInterval(() => {
+          this.leaseChecking ??= this.checkWriterLease().finally(() => {
+            this.leaseChecking = undefined;
+          });
+        }, this.options.leaseCheckMs);
+        return;
+      }
+      const holder = await this.waitStatement<{ pid: number }>(client, LEASE_HOLDER);
+      const waitedMs = waited();
+      this.log[waitedMs >= this.options.leaseWarnAfterMs ? "warn" : "info"](
+        { lock: WRITER_LEASE_LOCK, holderPid: holder.rows[0]?.pid, waitedMs },
+        "Waiting for the database writer lease held by another TaruBot writer; readiness stays false.",
+      );
+      await Promise.race([Bun.sleep(this.options.leaseRetryMs), this.halted.promise]);
+    }
+  }
+
+  /** One statement on the lease session, bounded by the client-side read timeout. */
+  private leaseStatement(text: string): TimedQuery {
+    return { text, values: [WRITER_LEASE_LOCK], query_timeout: this.options.leaseQueryTimeoutMs };
+  }
+
+  /**
+   * A wait-loop statement on the lease session, bounded like the check and the unlock: a half-open
+   * socket would otherwise hang prepare() (and a SIGTERM, which lets the attempt settle first) until
+   * TCP retransmission gives up, while readiness stays false and liveness keeps the process. pg's
+   * query_timeout neither destroys the connection nor emits 'error', so any failure marks the
+   * session broken here; release then destroys it instead of returning it to the pool. prepare()
+   * rejects, main.ts stops and exits non-zero, and the supervisor restarts with a fresh session.
+   */
+  private async waitStatement<R extends QueryResultRow>(client: PoolClient, text: string) {
+    try {
+      return await client.query<R>(this.leaseStatement(text));
+    } catch (error) {
+      this.leaseBroken = true;
+      this.exitCode = 1;
+      this.log.error(
+        { lock: WRITER_LEASE_LOCK },
+        "The database writer lease session failed while waiting; stopping so a restart can wait again.",
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Nothing else is ever sent on the lease session, so a half-open connection (a failover whose old
+   * primary vanished, a dropped NAT flow) would never raise 'error' while PostgreSQL has already
+   * freed the lock. Ask the session itself, with a deadline; no answer, an error or a missing lock
+   * is a lost lease. Never rejects.
+   */
+  private async checkWriterLease(): Promise<void> {
+    const client = this.lease;
+    if (!client || !this.leaseHeld || this.stopping) return;
+    try {
+      const result = await client.query<{ held: boolean }>(this.leaseStatement(LEASE_HELD));
+      if (result.rows[0]?.held !== true)
+        this.leaseLost(new Error("The writer lease session no longer holds the lock."));
+    } catch (error) {
+      this.leaseLost(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /** prepare() rejects with this so main.ts never logs in during a shutdown. */
+  private stoppedBeforeLease(): Failure {
+    return new Failure("stopping", "Shutdown began before the database writer lease was held.");
+  }
+
+  /**
+   * A held lease's session ended (database restart, failover or a terminated backend) or stopped
+   * answering the periodic check, so PostgreSQL has released, or will release, the lock and another
+   * writer may take it. Stop, then exit non-zero so the supervisor restarts this process, which
+   * waits for the lease again.
+   */
+  private readonly leaseLost = (error: Error): void => {
+    // Whatever the phase, this session can no longer be trusted: release destroys it.
+    this.leaseBroken = true;
+    if (!this.leaseHeld || this.stopping) return;
+    this.leaseHeld = false;
+    // Also the shutdown deadline's status, should shutdown itself hang on the dead connection.
+    this.exitCode = 1;
+    this.report(error, "writer-lease");
+    this.log.error(
+      { lock: WRITER_LEASE_LOCK },
+      "Database writer lease lost; stopping this writer.",
+    );
+    void this.stop()
+      .catch((stopError: unknown) => this.report(stopError, "shutdown"))
+      .finally(() => this.options.exit(1));
+  };
+
+  /** Unlock and return the lease client; a broken session is destroyed, which frees its locks. */
+  private async releaseWriterLease(): Promise<void> {
+    // An in-flight attempt settles first (halted wakes its wait), so the client is never shared.
+    await this.leasing?.catch(() => undefined);
+    if (this.leaseCheck) clearInterval(this.leaseCheck);
+    // A running check is bounded by leaseQueryTimeoutMs and never rejects.
+    await this.leaseChecking;
+    const client = this.lease;
+    if (!client) return;
+    this.lease = undefined;
+    client.off("error", this.leaseLost);
+    const held = this.leaseHeld;
+    this.leaseHeld = false;
+    // An errored or silent session is never unlocked over or pooled again; destroying it ends the
+    // backend's session, which is what frees a lock it may still hold.
+    if (this.leaseBroken) {
+      client.release(true);
+      return;
+    }
+    try {
+      if (held) await client.query(this.leaseStatement("SELECT pg_advisory_unlock($1::bigint)"));
+      client.release();
+    } catch (error) {
+      client.release(error instanceof Error ? error : true);
+    }
   }
 
   /** Main awaits the dynamically installed ready handler rather than registering its own. */
@@ -63,6 +295,12 @@ export class ApplicationLifecycle {
   /** Called once by client-ready.event: reconcile presence, then start application workers. */
   async start(): Promise<void> {
     try {
+      // Defense in depth: startup writes and the queue belong to the lease holder only.
+      if (!this.leaseHeld)
+        throw new Failure(
+          "writer_lease",
+          "Startup requires the database writer lease; prepare() must complete first.",
+        );
       if (this.gateway.client.application?.id !== this.config.DISCORD_APPLICATION_ID) {
         throw new Failure(
           "configuration",
@@ -88,10 +326,15 @@ export class ApplicationLifecycle {
             .update(t.guilds)
             .set({ active: true })
             .where(eq(t.guilds.id, guild))
-            .returning({ id: t.guilds.id, access_policy_enabled: t.guilds.access_policy_enabled });
+            .returning({
+              id: t.guilds.id,
+              access_policy_enabled: t.guilds.access_policy_enabled,
+              role_layout_enabled: t.guilds.role_layout_enabled,
+            });
           if (configured.length) {
             await enqueue(client, "reconcile.guild", `guild:${guild}`, {}, guild);
-            await layoutGuildRoles(client, guild);
+            // Layout-disabled guilds (for example an imported server) get no presentation work.
+            if (configured[0]?.role_layout_enabled) await layoutGuildRoles(client, guild);
             if (configured[0]?.access_policy_enabled) await secureGuildChannels(client, guild);
           }
         }
@@ -131,6 +374,7 @@ export class ApplicationLifecycle {
     const available =
       !this.stopping &&
       this.ready &&
+      this.leaseHeld &&
       this.databaseReady &&
       this.db.healthy &&
       this.gateway.client.isReady();
@@ -139,6 +383,8 @@ export class ApplicationLifecycle {
         live: !this.stopping,
         ready: available,
         database: this.databaseReady && this.db.healthy,
+        // False while another writer holds the lease; liveness is unaffected.
+        writerLease: this.leaseHeld,
         discord: this.gateway.client.isReady(),
         effects: this.config.ENABLE_EFFECTS,
         publicTestResponses:
@@ -157,14 +403,24 @@ export class ApplicationLifecycle {
 
   /** Cleanup is shared by startup failures and process signals. */
   private async close(): Promise<void> {
-    const hardStop = setTimeout(() => process.exit(0), 27000);
+    // A hung shutdown still ends: 0 for an ordinary stop, 1 once the lease was lost.
+    const hardStop = setTimeout(
+      () => this.options.exit(this.exitCode),
+      this.options.stopDeadlineMs,
+    );
     this.stopping = true;
     this.ready = false;
+    // Wake a lease wait at once; prepare() then rejects and login never starts.
+    this.halted.resolve();
     if (this.monitor) clearInterval(this.monitor);
+    if (this.leaseCheck) clearInterval(this.leaseCheck);
     this.app.lodestone.stop();
     await Promise.race([this.queue.stop(), Bun.sleep(20000)]);
     await this.gateway.client.destroy();
     await this.health.stop(true);
+    // Hand the lease over only once this process's workers and gateway have stopped writing.
+    // pool.end() would otherwise wait on the checked-out lease client.
+    await this.releaseWriterLease();
     await this.db.close();
     clearTimeout(hardStop);
   }

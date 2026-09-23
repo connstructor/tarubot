@@ -1,11 +1,19 @@
 /** Operator CLI: requeue failed/blocked delivery without repeating its committed decision. */
 import { z } from "zod";
+import { assertToolScope } from "../src/config/deployment.js";
 import { id } from "../src/domain/values.js";
 import { audit, Database, orm } from "../src/infrastructure/postgres/database.js";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import * as t from "../src/infrastructure/postgres/schema.js";
 const guild = id(process.argv[2]);
 const job = z.uuid().parse(process.argv[3]);
+// The guild and database must belong to this env's deployment profile before any connection.
+assertToolScope(process.env, {
+  tool: "retry",
+  guilds: [guild],
+  discord: "none",
+  databases: ["DATABASE_URL"],
+});
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is required");
 const db = new Database(url);

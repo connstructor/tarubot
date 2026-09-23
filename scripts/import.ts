@@ -1,4 +1,5 @@
 /** Legacy import CLI: decode/validate first, print a dry run or publish the complete mapped import. */
+import { assertToolScope } from "../src/config/deployment.js";
 import { readDump } from "../src/import/dump.js";
 import {
   importLegacy,
@@ -38,6 +39,22 @@ if (args.includes("--dry-run")) {
   console.log(json(importReport(data, snapshot, mapping)));
 } else {
   if (!snapshot) throw new Error("A complete --snapshot is required to publish an import.");
+  // Publishing writes every guild the dump, snapshot and mapping name into DATABASE_URL, so all of
+  // them and the database must belong to this env's deployment profile. Dry runs stay guard-free:
+  // they use no credentials and no database.
+  assertToolScope(process.env, {
+    tool: "import",
+    guilds: [
+      ...new Set([
+        ...data.guilds.map((guild) => guild.guild_id),
+        ...snapshot.guilds.map((guild) => guild.id),
+        ...Object.values(mapping.ownership).flat(),
+        ...Object.values(mapping.accounts),
+      ]),
+    ],
+    discord: "none",
+    databases: ["DATABASE_URL"],
+  });
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required");
   const db = new Database(url);

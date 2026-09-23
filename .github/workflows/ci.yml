@@ -71,12 +71,21 @@ jobs:
         run: |
           docker compose --env-file .env.example config --quiet
           docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.build.yml config --quiet
-      - name: Validate App Platform schema without cloud credentials
-        run: >-
-          docker run --rm --network none
-          -v "$PWD/.do:/spec:ro"
-          digitalocean/doctl:1.169.0@sha256:f8a097dd95129ce4e5c751418d3ba4a67372c908728064af2b7fa7e3ee02b75f
-          apps spec validate /spec/app.yaml --schema-only
+      # The app is created from the worker-free foundation phase and updated through the
+      # maintenance phase, so both derived files are validated alongside the committed template.
+      - name: Derive worker-free App Platform phases
+        run: |
+          mkdir -p .cache/ci/app-platform
+          for phase in foundation maintenance; do
+            bun scripts/app-spec.ts "$phase" .do/app.yaml ".cache/ci/app-platform/$phase.yaml"
+          done
+      - name: Validate App Platform schemas without cloud credentials
+        run: |
+          for spec in .do/app.yaml .cache/ci/app-platform/foundation.yaml .cache/ci/app-platform/maintenance.yaml; do
+            docker run --rm --network none -v "$PWD:/repo:ro" \
+              digitalocean/doctl:1.169.0@sha256:f8a097dd95129ce4e5c751418d3ba4a67372c908728064af2b7fa7e3ee02b75f \
+              apps spec validate "/repo/$spec" --schema-only > /dev/null
+          done
       # Last, so dependency-update pull requests report every other step of this job before a
       # maintainer adds the required version increment; the job, the container builds that depend
       # on it, and CI result still fail without it.

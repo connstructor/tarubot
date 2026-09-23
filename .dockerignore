@@ -11,6 +11,10 @@ artifacts
 # Credentials and legacy inputs enter only at runtime/cutover, never through image layers.
 .env
 .env.*
+*.env
+**/*.env
+# The non-secret templates are unit-tested inside the build stage; the runtime stages never copy them.
+!.env.example
 tarubot_backup.sql
 *.log
 .DS_Store

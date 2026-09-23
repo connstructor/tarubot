@@ -67,6 +67,20 @@ export const guilds = pgTable("guilds", {
   revision: money("revision").notNull().default(1n),
   active: boolean("active").notNull().default(true),
   effects_enabled: boolean("effects_enabled").notNull().default(false),
+  /**
+   * Managed-role layout switch (CFG-07). On: keep the managed roles displayed separately in one
+   * consecutive FC Leader > Officer > Member > Guest block. Off: never change any role's hoist flag
+   * or position; access roles are still assigned. /setup and /config guilds start on (the column
+   * default); imported guilds start off.
+   */
+  role_layout_enabled: boolean("role_layout_enabled").notNull().default(true),
+  /**
+   * First-activation grandfathering: NULL never applies (guilds not imported from the legacy bot),
+   * 'pending' awaits the imported guild's single first-activation run, 'completed' records that run.
+   */
+  guest_grandfather: text("guest_grandfather", { enum: ["pending", "completed"] }),
+  /** Set exactly when guest_grandfather is 'completed' (the guest_grandfather_completion CHECK). */
+  guest_grandfathered_at: instant("guest_grandfathered_at"),
   created_at: instant("created_at").notNull().defaultNow(),
 });
 export const guildUsers = pgTable(
@@ -176,6 +190,10 @@ export const guestGrants = pgTable("guest_grants", {
   id: uuid("id").primaryKey().defaultRandom(),
   guild_id: externalId("guild_id").notNull(),
   user_id: externalId("user_id").notNull(),
+  /**
+   * 'approved' (application review), 'manual' (/guest grant), 'imported_guest' (legacy import) or
+   * 'grandfathered' (first activation of an imported guild); every provenance is equally durable.
+   */
   provenance: text("provenance").notNull(),
   source_key: text("source_key").notNull(),
   actor_id: externalId("actor_id"),

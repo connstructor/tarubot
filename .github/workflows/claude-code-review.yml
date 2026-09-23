@@ -49,3 +49,8 @@ jobs:
           # The plugin grants its own `gh` commands; allowing the inline-comment tool is what makes
           # the action start that MCP server.
           claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # Temporary diagnostics: silent reviews on large PRs give no reason in the default log.
+          # This prints the full transcript, including tool results, into this public repository's
+          # Actions log; the reviewer only reads public PR content and GitHub masks registered
+          # secrets. Remove once the cause is known, and never enable it in claude.yml.
+          show_full_output: true

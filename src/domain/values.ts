@@ -5,11 +5,17 @@ import { z } from "zod";
 export const MAX_ID = 18_446_744_073_709_551_615n;
 /** Money uses PostgreSQL's signed bigint range, with nonnegative account balances. */
 export const MAX_GIL = 9_223_372_036_854_775_807n;
-/** Reject leading zeroes, signs, whitespace, and values outside unsigned 64-bit IDs. */
+/** Decimal shape of an external ID: no leading zeroes, signs, or whitespace. */
+const ID_PATTERN = /^[1-9][0-9]{0,19}$/;
+/**
+ * Reject malformed values and values outside unsigned 64-bit IDs. Zod 4 still runs a refinement
+ * after a failed regex check, so the range check re-tests the shape before calling BigInt, which
+ * would otherwise throw a raw SyntaxError for input such as a typed name or "@name".
+ */
 export const idSchema = z
   .string()
-  .regex(/^[1-9][0-9]{0,19}$/)
-  .refine((v) => BigInt(v) <= MAX_ID);
+  .regex(ID_PATTERN)
+  .refine((v) => ID_PATTERN.test(v) && BigInt(v) <= MAX_ID);
 export type Id = string;
 
 /** Deliberately user-safe diagnostics; raw transport/database exceptions stay out of replies. */

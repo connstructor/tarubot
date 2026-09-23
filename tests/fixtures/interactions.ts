@@ -84,7 +84,11 @@ export function interactionFixture() {
     client,
     requests,
     member,
-    slash(name = "apply") {
+    /**
+     * `options` and `resolved` are raw Discord payload shapes, so a test can exercise the real
+     * option resolver (subcommand groups, booleans, resolved roles) of a command module.
+     */
+    slash(name = "apply", options: unknown[] = [], resolved?: unknown) {
       // SDK constructors are internal in the typings; runtime construction plus instanceof
       // keeps the fixture typed without substituting a hand-written interaction implementation.
       const value: unknown = Reflect.construct(ChatInputCommandInteraction, [
@@ -92,7 +96,7 @@ export function interactionFixture() {
         {
           ...payload(),
           type: InteractionType.ApplicationCommand,
-          data: { id: "700", name, type: 1, options: [] },
+          data: { id: "700", name, type: 1, options, resolved },
         },
       ]);
       if (!(value instanceof ChatInputCommandInteraction)) throw new Error("Invalid slash fixture");
