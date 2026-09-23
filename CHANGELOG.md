@@ -1,6 +1,27 @@
 # Version history
 
-The current application version is **2.10.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.11.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.11.1 — Bound channel reconciliation reads
+
+- Reuse a single captured channel session per reconciliation instead of force-fetching the guild and complete channel list for every target.
+- Use the connected Gateway cache for no-op detection and protected binding/parent fences, with targeted REST reads before and after changed-channel writes.
+- Keep full initial/final inventory verification, with at most one additional catalogue check before lowering the shared everyone default.
+- Add a real application/SDK/PostgreSQL request-count regression for an 82-channel managed guild, plus disconnected/missing-scope safety coverage.
+
+## 2.11.0 — DigitalOcean App Platform deployment
+
+- Add a GHCR-backed App Platform spec with one bot worker, internal Nodestone service, pre-deploy migration job, and a newly provisioned inline PostgreSQL 18 dev database.
+- Bind database credentials and the provider CA at runtime; enforce certificate/hostname verification when `DATABASE_CA_CERT` is supplied, including over conflicting URL TLS flags.
+- Validate the provider schema offline in CI and test release/credential/networking invariants and actual driver TLS option parsing.
+- Document initial provisioning, secrets, command registration, dev-database limits, and phased single-writer updates with persistent database identity.
+
+## 2.10.2 — Separate officer chat from community channels
+
+- Exclude Discord's configured community-updates channel and its parent category from onboarding preflight, selection, snapshots, and permission writes, using IDs rather than channel names.
+- Prefer/create `#officer-chat` as the separate officer room and reject reserved resources as onboarding bindings.
+- Recheck protected scope before remote mutations and react to community binding changes. Preserve the everyone visibility default where changing it would affect an excluded area.
+- Verify reserved-channel privacy and limited-permission setup with SDK, PostgreSQL, and read-only DevBot preflight checks; record the new live officer room.
 
 ## 2.10.1 — Preserve explicit channel privacy
 
@@ -94,6 +115,9 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.9.0 | Typed Drizzle persistence with exact-value, transaction, and queue regression coverage |
 | 2.10.0 | Opt-in lobby/staff channel security and derived registered-visitor Guest access |
 | 2.10.1 | Preserve private channels expressed through explicit role/member visibility denies |
+| 2.10.2 | Protected community-update resources and separate officer chat |
+| 2.11.0 | App Platform spec with automatic PostgreSQL provisioning and provider-CA support |
+| 2.11.1 | Reconciliation-scoped inventories and bounded targeted Discord reads |
 
 ## Increment policy
 

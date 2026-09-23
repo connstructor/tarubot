@@ -157,7 +157,7 @@ test("compiled output discovers the same module inventory as source", async () =
   expect(errors).toBe("");
   expect(JSON.parse(output)).toEqual({
     commands: [...source.keys()],
-    events: 14,
+    events: 15,
     components: ["guest"],
   });
 }, 30000);

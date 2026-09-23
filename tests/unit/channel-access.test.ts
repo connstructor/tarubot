@@ -255,6 +255,173 @@ test("explicit visibility denies keep new default-closed channels staff-only", a
   }
 });
 
+test("community updates and its category stay outside provisioning even when the bot cannot view them", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    const closed = [
+      { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+    ];
+    const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
+    // An inviting name must never override the authoritative Discord community binding.
+    const updates = fixture.add(
+      "officer-chat",
+      ChannelType.GuildText,
+      structuredClone(closed),
+      parent.id,
+    );
+    fixture.community.updatesChannelId = updates.id;
+    const original = structuredClone([parent, updates]);
+    const snapshot = await fixture.port.snapshot("100", fixture.bindings);
+    expect(snapshot.excludedChannelIds.sort()).toEqual([parent.id, updates.id].sort());
+    expect(snapshot.channels).toEqual([]);
+    expect(snapshot.preserveEveryoneView).toBe(false);
+    const prepared = await fixture.port.prepare("100", "301", fixture.bindings, null, null);
+    expect(prepared.officers.created).toBe(true);
+    expect(prepared.officers.id).not.toBe(updates.id);
+    expect(fixture.channels.find((channel) => channel.id === prepared.officers.id)?.name).toBe(
+      "officer-chat",
+    );
+    expect(
+      prepared.snapshot.channels.some((channel) =>
+        snapshot.excludedChannelIds.includes(channel.id),
+      ),
+    ).toBe(false);
+    for (const id of snapshot.excludedChannelIds)
+      await expect(
+        fixture.port.channel("100", id, fixture.bindings, "officers", async () => {}),
+      ).rejects.toThrow("reserved");
+    expect(await fixture.port.restrictEveryone("100", async () => {})).toBe(true);
+    expect([parent, updates]).toEqual(original);
+    expect(
+      fixture.writes.filter(
+        (route) => route === `/channels/${parent.id}` || route === `/channels/${updates.id}`,
+      ),
+    ).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("reserved bindings and mid-write community reconfiguration cannot redirect onboarding into protected channels", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    const updates = fixture.add("updates");
+    await expect(
+      fixture.port.channel("100", updates.id, fixture.bindings, "officers", async () => {
+        fixture.community.updatesChannelId = updates.id;
+        // The Gateway applies this setting to the cached guild before dispatching GuildUpdate.
+        const guild = fixture.client.guilds.cache.get("100");
+        if (!guild) throw new Error("Missing cached guild");
+        guild.publicUpdatesChannelId = updates.id;
+      }),
+    ).rejects.toMatchObject({ code: "superseded" });
+    const parent = fixture.add("new-parent", ChannelType.GuildCategory);
+    await expect(
+      fixture.port.channel("100", parent.id, fixture.bindings, "members", async () => {
+        updates.parent_id = parent.id;
+        // Hidden channels still receive parent metadata through Guilds Gateway updates.
+        const cached = fixture.client.guilds.cache.get("100")?.channels.cache.get(updates.id);
+        if (!cached || cached.isThread()) throw new Error("Missing cached community channel");
+        cached.parentId = parent.id;
+      }),
+    ).rejects.toMatchObject({ code: "superseded" });
+    await expect(
+      fixture.port.prepare("100", "301", fixture.bindings, null, updates.id),
+    ).rejects.toThrow("reserved");
+    await expect(
+      fixture.port.prepare("100", "301", fixture.bindings, updates.id, null),
+    ).rejects.toThrow("reserved");
+    expect(fixture.writes).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("protected areas that inherit visibility retain the guild default while ordinary channels are gated", async () => {
+  for (const withParent of [false, true]) {
+    const fixture = discordAccessFixture();
+    try {
+      const parent = withParent ? fixture.add("Admin", ChannelType.GuildCategory) : undefined;
+      const updates = fixture.add(
+        "community-updates",
+        ChannelType.GuildText,
+        withParent
+          ? [{ id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) }]
+          : [],
+        parent?.id ?? null,
+      );
+      fixture.community.updatesChannelId = updates.id;
+      const before = structuredClone([updates, parent]);
+      expect((await fixture.port.snapshot("100", fixture.bindings)).preserveEveryoneView).toBe(
+        true,
+      );
+      expect(await fixture.port.restrictEveryone("100", async () => {})).toBe(false);
+      expect(
+        BigInt(fixture.roles.find((role) => role.id === "100")?.permissions ?? "0") & P.ViewChannel,
+      ).toBe(P.ViewChannel);
+      const ordinary = fixture.add("ordinary");
+      await fixture.port.channel("100", ordinary.id, fixture.bindings, "members", async () => {});
+      const guild = await fixture.client.guilds.fetch("100");
+      const newcomer = await guild.members.fetch("400"),
+        member = await guild.members.fetch("401");
+      const channel = await guild.channels.fetch(ordinary.id);
+      expect(channel?.permissionsFor(newcomer).has(P.ViewChannel)).toBe(false);
+      expect(channel?.permissionsFor(member).has(P.ViewChannel)).toBe(true);
+      expect([updates, parent]).toEqual(before);
+      expect(fixture.writes).toEqual([`/channels/${ordinary.id}`]);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+test("missing community metadata blocks changes instead of guessing a protected parent", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    fixture.community.updatesChannelId = "9999";
+    await expect(fixture.port.prepare("100", "301", fixture.bindings, null, null)).rejects.toThrow(
+      "metadata is unavailable",
+    );
+    await expect(fixture.port.restrictEveryone("100", async () => {})).rejects.toThrow(
+      "metadata is unavailable",
+    );
+    expect(fixture.writes).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a scoped pass stops on a disconnected gateway or missing protected metadata", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    const closed = [
+      { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+    ];
+    const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
+    const updates = fixture.add(
+      "updates",
+      ChannelType.GuildText,
+      structuredClone(closed),
+      parent.id,
+    );
+    fixture.community.updatesChannelId = updates.id;
+    const target = fixture.add("ordinary");
+    const session = await fixture.port.begin("100", fixture.bindings);
+    fixture.ready.mockReturnValue(false);
+    await expect(session.channel(target.id, "members", async () => {})).rejects.toMatchObject({
+      code: "transient",
+    });
+    fixture.ready.mockReturnValue(true);
+    fixture.client.guilds.cache.get("100")?.channels.cache.delete(parent.id);
+    await expect(session.restrictEveryone(async () => {})).rejects.toMatchObject({
+      code: "superseded",
+    });
+    expect(fixture.writes).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("privacy classification separates newly closed defaults from explicit private areas", () => {
   const channel: AccessChannel = {
     id: "200",

@@ -67,7 +67,7 @@ The first layout checked priority but allowed interleaving and retained newly cr
 - The owner ran `/nickname enabled:false`, clearing the expected nickname block. Persisted nickname management, restoration, pending-write, and successful-write flags are all false.
 - Refresh run `df8fa3fa-9688-4994-9435-58e32a3b59d5` reused the valid `17:29:12.810Z` roster and completed all **seven jobs**: guild enumeration, five human reconciliations, and role layout. The human status snapshot caught layout still running; database readback confirmed it succeeded at `2026-09-22T17:57:35.080124Z`, on its first attempt with empty hoist/position deltas. Every run job succeeded, and no queued, running, blocked, failed, or disabled guild-scoped work remained.
 
-Higher positions take priority. The current verified layout is:
+Higher positions take priority. The recorded layout at that verification was:
 
 | Managed role | ID | Position | Separate member-list display |
 | --- | --- | --- | --- |
@@ -76,7 +76,7 @@ Higher positions take priority. The current verified layout is:
 | DevBot Member | `1042089882677420172` | 2 | Enabled |
 | DevBot Guest | `1042089887798677545` | 1 | Enabled |
 
-The managed block is uninterrupted, and unrelated roles retain their relative order. The latest session announcement is [available in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1552008870069538898).
+The managed block was uninterrupted, and unrelated roles retained their relative order. That session announcement is [available in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1552008870069538898).
 
 Repeat the scoped probes with:
 
@@ -98,12 +98,25 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 
 ## Human interaction checks
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out, leaving no outstanding guild work. The current plan focuses on `/version` access, history counts, links, and verified-signature badges. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for the remaining acceptance work.
+### 2.10.1 rollout and limited-permission follow-up
+
+- Published bot/sidecar images for merge `0744cfbe926c38ec277ab8481f75e3391a91c31d` were pulled and deployed as **2.10.1**, without source mounts.
+- With the writer stopped, `tarubot_dev` was backed up to `.cache/backups/tarubot_dev-before-2.10.1-0744cfb.dump`. A disposable restore matched every existing row, sequence, trigger, and constraint. Migration 003 was rehearsed on that restore before application to DevBot; all prior application rows were preserved.
+- Two active ownership links, guild revision 9, and the uninitialized ledger account survived rollout. Database/Discord readiness passed with zero pending/blocked work. All 19 root commands / 40 paths matched their deployed definitions, including the new setup options.
+- The 2.10.1 startup plan was read back publicly in `#chat`: [message 1552126390214860923](https://discord.com/channels/1040379370159743139/1040379370931507252/1552126390214860923).
+- The subsequent permission check confirmed **Administrator disabled** and exactly the README's eight explicit bot-role permissions. All four role bindings passed hierarchy checks; complete enumeration returned seven humans and DevBot.
+- Discord identifies `1040379572358746144` (`moderator-only`) as `public_updates_channel_id`, under the permission-synced `1040381910863593492` (`Admin`) category. The owner requested these community resources remain outside onboarding.
+- Created the separate private **officer-chat**, `1552149138148433930`, with staff and bot access. DevBot successfully read it and exercised both permission-edit and channel-edit APIs under its limited role. Reserved community metadata was verified intact.
+- A read-only probe of the compiled 2.10.2 fix passed setup preflight for ten managed channels, excluding the community-updates channel and Admin category. This was a one-shot validation; the running application remains on the published 2.10.1 image until the fix is merged/published/deployed.
+
+The next live action after deploying the fix is `/setup officers:#officer-chat`, followed by `/sync status` and non-owner/non-Administrator visibility tests. Onboarding was still opted out at the last check. The separate room's creation and permission readback do not establish the cause of the earlier community-channel 403 responses.
+
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The current plan focuses on community-aware onboarding and registered visitor access. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for the remaining acceptance work.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 
 The owner requested public output for observers in this development server. The DevBot Compose overlay enables `PUBLIC_TEST_RESPONSES` by default; new slash-command, component, and error replies in the configured test guild are public. Authorization still applies to every operation. Visibility is selected when Discord acknowledges an interaction, so the setting applies to new replies after deployment.
 
-DevBot still has **Administrator**. Functional probes succeeded under that permission; validating the intended minimum-permission deployment requires disabling Administrator and granting Manage Roles, Manage Nicknames, and the documented channel permissions explicitly.
+Earlier functional probes used Administrator. It is now disabled; the documented limited permissions, role hierarchy, command inventory, member enumeration, and new officer-room management have passed. Full onboarding and human visibility verification under that permission set remain in the current session plan.
 
 Discord forbids bots from changing the owner's nickname regardless of role order. Choose one of the non-owner human participants for successful nickname-write tests; the owner's expected blocked outcome can be tested separately.

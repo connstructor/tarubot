@@ -14,6 +14,8 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 
 The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
 
+For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) provisions a new PostgreSQL 18 **dev database**, a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for filling secrets, deploying from scratch, and updating with one active writer.
+
 Normal deployments pull **`ghcr.io/connstructor/tarubot:latest`** and **`ghcr.io/connstructor/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
 The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
@@ -93,7 +95,7 @@ Grant the guild-level management permissions and the channel permissions in each
 | **Attach Files** | Deliver structured command results and retain explicit bot access in managed onboarding channels. |
 | **Read Message History** | Find existing bot-owned messages for notification deduplication and guest-review updates or repair. |
 
-Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Access roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles; onboarding also excludes Manage Channels. Give the bot's own role View Channel and ensure it can view/manage every channel it will secure. See [SETUP.md](docs/SETUP.md) for authority checks and the onboarding visibility matrix.
+Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Access roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles; onboarding also excludes Manage Channels. Give the bot's own role View Channel and ensure it can view/manage every channel it will secure. Discord's configured community-updates channel and its parent category are excluded from onboarding and its permission preflight. See [SETUP.md](docs/SETUP.md) for authority checks and the onboarding visibility matrix.
 
 All commands are guild-only. Responses use the declared privacy defaults, with public replies enabled for the observed DevBot test guild through `PUBLIC_TEST_RESPONSES`. Review/ledger/officer messages go to their configured destinations. Notifications default to no parsed mentions.
 
@@ -119,7 +121,7 @@ The configured **DevBot** test session uses `docker-compose.devbot.yml` and its 
 
 Use `/config fc link`, `/config roles member`, `/config roles guest`, and the three notification-channel configuration commands. `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles.
 
-`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and officer-only text room. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary channels, and Officers/FC Leaders see staff areas and the lobby. Existing private areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. An optional in-game officer rank enables automatic bot-only Officer access. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
+`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and a separate `#officer-chat`. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary managed channels, and Officers/FC Leaders see managed staff areas and the lobby. Existing private managed areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. The community-updates channel and its parent retain their existing policy. An optional in-game officer rank enables automatic bot-only Officer access. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
 
 Every development startup posts the current responsibility-separated session plan to `#chat`. Update `test-plans/current.json` for the next session; see [TEST_PLANS.md](docs/TEST_PLANS.md).
 
