@@ -3,7 +3,7 @@ import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { completeCharacter } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { preferencesReply } from "../../discord/presenters/characters.js";
 import { id } from "../../domain/values.js";
 
 export default defineCommand({
@@ -11,8 +11,8 @@ export default defineCommand({
     string("character", "Active trusted character ID", true, true),
   ),
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
-    return dataReply(
+  async execute({ actor, viewer, interaction, services }) {
+    return preferencesReply(
       await services
         .get(applicationKey)
         .preferences(
@@ -20,6 +20,9 @@ export default defineCommand({
           id(interaction.options.getString("character", true), "character"),
           null,
         ),
+      viewer,
+      // The cached guild names its owner, whose nickname Discord never lets a bot change.
+      { command: "main", guildOwner: interaction.guild?.ownerId === actor.userId },
     );
   },
   autocomplete: (context) => completeCharacter(context),

@@ -10,6 +10,7 @@ import type { Audience } from "../../../src/discord/presenters/audience.js";
 import type { Presented } from "../../../src/discord/presenters/reply.js";
 import type { Tone } from "../../../src/discord/presenters/style.js";
 import { expectHouseStyle } from "../replies.js";
+import { CHARACTER_CASES } from "./characters.js";
 import { FAILURE_CASES } from "./failures.js";
 
 /** One catalogued reply state. */
@@ -27,6 +28,11 @@ export interface ReplyCase {
    * and tone per (concept, audience) across every catalog.
    */
   readonly concept?: string;
+  /**
+   * A no-op result (nothing new was saved). The C4 tone table makes these info, except the
+   * approved neutral cards; reply-consistency.test checks every one.
+   */
+  readonly noOp?: boolean;
   readonly tone: Tone;
   readonly title: string;
   /** Whether the embed carries a timestamp, as the approved card's `timestamp` records. */
@@ -46,6 +52,7 @@ export type ReplyCatalog<Kind extends string> = Readonly<Record<Kind, ReplyCase>
  */
 export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
   failures: FAILURE_CASES,
+  characters: CHARACTER_CASES,
 };
 
 /**

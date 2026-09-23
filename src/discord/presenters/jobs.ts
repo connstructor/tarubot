@@ -1,7 +1,8 @@
 /**
  * Background Discord work as status replies show it: the approved job line (errors-and-style#28),
- * the effects field that reports queued or paused work in change receipts, and the roster-evidence
- * field. Shared by /guest status, /sync status, /ledger balance and the change presenters.
+ * the effects field that reports queued or paused work in change receipts, the paused-save card
+ * parts (errors-and-style#26) and the roster-evidence field. Shared by /guest status, /sync status,
+ * /ledger balance and the change presenters.
  */
 import type { EffectsMode, JobView, RosterEvidence } from "../../application/results.js";
 import { WAITING_CODES } from "../../domain/failures.js";
@@ -242,6 +243,50 @@ export function effectsField(
       ? "Server activation pending"
       : "Disabled globally (ENABLE_EFFECTS)";
   return { name, value: isOfficer(viewer) ? `${value}\nWhy: ${why}` : value, inline: true };
+}
+
+/**
+ * When work a change queued reaches Discord, as receipt fields word it: 'shortly' while effects
+ * are live, otherwise when the pause ends. It completes sentences such as 'Changes to X shortly.'
+ */
+export function whenApplied(mode: EffectsMode): string {
+  if (mode === "live") return "shortly";
+  return mode === "awaiting_activation"
+    ? "once this server is activated"
+    : "once Discord changes are turned back on";
+}
+
+/** The parts of the approved paused-save card that every change receipt shares. */
+export interface PausedSave {
+  readonly tone: "pending";
+  readonly title: string;
+  /** Follows the receipt's own sentence saying what was saved. */
+  readonly sentence: string;
+  /** 'Saved' and 'Discord changes', both inline, as approved; officers also see why. */
+  readonly fields: readonly [FieldSpec, FieldSpec];
+  readonly footer: string;
+}
+
+/**
+ * A change saved while Discord effects are paused (approved errors-and-style#26, owner decision
+ * O2): always pending tone and titled 'Saved, Discord changes paused', never a success card with a
+ * PAUSED field. The receipt keeps its own facts and says what it saved first; this supplies the
+ * rest. Deployment-wide pauses get their own sentence, since activation won't end them.
+ */
+export function pausedSave(mode: Exclude<EffectsMode, "live">, viewer: Viewer): PausedSave {
+  return {
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    sentence:
+      mode === "awaiting_activation"
+        ? "TaruBot won't change roles, nicknames or channels in this server until activation finishes. It will apply this change automatically then."
+        : "Discord changes are off for this deployment, so TaruBot won't change roles, nicknames or channels for now. It will apply this change automatically once they're turned back on.",
+    fields: [
+      { name: "Saved", value: marker("saved"), inline: true },
+      effectsField(mode, "", viewer),
+    ],
+    footer: "Check progress any time with /sync status",
+  };
 }
 
 /**

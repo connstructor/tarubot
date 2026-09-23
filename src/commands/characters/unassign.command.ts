@@ -3,7 +3,7 @@ import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { completeCharacter } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { unlinkReply } from "../../discord/presenters/characters.js";
 import { userId } from "../../discord/selectors.js";
 import { authorize } from "../../domain/policy.js";
 import { id } from "../../domain/values.js";
@@ -15,9 +15,9 @@ export default defineCommand({
     .addStringOption(string("reason", "Audited reason", true)),
   access: "officer",
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     authorize(actor, actor.guildId, "officer");
-    return dataReply(
+    return unlinkReply(
       await services
         .get(applicationKey)
         .unclaim(
@@ -26,6 +26,8 @@ export default defineCommand({
           id(interaction.options.getString("character", true), "character"),
           interaction.options.getString("reason", true),
         ),
+      viewer,
+      { command: "unassign" },
     );
   },
   autocomplete(context) {

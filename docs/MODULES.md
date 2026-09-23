@@ -130,6 +130,8 @@ A click is acknowledged with a new reply by default. A component that re-renders
 
 The `guest` component demonstrates durable officer review IDs: it validates action, application UUID, guild, actor permissions, and stored message identity before committing a decision. The separate user-level `guest-apply` namespace handles application forms and their join bindings. New components should resolve private payloads through the same owning-guild authorization rules.
 
+Reply buttons build and parse their custom IDs with the one codec in `src/discord/custom-ids.ts`, which carries selectors only (never the clicker). The `verify` component serves `/claim`'s verify-now button (always a new reply, so the token message is never edited) and the pending-token card's Check again (an in-place update, refused within 15 seconds of the card's last render). The officer-only `details` component re-runs an officer read view for its presser and replies with the JSON file through `dataReply()`; each read view that offers Full details adds its case there.
+
 ## Commenting conventions
 
 - File headers explain the module's responsibility and architectural boundary.

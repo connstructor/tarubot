@@ -14,7 +14,9 @@ import {
   jobLine,
   jobLines,
   jobMarker,
+  pausedSave,
   rosterEvidence,
+  whenApplied,
 } from "../../src/discord/presenters/jobs.js";
 import { reply } from "../../src/discord/presenters/reply.js";
 import { MARKER, type Marker } from "../../src/discord/presenters/style.js";
@@ -301,6 +303,35 @@ describe("effects and roster evidence", () => {
         expect(value).not.toContain("QUEUED");
         expect(value).not.toContain("shortly");
       }
+  });
+
+  test("a paused save is the approved pending card; only officers see why it waits", () => {
+    expect(pausedSave("awaiting_activation", VIEWERS.member)).toEqual({
+      tone: "pending",
+      title: "Saved, Discord changes paused",
+      sentence:
+        "TaruBot won't change roles, nicknames or channels in this server until activation finishes. It will apply this change automatically then.",
+      fields: [
+        { name: "Saved", value: "`• SAVED`", inline: true },
+        { name: "Discord changes", value: "`‖ PAUSED` until activation", inline: true },
+      ],
+      footer: "Check progress any time with /sync status",
+    });
+    const deployment = pausedSave("deployment_disabled", VIEWERS.officer);
+    expect(deployment.sentence).toContain("Discord changes are off for this deployment");
+    expect(deployment.sentence).not.toContain("activation");
+    expect(deployment.fields[1].value).toBe(
+      "`‖ PAUSED` Discord changes are off for this deployment\nWhy: Disabled globally (ENABLE_EFFECTS)",
+    );
+    expect(
+      ["live", "awaiting_activation", "deployment_disabled"].map((mode) =>
+        whenApplied(mode as EffectsMode),
+      ),
+    ).toEqual([
+      "shortly",
+      "once this server is activated",
+      "once Discord changes are turned back on",
+    ]);
   });
 
   test("roster evidence is a Member role field, never a title", () => {

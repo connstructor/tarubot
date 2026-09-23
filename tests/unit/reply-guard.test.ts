@@ -14,14 +14,6 @@ const ALLOWED = new Set(["src/discord/presenters/reply.ts", "src/components/deta
 
 /** Modules that still dump results as JSON through src/discord/replies.ts, until they migrate. */
 const PENDING = new Set([
-  "src/commands/characters/assign.command.ts",
-  "src/commands/characters/characters.command.ts",
-  "src/commands/characters/claim.command.ts",
-  "src/commands/characters/main.command.ts",
-  "src/commands/characters/nickname.command.ts",
-  "src/commands/characters/unassign.command.ts",
-  "src/commands/characters/unclaim.command.ts",
-  "src/commands/characters/verify.command.ts",
   "src/commands/configuration/config.command.ts",
   "src/commands/configuration/officer.command.ts",
   "src/commands/configuration/setup.command.ts",

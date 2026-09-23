@@ -2,7 +2,7 @@
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { assignReply } from "../../discord/presenters/characters.js";
 import { resolveCharacter, userId } from "../../discord/selectors.js";
 import { authorize } from "../../domain/policy.js";
 
@@ -16,17 +16,20 @@ export default defineCommand({
     .addStringOption(string("world", "Exact world")),
   access: "officer",
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     authorize(actor, actor.guildId, "officer");
     const app = services.get(applicationKey);
     await app.guild(actor);
-    return dataReply(
+    // A character linked to someone else fails as ownership_conflict; the failure presenter shows
+    // officers the current owner beside the /unassign step (owner decision O3).
+    return assignReply(
       await app.assign(
         actor,
         userId(interaction.options.getString("member", true)),
         await resolveCharacter(app, interaction),
         interaction.options.getString("reason", true),
       ),
+      viewer,
     );
   },
 });

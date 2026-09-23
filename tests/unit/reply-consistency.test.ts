@@ -67,11 +67,25 @@ const FAILURE_PINS: Readonly<Record<string, Pin>> = {
     member: ["warning", "Server setup issue"],
     officer: ["warning", "Discord permissions need attention"],
   },
-  // C4 tone table: a paused refusal is pending like every paused state. The table's rows for
-  // change results, sync views and no-op results are pinned as their groups migrate.
+  // C4 tone table: a paused refusal is pending like every paused state. The rows for change
+  // results and no-op results are pinned below; sync views join as their group migrates.
   paused: { member: ["pending", "Discord changes paused"] },
   unexpected: { member: ["error", "Something went wrong"] },
 };
+
+/**
+ * The C4 tone table's rows for change results, pinned as groups migrate: a change saved while
+ * Discord effects are paused is the approved errors-and-style#26 card in every group.
+ */
+const RESULT_PINS: Readonly<Record<string, readonly [Tone, string]>> = {
+  paused_save: ["pending", "Saved, Discord changes paused"],
+};
+
+/** No-op results are info (C4), except these approved neutral cards. */
+const NEUTRAL_NO_OPS: ReadonlySet<string> = new Set([
+  "No correction needed",
+  "Nickname sync already off",
+]);
 
 /** Officers and managers read the officer pin; members and pre-actor replies the member pin. */
 const officerAudience = (reply: ReplyCase): boolean =>
@@ -118,6 +132,32 @@ describe("one presentation per concept", () => {
       });
       expect(embed.footer?.text).toStartWith("Code blocked · ");
     }
+  });
+
+  test("change results keep the C4 tone table's pinned title and tone", () => {
+    for (const reply of CASES) {
+      const pin = reply.concept ? RESULT_PINS[reply.concept] : undefined;
+      if (!pin) continue;
+      const embed = onlyEmbed(reply.render());
+      expect({ key: reply.key, title: embed.title, tone: reply.tone }).toEqual({
+        key: reply.key,
+        title: pin[1],
+        tone: pin[0],
+      });
+    }
+    // Every pinned row is exercised by at least one catalog case.
+    const concepts = new Set(CASES.map((reply) => reply.concept));
+    for (const concept of Object.keys(RESULT_PINS)) expect(concepts).toContain(concept);
+  });
+
+  test("no-op results are info, except the approved neutral cards", () => {
+    const noOps = CASES.filter((reply) => reply.noOp);
+    expect(noOps.length).toBeGreaterThan(0);
+    for (const reply of noOps)
+      expect({ key: reply.key, tone: reply.tone }).toEqual({
+        key: reply.key,
+        tone: NEUTRAL_NO_OPS.has(reply.title) ? "neutral" : "info",
+      });
   });
 
   test("every pinned failure concept is present in the catalogs", () => {
