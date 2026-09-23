@@ -23,7 +23,13 @@ import {
 } from "../../src/application/role-administration.js";
 import { rankAccess, desiredRankRole } from "../../src/application/rank-policy.js";
 import { Synchronization } from "../../src/application/synchronization.js";
-import type { ApplicationRecord, DiscordPort, MemberView } from "../../src/application/records.js";
+import type {
+  ApplicationRecord,
+  DirectMessage,
+  DiscordPort,
+  MemberView,
+  PostMessage,
+} from "../../src/application/records.js";
 import type { Configuration } from "../../src/config/env.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { desiredAccess } from "../../src/domain/policy.js";
@@ -54,6 +60,7 @@ import applyCommand from "../../src/commands/guests/apply.command.js";
 import applyComponent from "../../src/components/guest-application.component.js";
 import reviewComponent from "../../src/components/guest-review.component.js";
 import { guestApplicationModal } from "../../src/discord/guest-application.js";
+import { ledgerPost } from "../../src/discord/presenters/ledger.js";
 import { GUEST_APPLICATIONS_CLOSED } from "../../src/domain/guest-application.js";
 import {
   activateGuild,
@@ -85,6 +92,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   let sendBlocked = false;
   let nicknameBlocked = false;
   let nicknameRace = false;
+  /** Posts and DMs the dispatcher handed over, so tests can check the data (not text) it passes. */
+  const sent: { guild: string; channel: string; message: PostMessage; key: string }[] = [];
+  const dms: { user: string; message: DirectMessage }[] = [];
   const discord: DiscordPort = {
     // Mutable observations and injected delivery failures model Discord races without credentials.
     async member(guild, user) {
@@ -130,14 +140,17 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       member.nickname = value;
       return true;
     },
-    async send() {
+    async send(guild, channel, message, key) {
       if (sendBlocked) throw new Failure("blocked", "Test channel delivery blocked.");
+      sent.push({ guild, channel, message, key });
       return "123456789";
     },
     async editReview(_application: ApplicationRecord) {
       return "123456789";
     },
-    async dm() {},
+    async dm(user, message) {
+      dms.push({ user, message });
+    },
   };
   class FakeNodestone extends Nodestone {
     // Explicit observation timestamps advance departure evidence without waiting a real minute.
@@ -848,6 +861,66 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         )
       )[0]?.count,
     ).toBe(1n);
+    // The dispatcher hands over the stored entry, not text, under the unchanged nonce key.
+    expect(sent.at(-1)).toMatchObject({
+      guild,
+      key: `ledger:${result.entry.id}`,
+      message: {
+        kind: "ledger",
+        view: { entry: { id: result.entry.id, operation: "deposit" }, correctionSequence: null },
+      },
+    });
+  });
+  test("a correction's post names the corrected entry by its number from one read", async () => {
+    await db.query("UPDATE jobs SET status='succeeded' WHERE kind='ledger.notify'");
+    const deposit = await service.ledger(actor, "deposit", 7, "Corrected below", randomUUID());
+    if (deposit.status !== "recorded") throw new Error("Missing deposit");
+    const correction = await service.ledger(
+      actor,
+      "adjust",
+      (deposit.entry.balance - 2n).toString(),
+      "The deposit was 5 gil",
+      randomUUID(),
+      deposit.entry.id,
+    );
+    if (correction.status !== "recorded") throw new Error("Missing correction");
+    // Posts go out in entry order, so the deposit's post is delivered first.
+    await db.query(
+      "UPDATE jobs SET status='succeeded' WHERE kind='ledger.notify' AND payload->>'entryId'=$1",
+      [deposit.entry.id],
+    );
+    const queued = (
+      await db.query<{ id: string }>(
+        "SELECT id FROM jobs WHERE kind='ledger.notify' AND payload->>'entryId'=$1",
+        [correction.entry.id],
+      )
+    )[0];
+    if (!queued) throw new Error("Missing correction notification");
+    await new Queue(db, dispatcher(service, sync, access), () => {}).perform(
+      await leased(queued.id),
+    );
+    expect(
+      (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [queued.id]))[0]
+        ?.status,
+    ).toBe("succeeded");
+    const post = sent.at(-1);
+    expect(post).toMatchObject({
+      key: `ledger:${correction.entry.id}`,
+      message: {
+        kind: "ledger",
+        view: {
+          entry: { id: correction.entry.id, operation: "adjust", delta: -2n },
+          correctionSequence: deposit.entry.sequence,
+        },
+      },
+    });
+    // The gateway renders that view as the approved correction post (ledger#32).
+    if (post?.message.kind !== "ledger") throw new Error("Expected a ledger post");
+    expect(ledgerPost(post.message.view).options.embeds[0]?.fields).toContainEqual({
+      name: "Corrects",
+      value: `#${deposit.entry.sequence}`,
+      inline: true,
+    });
   });
   test("PostgreSQL bigint maximum round-trips and overflow is rejected atomically", async () => {
     const unknown = source.companies.filter((row) => row.gil_balance === null)[1];
@@ -4418,6 +4491,21 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         state: "approved",
         introduction: input.introduction,
         interest: input.interest,
+      });
+      // The decision DM carries the stored application and the configured reapply cooldown.
+      const [dm] = await db.orm
+        .select()
+        .from(t.jobs)
+        .where(eq(t.jobs.dedupe_key, `dm:${application.id}`));
+      if (!dm) throw new Error("Missing decision DM work");
+      await deliver(await leased(dm.id), async () => {});
+      expect(dms.at(-1)).toMatchObject({
+        user: applicant.userId,
+        message: {
+          kind: "decision",
+          application: { id: application.id, state: "approved" },
+          cooldownSeconds: config.GUEST_COOLDOWN_SECONDS,
+        },
       });
       expect(JSON.stringify(interactions.requests)).not.toContain(input.introduction);
     } finally {

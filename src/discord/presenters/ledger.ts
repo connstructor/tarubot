@@ -1,10 +1,11 @@
 /**
  * Ledger presenters: the /ledger deposit, withdraw, initialize and adjust receipts, the /ledger
- * balance view and the paged /ledger history. Each renders a typed service result for its viewer,
- * reproducing the approved mockups (ledger#0, #2, #16, #17 and #21) exactly and the reply specs
- * for the other states. Failures are never caught here: the router's failure presenter renders
- * them (approved ledger#7 among them). Pure; receipts carry the entry's own event_at as their
- * timestamp, and read views carry none, as approved.
+ * balance view, the paged /ledger history, and each entry's post in the ledger channel (which the
+ * gateway renders for the ledger.notify job). Each renders a typed service result for its viewer,
+ * reproducing the approved mockups (ledger#0, #2, #16, #17, #21, #29 and #32) exactly and the
+ * reply specs for the other states. Failures are never caught here: the router's failure
+ * presenter renders them (approved ledger#7 among them). Pure; receipts and posts carry the
+ * entry's own event_at as their timestamp, and read views carry none, as approved.
  *
  * Members see amounts, balances, entry numbers and a count of posts still on their way; officers
  * also see entry UUIDs (for `/ledger adjust entry:`), each channel post's state, the FC ID, the
@@ -16,6 +17,7 @@
  * '**Blocked**: …', '[Posted](link)', runs of successes collapsed as '#34–#40 · Posted (7)') in
  * both the balance and the history view, so one vocabulary describes a ledger post everywhere.
  */
+import type { LedgerPostView } from "../../application/records.js";
 import type {
   EffectsMode,
   FcRef,
@@ -43,7 +45,15 @@ import {
   when,
 } from "./format.js";
 import { jobCode, jobMarker, pausedSave, whenApplied } from "./jobs.js";
-import { reply, type ButtonSpec, type FieldSpec, type Presented, type ReplySpec } from "./reply.js";
+import {
+  // Aliased: the receipts below name their channel-post wording `post`.
+  post as channelPost,
+  reply,
+  type ButtonSpec,
+  type FieldSpec,
+  type Presented,
+  type ReplySpec,
+} from "./reply.js";
 import { DISCORD_LIMITS, HOUSE_LIMITS, marker, SEPARATOR, type Tone } from "./style.js";
 
 /**
@@ -91,7 +101,7 @@ function card(kind: LedgerReplyKind, spec: Omit<ReplySpec, "timestamp">, at?: Da
 // ---------------------------------------------------------------------------------------------
 // Shared wording
 
-/** How each stored operation reads in titles, fields and history (and later the channel post). */
+/** How each stored operation reads in titles, fields, history and the channel post. */
 export const LEDGER_OPERATION = {
   deposit: "Deposit",
   withdraw: "Withdrawal",
@@ -856,5 +866,91 @@ export function historyReply(result: LedgerHistoryView, viewer: Viewer): Present
       officer &&
         detailsButton({ action: "history", scope, fcId: account.fc_id, before: result.before }),
     ],
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The ledger channel post
+
+/**
+ * Every ledger channel post kind, each stamped with its entry's event_at (approved ledger#29 and
+ * #32, reply specs #30 and #31). An imported opening balance never posts, but reads as an opening.
+ */
+const POST_TIMESTAMP = {
+  "post.deposit": true,
+  "post.withdraw": true,
+  "post.opening": true,
+  "post.correction": true,
+} as const satisfies Record<string, boolean>;
+
+/** A ledger channel post state; tests catalogue one case per kind. */
+export type LedgerPostKind = keyof typeof POST_TIMESTAMP;
+
+/** Every ledger post kind, for catalog completeness checks. */
+export const LEDGER_POST_KINDS = Object.keys(POST_TIMESTAMP) as readonly LedgerPostKind[];
+
+/**
+ * Post color encodes the operation, a feed signal rather than an outcome (every entry was
+ * recorded): deposit success, withdrawal and opening balance info (a withdrawal is a normal
+ * event, and orange is the house warning), correction warning so a fix stands out.
+ */
+const POST_TONE: Readonly<Record<LedgerPostKind, Tone>> = {
+  "post.deposit": "success",
+  "post.withdraw": "info",
+  "post.opening": "info",
+  "post.correction": "warning",
+};
+
+/** Which post an entry's operation makes; an operation this release doesn't know reads as info. */
+function postKind(operation: string): LedgerPostKind | null {
+  if (operation === "deposit") return "post.deposit";
+  if (operation === "withdraw") return "post.withdraw";
+  if (opening(operation)) return "post.opening";
+  if (operation === "adjust") return "post.correction";
+  return null;
+}
+
+/**
+ * One entry's post in the ledger channel (approved ledger#29 and #32, reply specs #30 and #31):
+ * '<Operation> · <signed amount>' (an opening balance unsigned), the full note escaped as the
+ * description, the new balance (a correction shows the previous and new balance and the entry
+ * number it corrects; an opening balance is its own balance), who recorded it ('Legacy import'
+ * without an actor) and the entry number, with 'Entry <uuid>' in the footer and event_at as the
+ * timestamp. It has no content, no author line and nothing per-attempt, so a nonce retry sends
+ * byte-identical JSON. Channel posts are exempt from the 1,000-character house description limit:
+ * a note of 1,000 characters is shown whole, and escaping keeps it within Discord's 4,096.
+ */
+export function ledgerPost(view: LedgerPostView): Presented {
+  const { entry } = view;
+  const kind = postKind(entry.operation);
+  const correction = kind === "post.correction";
+  return channelPost({
+    tone: kind ? POST_TONE[kind] : "info",
+    title: `${operationLabel(entry.operation)}${SEPARATOR}${entryAmount(entry)}`,
+    description: plain(entry.note, DISCORD_LIMITS.description),
+    fields: [
+      correction && {
+        name: "Previous balance",
+        value: gilText(entry.balance - entry.delta),
+        inline: true,
+      },
+      correction && { name: "New balance", value: gilText(entry.balance), inline: true },
+      !correction &&
+        kind !== "post.opening" && { name: "Balance", value: gilText(entry.balance), inline: true },
+      view.correctionSequence !== null && {
+        name: "Corrects",
+        value: `#${view.correctionSequence}`,
+        inline: true,
+      },
+      {
+        name: "Recorded by",
+        value: entry.actor_id ? mentionUser(entry.actor_id) : "Legacy import",
+        inline: true,
+      },
+      { name: "Entry", value: `#${entry.sequence}`, inline: true },
+    ],
+    footer: `Entry ${entry.id}`,
+    // Every post kind is stamped (POST_TIMESTAMP), with the entry's own time, never the send time.
+    timestamp: entry.event_at,
   });
 }

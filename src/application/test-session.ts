@@ -20,7 +20,15 @@ export const testSessionSchema = z.object({
 });
 export type TestSessionPlan = z.infer<typeof testSessionSchema>;
 
-/** Public session information never includes environment values, tokens, or profile proofs. */
+/**
+ * Public session information never includes environment values, tokens, or profile proofs.
+ *
+ * A documented exclusion from the reply presenters (src/discord/presenters): this DevBot-only
+ * announcement already sends an embed, but with its own layout — a content line above one embed
+ * whose three checklist fields testSessionSchema sizes to fit, and an effects line instead of
+ * status markers. It is not a user-facing reply, so it keeps that layout rather than the house
+ * style's tones, titles and field limits.
+ */
 export function testSessionMessage(
   plan: TestSessionPlan,
   botName: string,

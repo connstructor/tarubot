@@ -3,6 +3,8 @@
  * declaratively, and these builders apply Discord's limits deterministically, run the discord.js
  * validators, and return a nominal Presented. Nothing reaches Discord without passing through
  * here, so an oversized value is cut instead of failing with a 400 after the service committed.
+ * The two documented exclusions are officer.notify's escaped plain text (redesigned in 2.15.0)
+ * and the DevBot test-session announcement (src/application/test-session.ts).
  */
 import {
   ActionRowBuilder,

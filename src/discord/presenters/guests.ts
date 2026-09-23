@@ -1,10 +1,12 @@
 /**
  * Guest presenters: /guest status (the member's own view and the officer record view), /guest
  * grant and revoke, /guest approve and deny and the review message's buttons, /apply's closed card
- * and form receipt, and the officer application autocomplete choice. Each renders a typed service
- * result for its viewer, reproducing the approved mockups (guests#0, #7, #10, #11 and #21) exactly
- * and the reply specs for the other states. Failures are never caught here: the router's failure
- * presenter renders them. Pure; the clock is injected for embed timestamps and deadlines.
+ * and form receipt, the officer application autocomplete choice, and the review message and
+ * decision DM the gateway renders for the guest.review and guest.dm jobs. Each renders a typed
+ * service result or stored application for its viewer, reproducing the approved mockups (guests#0,
+ * #7, #10, #11 and #21) exactly and the reply specs for the other states. Failures are never
+ * caught here: the router's failure presenter renders them. Pure; the clock is injected for reply
+ * timestamps and deadlines, and the review message and DM are stamped from the stored record.
  *
  * Members never see officer-authored grant or revocation reasons, reviewers, channel or message
  * IDs, job IDs or diagnostics. The one reason an applicant reads is their own denial reason (C6),
@@ -16,6 +18,7 @@
  * view show raw job kinds, as approved (errors-and-style#28); members read labels.
  */
 import type { ApplicationCommandOptionChoiceData } from "discord.js";
+import type { ApplicationRecord } from "../../application/records.js";
 import type {
   ApplicationChoiceRow,
   ApplicationState,
@@ -29,7 +32,7 @@ import type {
 } from "../../application/results.js";
 import { GUEST_APPLICATIONS_CLOSED } from "../../domain/guest-application.js";
 import { isOfficer, type Viewer } from "./audience.js";
-import { detailsButton } from "./controls.js";
+import { detailsButton, reviewButtons } from "./controls.js";
 import {
   choice,
   cmd,
@@ -44,11 +47,19 @@ import {
   plain,
   quote,
   shortId,
+  title,
   when,
 } from "./format.js";
 import { jobLine, jobMarker, pausedSave, whenApplied } from "./jobs.js";
 import { applicationState, grantProvenance } from "./labels.js";
-import { reply, type EmbedSpec, type FieldSpec, type Presented, type ReplySpec } from "./reply.js";
+import {
+  post,
+  reply,
+  type EmbedSpec,
+  type FieldSpec,
+  type Presented,
+  type ReplySpec,
+} from "./reply.js";
 import { DISCORD_LIMITS, HOUSE_LIMITS, type Tone } from "./style.js";
 
 /**
@@ -1053,4 +1064,181 @@ export function applicationChoice(
     `${who} · submitted ${row.created_at.toISOString().slice(0, 10)} · ${shortId(row.id)}`,
     row.id,
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The review message and the decision DM
+
+/**
+ * Every review message and decision DM kind. Each is stamped from the stored record, never the
+ * send time, so a repair or retry redraws the same message: the review message with when the
+ * application was submitted, the DM with when it was decided (reply specs guests#29–#32).
+ */
+const POST_TIMESTAMP = {
+  "review.pending": true,
+  "review.legacy": true,
+  "review.approved": true,
+  "review.denied": true,
+  "review.cancelled": true,
+  "review.superseded": true,
+  "dm.approved": true,
+  "dm.denied": true,
+} as const satisfies Record<string, boolean>;
+
+/** A review message or decision DM state; tests catalogue one case per kind. */
+export type GuestPostKind = keyof typeof POST_TIMESTAMP;
+
+/** Every review message and DM kind, for catalog completeness checks. */
+export const GUEST_POST_KINDS = Object.keys(POST_TIMESTAMP) as readonly GuestPostKind[];
+
+/** The review message's title suffix and tone for each stored state. */
+const REVIEW_STATE: Readonly<
+  Record<ApplicationState, { readonly suffix: string | null; readonly tone: Tone }>
+> = {
+  pending: { suffix: null, tone: "pending" },
+  approved: { suffix: "approved", tone: "success" },
+  denied: { suffix: "denied", tone: "warning" },
+  cancelled: { suffix: "cancelled", tone: "neutral" },
+  superseded: { suffix: "no longer needed", tone: "info" },
+};
+
+/** A stored state's review wording; a state from a newer release shows raw, as info. */
+function reviewState(state: string): { readonly suffix: string | null; readonly tone: Tone } {
+  return Object.hasOwn(REVIEW_STATE, state)
+    ? (REVIEW_STATE[state as ApplicationState] ?? { suffix: state, tone: "info" })
+    : { suffix: state, tone: "info" };
+}
+
+/**
+ * Who decided and when, in the words of reply spec guests#30. An officer's decision names them;
+ * a cancellation or closure without a reviewer happened automatically, and says why. A
+ * cancellation with a reviewer (a guest revocation, or a decision that found the applicant gone)
+ * names the officer without guessing which.
+ */
+function decisionValue(application: ApplicationRecord): string {
+  const at = application.decided_at ? ` ${when(application.decided_at, "R")}` : "";
+  const by = application.reviewer_id ? ` by ${mentionUser(application.reviewer_id)}` : "";
+  switch (application.state) {
+    case "approved":
+      return `Approved${by}${at}`;
+    case "denied":
+      return `Denied${by}${at}`;
+    case "cancelled":
+      return by
+        ? `Cancelled${by}${at}`
+        : `Cancelled automatically${at}: applicant left or rejoined`;
+    case "superseded":
+      return by
+        ? `Closed${by}${at}: applicant already qualifies`
+        : `Closed automatically${at}: applicant now qualifies through the FC or a registered character`;
+    default:
+      return `${applicationState(application.state)}${by}${at}`;
+  }
+}
+
+/**
+ * The review message in the officers' review channel (reply specs guests#29 and #30, and the
+ * legacy gap): one embed that replaces the pre-2.14.0 text plus 'Applicant answers' embed.
+ * 'Guest application' while pending, with when the applicant joined and Approve and Deny; once
+ * decided, 'Guest application · approved' (or denied, cancelled, no longer needed) with who
+ * decided, any reason, and both buttons disabled. The answers stay visible after a decision, so
+ * the record stays with the review; each is escaped whole (300 characters at most, so escaping
+ * keeps it within a field). A legacy application from before the form keeps 'Submitted before
+ * application forms were introduced.' instead of answers. Officer-authored reasons are capped at
+ * 300 characters. The mention never pings (every post sends allowedMentions {parse: []}).
+ */
+export function guestReviewPost(application: ApplicationRecord): Presented {
+  const pending = application.state === "pending";
+  const legacy = application.introduction === null || application.interest === null;
+  const state = reviewState(application.state);
+  const reason = application.reason?.trim();
+  return post({
+    tone: state.tone,
+    title: title("Guest application", state.suffix),
+    description: [
+      `${mentionUser(application.user_id)} applied for Guest access.${
+        pending ? " Officer review is required; submitting the form does not grant access." : ""
+      }`,
+      legacy && "Submitted before application forms were introduced.",
+    ],
+    fields: [
+      {
+        name: "Applicant",
+        value: `${mentionUser(application.user_id)}\n${code(application.user_id)}`,
+        inline: true,
+      },
+      pending && { name: "Joined server", value: when(application.joined_at, "R"), inline: true },
+      { name: "Submitted", value: when(application.created_at, "R"), inline: true },
+      !pending && { name: "Decision", value: decisionValue(application) },
+      !pending && reason ? { name: "Reason", value: plain(reason, HOUSE_LIMITS.userText) } : null,
+      application.introduction !== null && {
+        name: "Introduce yourself",
+        value: plain(application.introduction),
+      },
+      application.interest !== null && {
+        name: "Why join this server?",
+        value: plain(application.interest),
+      },
+    ],
+    footer: `Application ${application.id}`,
+    // Every review kind is stamped (POST_TIMESTAMP) with the submission, so redraws match.
+    timestamp: application.created_at,
+    buttons: reviewButtons(application.id, !pending),
+  });
+}
+
+/** What the decision DM needs besides the application. */
+export interface DecisionDmOptions {
+  /** The reapply cooldown (GUEST_COOLDOWN_SECONDS), for when a denied applicant may apply again. */
+  readonly cooldownSeconds: number;
+  /** The server's name from the client cache, or null when it isn't cached. */
+  readonly serverName: string | null;
+}
+
+/**
+ * The DM an applicant receives once officers decide (reply specs guests#31 and #32), in words
+ * for the applicant: no guild, user or application internals beyond the footer's application ID.
+ * Approved is success, 'Your guest application was approved'; denied is warning, 'Your guest
+ * application was not approved', with the officers' reason (the one reason an applicant reads,
+ * C6, capped at 300 characters, or 'No reason was given.') and when they may apply again. The
+ * server is named in bold when the client has it cached, or 'the server where you applied'. Only
+ * approved and denied applications send a DM; the dispatcher refuses any other state.
+ */
+export function decisionDm(application: ApplicationRecord, options: DecisionDmOptions): Presented {
+  const server = options.serverName?.trim()
+    ? `**${plain(options.serverName, DISCORD_LIMITS.fieldName)}**`
+    : "the server where you applied";
+  // Both DM kinds are stamped (POST_TIMESTAMP) with the decision, so a retried DM matches.
+  const decidedAt = application.decided_at ?? application.created_at;
+  const footer = `Application ${application.id}`;
+  if (application.state === "approved")
+    return post({
+      tone: "success",
+      title: "Your guest application was approved",
+      description: `You now have Guest access in ${server}. Your roles update shortly.`,
+      footer,
+      timestamp: decidedAt,
+    });
+  const reason = application.reason?.trim();
+  const reapply = new Date(decidedAt.getTime() + options.cooldownSeconds * 1_000);
+  return post({
+    tone: "warning",
+    title: "Your guest application was not approved",
+    description: `Officers reviewed your application for ${server}.`,
+    fields: [
+      {
+        name: "Reason",
+        value: reason ? plain(reason, HOUSE_LIMITS.userText) : "No reason was given.",
+      },
+      {
+        name: "Apply again",
+        value:
+          options.cooldownSeconds > 0
+            ? `From ${when(reapply, "R")}, if applications are open`
+            : "Any time, if applications are open",
+      },
+    ],
+    footer,
+    timestamp: decidedAt,
+  });
 }

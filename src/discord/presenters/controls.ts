@@ -131,6 +131,20 @@ export const recheckButton = (label: "Run health check" | "Re-check"): ButtonSpe
   customId: encodeControl({ prefix: "config", action: "validate" }),
 });
 
+/**
+ * The review message's Approve and Deny (moved here from the gateway in 2.14.0). Their custom IDs
+ * are unchanged since 2.12.0, because posted review messages still carry them; both are disabled
+ * once the application is decided, so the message keeps its record without live controls.
+ */
+export function reviewButtons(application: string, decided: boolean): ButtonSpec[] {
+  return (["approve", "deny"] as const).map((action) => ({
+    style: action === "approve" ? "success" : "danger",
+    label: action === "approve" ? "Approve" : "Deny",
+    disabled: decided,
+    customId: encodeControl({ prefix: "guest", action, application }),
+  }));
+}
+
 /** /setup's 'Check sync status', optionally for one run; it opens a new reply. */
 export const syncStatusButton = (run: string | null = null): ButtonSpec => ({
   style: "secondary",

@@ -1,9 +1,6 @@
 /** Discord.js adapter: current permission checks, complete observations, and scoped effects. */
 import { createHash } from "node:crypto";
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ChannelType,
   Client,
   DiscordAPIError,
@@ -13,10 +10,18 @@ import {
 import type { Collection, GuildMember, Role } from "discord.js";
 import { Failure, normalized } from "../domain/values.js";
 import type { Actor } from "../domain/policy.js";
-import type { ApplicationRecord, DiscordPort, MemberView } from "../application/records.js";
+import type {
+  ApplicationRecord,
+  DirectMessage,
+  DiscordPort,
+  MemberView,
+  PostMessage,
+} from "../application/records.js";
 import { roleLayoutPlan, rolePositionChanges, type RoleLayoutPlan } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
-import { guestApplicationEmbeds } from "./guest-application.js";
+import { decisionDm, guestReviewPost } from "./presenters/guests.js";
+import { ledgerPost } from "./presenters/ledger.js";
+import type { Presented } from "./presenters/reply.js";
 
 /**
  * Lowest role first. Discord can give new roles identical raw positions; the SDK comparison
@@ -354,13 +359,35 @@ export class DiscordGateway implements DiscordPort {
     await member.setNickname(value, "TaruBot character nickname");
     return true;
   }
+  /**
+   * A presenter post's message options, mentions forced off. content is '' (which also clears a
+   * pre-2.14.0 message's text on edit), with one embed and the post's buttons.
+   */
+  private static sendable(presented: Presented) {
+    return { ...presented.options, allowedMentions: { parse: [] as [] } };
+  }
+  /**
+   * Render a post from its data through the reply presenters, so jobs never build message text.
+   * `text` is the documented plain-text exclusion (officer.notify, the DevBot smoke check): the
+   * caller has escaped it, and it is cut to fit Discord's content limit.
+   */
+  private static render(message: PostMessage) {
+    if (message.kind === "ledger") return DiscordGateway.sendable(ledgerPost(message.view));
+    if (message.kind === "review")
+      return DiscordGateway.sendable(guestReviewPost(message.application));
+    return {
+      content: message.text.slice(0, 1950),
+      allowedMentions: { parse: [] as [] },
+      embeds: [],
+      components: [],
+    };
+  }
   /** Use stable recent-message deduplication and explicit mention policy for outbox delivery. */
   async send(
     guildId: string,
     channelId: string,
-    content: string,
+    message: PostMessage,
     key: string,
-    application?: ApplicationRecord,
   ): Promise<string> {
     await this.validateChannel(guildId, channelId);
     const channel = await this.client.channels.fetch(channelId);
@@ -370,39 +397,20 @@ export class DiscordGateway implements DiscordPort {
         resource: "channel",
         id: channelId,
       });
-    const components = application ? [this.controls(application)] : [];
     const nonce = BigInt(
       // A short decimal nonce fits Discord's limit while identifying the same durable effect.
       `0x${createHash("sha256").update(key).digest("hex").slice(0, 15)}`,
     ).toString();
-    return (
-      await channel.send({
-        content: content.slice(0, 1950),
-        allowedMentions: { parse: [] },
-        nonce,
-        enforceNonce: true,
-        components,
-        embeds: application ? guestApplicationEmbeds(application) : [],
-      })
-    ).id;
+    // Posts render deterministically from stored data, so a retry under this nonce is identical.
+    return (await channel.send({ ...DiscordGateway.render(message), nonce, enforceNonce: true }))
+      .id;
   }
-  /** Custom IDs route through the discovered guest component and durable application identity. */
-  private controls(application: ApplicationRecord): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`guest:approve:${application.id}`)
-        .setLabel("Approve")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(application.state !== "pending"),
-      new ButtonBuilder()
-        .setCustomId(`guest:deny:${application.id}`)
-        .setLabel("Deny")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(application.state !== "pending"),
-    );
-  }
-  /** Update completed controls, or recreate an explicitly missing review message. */
-  async editReview(application: ApplicationRecord, content: string): Promise<string> {
+  /**
+   * Redraw the review message for the application's current state (the decision, disabled
+   * controls), or recreate an explicitly missing one under the stable review:<id> nonce key. The
+   * edit sends content '' so a pre-2.14.0 message's text is cleared in favour of the embed.
+   */
+  async editReview(application: ApplicationRecord): Promise<string> {
     await this.validateChannel(application.guild_id, application.channel_id);
     const channel = await this.client.channels.fetch(application.channel_id);
     if (!channel || channel.type !== ChannelType.GuildText)
@@ -414,12 +422,7 @@ export class DiscordGateway implements DiscordPort {
     if (application.message_id) {
       try {
         const message = await channel.messages.fetch(application.message_id);
-        await message.edit({
-          content: content.slice(0, 1950),
-          allowedMentions: { parse: [] },
-          components: [this.controls(application)],
-          embeds: guestApplicationEmbeds(application),
-        });
+        await message.edit(DiscordGateway.sendable(guestReviewPost(application)));
         return message.id;
       } catch (error) {
         if (!(error instanceof DiscordAPIError && Number(error.code) === 10008)) throw error;
@@ -428,18 +431,23 @@ export class DiscordGateway implements DiscordPort {
     return this.send(
       application.guild_id,
       application.channel_id,
-      content,
+      { kind: "review", application },
       `review:${application.id}`,
-      application,
     );
   }
-  /** A disabled inbox is a terminal delivery result, never a rollback of the guest decision. */
-  async dm(user: string, content: string): Promise<void> {
+  /**
+   * A disabled inbox is a terminal delivery result, never a rollback of the guest decision. The
+   * DM names the server from the client cache (no extra request); without it the presenter says
+   * 'the server where you applied'.
+   */
+  async dm(user: string, message: DirectMessage): Promise<void> {
+    const serverName = this.client.guilds.cache.get(message.application.guild_id)?.name ?? null;
+    const presented = decisionDm(message.application, {
+      cooldownSeconds: message.cooldownSeconds,
+      serverName,
+    });
     try {
-      await (await this.client.users.fetch(user)).send({
-        content: content.slice(0, 1950),
-        allowedMentions: { parse: [] },
-      });
+      await (await this.client.users.fetch(user)).send(DiscordGateway.sendable(presented));
     } catch (error) {
       if (error instanceof DiscordAPIError && Number(error.code) === 50007)
         throw new Failure("dm_blocked", "The recipient has disabled DMs.");

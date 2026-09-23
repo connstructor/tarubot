@@ -1,4 +1,5 @@
 /** Real SDK form acknowledgements and boundary validation need no Discord credentials. */
+import { createHash } from "node:crypto";
 import { expect, spyOn, test } from "bun:test";
 import {
   ClientUser,
@@ -26,7 +27,6 @@ import {
 import { Failure } from "../../src/domain/values.js";
 import type { Presented } from "../../src/discord/presenters/reply.js";
 import {
-  guestApplicationEmbeds,
   guestApplicationModal,
   guestApplicationSubmission,
 } from "../../src/discord/guest-application.js";
@@ -413,37 +413,11 @@ test("answer limits reject blank, oversized and PostgreSQL-incompatible text", (
   );
 });
 
-test("review embeds escape full answers and identify legacy applications without fabricated text", () => {
-  const application: ApplicationRecord = {
-    id: "ca875e74-d944-4ff7-aab9-970314715306",
-    guild_id: "100",
-    user_id: "400",
-    joined_at: new Date(),
-    created_at: new Date(),
-    state: "pending",
-    channel_id: "200",
-    message_id: null,
-    reviewer_id: null,
-    decided_at: null,
-    reason: null,
-    introduction: "*visitor* ".repeat(30),
-    interest: "_friends_ ".repeat(30),
-  };
-  const review = guestApplicationEmbeds(application)[0]?.toJSON();
-  expect(review?.fields).toEqual([
-    { name: "Introduce yourself", value: "\\*visitor\\* ".repeat(30) },
-    { name: "Why join this server?", value: "\\_friends\\_ ".repeat(30) },
-  ]);
-  const legacy = guestApplicationEmbeds({
-    ...application,
-    introduction: null,
-    interest: null,
-  })[0]?.toJSON();
-  expect(legacy?.description).toContain("before application forms");
-  expect(legacy?.fields ?? []).toHaveLength(0);
-});
+/** The gateway's nonce for a durable post key: a short decimal from the key's SHA-256. */
+const nonceOf = (key: string): string =>
+  BigInt(`0x${createHash("sha256").update(key).digest("hex").slice(0, 15)}`).toString();
 
-test("deleted review repair and later edits keep answer embeds and current decision controls", async () => {
+test("deleted review repair and later edits send one review embed, clear content and keep controls", async () => {
   const gateway = new DiscordGateway();
   const writes: unknown[] = [];
   const application: ApplicationRecord = {
@@ -515,23 +489,37 @@ test("deleted review repair and later edits keep answer embeds and current decis
   });
   try {
     await gateway.client.guilds.fetch("100");
-    expect(await gateway.editReview(application, "Pending review")).toBe("222");
+    // The stored message is gone (10008), so the repair posts a new one; the later decision
+    // redraws that message in place.
+    expect(await gateway.editReview(application)).toBe("222");
     expect(
-      await gateway.editReview(
-        { ...application, message_id: "222", state: "approved" },
-        "Approved review",
-      ),
+      await gateway.editReview({
+        ...application,
+        message_id: "222",
+        state: "approved",
+        reviewer_id: "300",
+        decided_at: new Date(),
+      }),
     ).toBe("222");
     expect(writes).toHaveLength(2);
-    for (const [index, body] of writes.entries())
+    // The repair keeps the stable review:<id> nonce key, so a retried repair deduplicates.
+    expect(writes[0]).toMatchObject({
+      nonce: nonceOf(`review:${application.id}`),
+      enforce_nonce: true,
+    });
+    for (const [index, body] of writes.entries()) {
+      // One embed, and content '' so a pre-2.14.0 message's text is cleared on edit.
       expect(body).toMatchObject({
+        content: "",
         allowed_mentions: { parse: [] },
         embeds: [
           {
-            fields: [
+            title: index === 0 ? "Guest application" : "Guest application · approved",
+            footer: { text: `Application ${application.id}` },
+            fields: expect.arrayContaining([
               { name: "Introduce yourself", value: application.introduction },
               { name: "Why join this server?", value: application.interest },
-            ],
+            ]),
           },
         ],
         components: [
@@ -543,6 +531,8 @@ test("deleted review repair and later edits keep answer embeds and current decis
           },
         ],
       });
+      expect(embedOf(body)).toBeDefined();
+    }
   } finally {
     permission.mockRestore();
     get.mockRestore();

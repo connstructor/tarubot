@@ -15,6 +15,7 @@ import { CONFIG_CASES } from "./configuration.js";
 import { FAILURE_CASES } from "./failures.js";
 import { GUEST_CASES } from "./guests.js";
 import { LEDGER_CASES } from "./ledger.js";
+import { POST_CASES } from "./posts.js";
 import { SYNC_CASES, UTILITY_CASES, VERSION_CASES } from "./sync-utility.js";
 
 /** One catalogued reply state. */
@@ -68,6 +69,7 @@ export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
   sync: SYNC_CASES,
   utility: UTILITY_CASES,
   version: VERSION_CASES,
+  posts: POST_CASES,
 };
 
 /**
