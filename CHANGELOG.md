@@ -1,6 +1,14 @@
 # Version history
 
-The current application version is **2.11.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.12.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.12.0 — Officer-reviewed guest application forms
+
+- Open `/apply` as a two-question modal for unverified visitors, with immediate form acknowledgement and freshly authenticated submissions bound to the user, guild, and current join.
+- Persist bounded introduction/interest answers, submission audit, and review outbox atomically in additive migration `004_guest_application_form.sql`; repeated submissions retain the original pending application and answers.
+- Show escaped answers beside persistent officer Approve/Deny buttons, including restart and deleted-message repair. Keep answers out of ordinary status/decision replies and distinguish legacy reviews without form answers.
+- Preserve automatic verified non-FC Guest access, FC Member precedence, denial cooldown, explicit revocation, and existing grants. Verification while a form is pending supersedes manual approval.
+- Cover real SDK acknowledgement/rendering, forged/stale context, concurrent decisions, persistence/rollback, cooldown, and registered-visitor behavior; update the live application-review test plan.
 
 ## 2.11.1 — Bound channel reconciliation reads
 

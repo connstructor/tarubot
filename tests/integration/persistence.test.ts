@@ -32,6 +32,14 @@ import { dispatcher } from "../../src/jobs/dispatch.js";
 import { GuildAccess } from "../../src/application/guild-access.js";
 import { FakeGuildAccess } from "../fixtures/guild-access.js";
 import { discordAccessFixture } from "../fixtures/discord-access.js";
+import { interactionFixture } from "../fixtures/interactions.js";
+import { applicationKey } from "../../src/application/keys.js";
+import { InteractionRouter } from "../../src/bot/router.js";
+import { Services } from "../../src/bot/services.js";
+import applyCommand from "../../src/commands/guests/apply.command.js";
+import applyComponent from "../../src/components/guest-application.component.js";
+import reviewComponent from "../../src/components/guest-review.component.js";
+import { guestApplicationModal } from "../../src/discord/guest-application.js";
 
 const url = process.env.TEST_DATABASE_URL;
 // These tests deliberately recreate a disposable schema; production connections are rejected below.
@@ -188,6 +196,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   };
   const nodestone = new FakeNodestone("http://unused");
   const service = new Service(db, discord, nodestone, config);
+  /** Existing decision scenarios now submit the same bounded form contract as Discord visitors. */
+  async function applicationInput(applicant: Actor) {
+    const member = await discord.member(applicant.guildId, applicant.userId);
+    if (!member) throw new Error("Missing application fixture member");
+    return {
+      joinedAt: new Date(member.joinedAt),
+      introduction: "I enjoy playing games with friends.",
+      interest: "A friend invited me to meet your community.",
+    };
+  }
   const sync = new Synchronization(service);
   const accessPort = new FakeGuildAccess();
   const access = new GuildAccess(service, accessPort);
@@ -353,7 +371,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
   test("concurrent applications and opposing decisions have one durable outcome", async () => {
     const applicant = { ...actor, userId: "90005", officer: false, manageRoles: false };
-    const applications = await Promise.all([service.apply(applicant), service.apply(applicant)]);
+    const input = await applicationInput(applicant);
+    const applications = await Promise.all([
+      service.apply(applicant, input),
+      service.apply(applicant, input),
+    ]);
     const first = z.object({ id: z.string() }).parse(applications[0]);
     expect(z.object({ id: z.string() }).parse(applications[1]).id).toBe(first.id);
     await Promise.all([
@@ -694,7 +716,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
   test("obsolete join context cancels pending review and forged message identity is rejected", async () => {
     const applicant = { ...actor, userId: "90006", officer: false };
-    const application = z.object({ id: z.string() }).parse(await service.apply(applicant));
+    const application = z
+      .object({ id: z.string() })
+      .parse(await service.apply(applicant, await applicationInput(applicant)));
     await db.query("UPDATE guest_applications SET message_id='112233' WHERE id=$1", [
       application.id,
     ]);
@@ -713,11 +737,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
   test("rejoining replaces an obsolete pending application", async () => {
     const actorInGuild = { ...actor, userId: "90007", officer: false };
-    const old = z.object({ id: z.string() }).parse(await service.apply(actorInGuild));
+    const opened = await applicationInput(actorInGuild);
+    const old = z.object({ id: z.string() }).parse(await service.apply(actorInGuild, opened));
     const member = members.get(actorInGuild.userId);
     if (!member) throw new Error("Missing rejoining member");
     member.joinedAt = new Date("2026-09-21T12:00:00Z");
-    const current = z.object({ id: z.string() }).parse(await service.apply(actorInGuild));
+    await expect(service.apply(actorInGuild, opened)).rejects.toMatchObject({ code: "stale" });
+    const current = z
+      .object({ id: z.string() })
+      .parse(await service.apply(actorInGuild, await applicationInput(actorInGuild)));
     expect(current.id).not.toBe(old.id);
     expect(
       (
@@ -920,7 +948,12 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await observations.memberJoined(guild, owner, member.joinedAt);
     const pending = z
       .object({ id: z.string() })
-      .parse(await service.apply({ ...actor, userId: owner, officer: false }));
+      .parse(
+        await service.apply(
+          { ...actor, userId: owner, officer: false },
+          await applicationInput({ ...actor, userId: owner }),
+        ),
+      );
     await service.assign(
       actor,
       owner,
@@ -1669,7 +1702,10 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         ),
     ).toEqual([]);
     await expect(
-      service.apply({ ...fixture.manager, userId: "94001", officer: false, serverManager: false }),
+      service.apply(
+        { ...fixture.manager, userId: "94001", officer: false, serverManager: false },
+        await applicationInput({ ...fixture.manager, userId: "94001" }),
+      ),
     ).rejects.toMatchObject({ code: "eligible" });
     await service.guestAction(fixture.manager, "94001", true, "Explicit revoke", randomUUID());
     await reconcile("94001");
@@ -2039,6 +2075,275 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       result: { generation: 2 },
     });
     await db.orm.delete(t.jobs).where(inArray(t.jobs.id, [first, second, third]));
+  });
+
+  test("modal answers survive restart, duplicate submission and officer approval without granting early access", async () => {
+    const fixture = await accessFixture("96000");
+    const interactions = interactionFixture();
+    interactions.member.guildId = fixture.guild.id;
+    interactions.member.userId = "96001";
+    const applicant = { ...fixture.manager, userId: "96001", officer: false, serverManager: false };
+    const input = await applicationInput(applicant);
+    let review: ApplicationRecord | undefined;
+    const reviewPort: DiscordPort = {
+      ...discord,
+      async editReview(application) {
+        review = application;
+        return "123456789";
+      },
+    };
+    const app = new Service(db, reviewPort, nodestone, config);
+    const synchronization = new Synchronization(app);
+    const services = new Services();
+    services.provide(applicationKey, app);
+    const router = new InteractionRouter(
+      {
+        client: interactions.client,
+        services,
+        allowsGuild: (id) => id === fixture.guild.id,
+        publicResponseGuildId: fixture.guild.id,
+        isStopping: () => false,
+        report: () => {},
+        resolveActor: async (_guild, user) =>
+          user === fixture.manager.userId ? fixture.manager : applicant,
+      },
+      new Map([[applyCommand.name, applyCommand]]),
+      new Map([
+        [applyComponent.prefix, applyComponent],
+        [reviewComponent.prefix, reviewComponent],
+      ]),
+    );
+    try {
+      const modalId = guestApplicationModal(interactions.slash()).toJSON().custom_id;
+      // The router/service are new instances; no in-memory form session is needed after restart.
+      await router.handle(interactions.submit(modalId, input));
+      expect(interactions.requests.at(-1)?.body).toMatchObject({
+        content: expect.stringContaining("awaiting officer review"),
+      });
+      const pending = await db.orm
+        .select()
+        .from(t.guestApplications)
+        .where(eq(t.guestApplications.user_id, applicant.userId));
+      const application = pending[0];
+      if (!application) throw new Error("Missing submitted application");
+      expect(pending).toHaveLength(1);
+      expect(application).toMatchObject({
+        introduction: input.introduction,
+        interest: input.interest,
+        state: "pending",
+        channel_id: fixture.guild.officer_channel_id,
+      });
+      await router.handle(
+        interactions.submit(modalId, {
+          ...input,
+          introduction: "Changed answers must not replace a review.",
+        }),
+      );
+      expect(
+        await db.orm
+          .select()
+          .from(t.guestApplications)
+          .where(eq(t.guestApplications.user_id, applicant.userId)),
+      ).toEqual(pending);
+      expect(
+        await db.query("SELECT id FROM guest_grants WHERE guild_id=$1 AND user_id=$2", [
+          fixture.guild.id,
+          applicant.userId,
+        ]),
+      ).toHaveLength(0);
+      expect(
+        await db.query("SELECT id FROM audit WHERE action='guest.applied' AND target=$1", [
+          application.id,
+        ]),
+      ).toHaveLength(1);
+      expect(JSON.stringify(await app.guestStatus(applicant, applicant.userId))).not.toContain(
+        input.introduction,
+      );
+      expect(JSON.stringify(interactions.requests)).not.toContain(input.introduction);
+      const [job] = await db.orm
+        .select()
+        .from(t.jobs)
+        .where(eq(t.jobs.dedupe_key, `review:${application.id}`));
+      if (!job) throw new Error("Missing durable review work");
+      const deliver = dispatcher(app, synchronization, fixture.policy);
+      await deliver(await leased(job.id), async () => {});
+      expect(review).toMatchObject({ introduction: input.introduction, interest: input.interest });
+      // A visitor cannot approve their own application; the officer's fresh actor can.
+      await router.handle(interactions.button(`guest:approve:${application.id}`));
+      expect(interactions.requests.at(-1)?.body).toMatchObject({
+        content: expect.stringContaining("not authorized"),
+      });
+      interactions.member.userId = fixture.manager.userId;
+      await router.handle(interactions.button(`guest:approve:${application.id}`));
+      await router.handle(interactions.button(`guest:approve:${application.id}`));
+      expect(
+        await db.query("SELECT id FROM guest_grants WHERE guild_id=$1 AND user_id=$2", [
+          fixture.guild.id,
+          applicant.userId,
+        ]),
+      ).toHaveLength(1);
+      const [repair] = await db.orm
+        .select()
+        .from(t.jobs)
+        .where(eq(t.jobs.dedupe_key, `user:${fixture.guild.id}:${applicant.userId}`));
+      if (!repair) throw new Error("Missing access reconciliation");
+      await synchronization.user(await leased(repair.id), async () => {});
+      expect(members.get(applicant.userId)?.roles).toContain(fixture.guild.guest_role_id ?? "");
+      await deliver(await leased(job.id), async () => {});
+      expect(review).toMatchObject({
+        state: "approved",
+        introduction: input.introduction,
+        interest: input.interest,
+      });
+      expect(JSON.stringify(interactions.requests)).not.toContain(input.introduction);
+    } finally {
+      await interactions.close();
+    }
+  });
+
+  test("invalid answers and raced departure/newer presence cannot publish stale applications", async () => {
+    const fixture = await accessFixture("96010");
+    const applicant = { ...fixture.manager, userId: "96011", officer: false, serverManager: false };
+    const input = await applicationInput(applicant);
+    for (const introduction of ["  ", "x".repeat(301), "invalid text\0", "broken text\ud800"]) {
+      await expect(service.apply(applicant, { ...input, introduction })).rejects.toMatchObject({
+        code: "input",
+      });
+    }
+    const events = new GuildEvents(db);
+    await events.memberJoined(fixture.guild.id, applicant.userId, input.joinedAt);
+    for (const newer of [false, true]) {
+      const app = new Service(
+        db,
+        {
+          ...discord,
+          async member(guildId, userId) {
+            const observed = await discord.member(guildId, userId);
+            if (newer)
+              await events.memberJoined(guildId, userId, new Date(input.joinedAt.getTime() + 1000));
+            else await events.memberLeft(guildId, userId);
+            return observed;
+          },
+        },
+        nodestone,
+        config,
+      );
+      await expect(app.apply(applicant, input)).rejects.toMatchObject({ code: "stale" });
+    }
+    expect(
+      await db.query("SELECT id FROM guest_applications WHERE guild_id=$1", [fixture.guild.id]),
+    ).toHaveLength(0);
+    expect(
+      await db.query("SELECT joined_at,present FROM guild_users WHERE guild_id=$1 AND user_id=$2", [
+        fixture.guild.id,
+        applicant.userId,
+      ]),
+    ).toEqual([{ joined_at: new Date(input.joinedAt.getTime() + 1000), present: true }]);
+  });
+
+  test("denial cooldown, database answer constraints and legacy form-less reviews remain durable", async () => {
+    const fixture = await accessFixture("96020");
+    const applicant = { ...fixture.manager, userId: "96021", officer: false, serverManager: false };
+    const input = await applicationInput(applicant);
+    const application = await service.apply(applicant, input);
+    await expect(
+      service.decide({ ...fixture.manager, guildId: guild }, application.id, true),
+    ).rejects.toMatchObject({ code: "input" });
+    await service.decide(
+      fixture.manager,
+      application.id,
+      false,
+      "Please ask an officer before reapplying.",
+    );
+    const restarted = new Service(db, discord, nodestone, config);
+    await expect(restarted.apply(applicant, input)).rejects.toMatchObject({ code: "cooldown" });
+    await db.query("UPDATE guest_applications SET decided_at=now()-interval '2 days' WHERE id=$1", [
+      application.id,
+    ]);
+    const again = await restarted.apply(applicant, input);
+    expect(again.id).not.toBe(application.id);
+    await expect(
+      db.query("UPDATE guest_applications SET introduction=NULL WHERE id=$1", [again.id]),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("UPDATE guest_applications SET interest='short' WHERE id=$1", [again.id]),
+    ).rejects.toMatchObject({ code: "23514" });
+    // Nullable paired answers preserve old pending rows during the additive migration.
+    await db.query("UPDATE guest_applications SET introduction=NULL,interest=NULL WHERE id=$1", [
+      again.id,
+    ]);
+    expect(await restarted.decide(fixture.manager, again.id, true)).toMatchObject({
+      status: "approved",
+    });
+  });
+
+  test("verification supersedes form approval and remains automatic unless explicitly revoked", async () => {
+    const fixture = await accessFixture("96030");
+    const applicant = { ...fixture.manager, userId: "96031", officer: false, serverManager: false };
+    const input = await applicationInput(applicant);
+    const pending = await service.apply(applicant, input);
+    await service.assign(
+      fixture.manager,
+      applicant.userId,
+      { id: "777796031", name: "Registered Visitor", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Verified visitor fixture",
+    );
+    await expect(service.apply(applicant, input)).rejects.toMatchObject({ code: "eligible" });
+    expect(await service.decide(fixture.manager, pending.id, true)).toMatchObject({
+      status: "superseded",
+    });
+    expect(
+      await db.query("SELECT id FROM guest_grants WHERE guild_id=$1 AND user_id=$2", [
+        fixture.guild.id,
+        applicant.userId,
+      ]),
+    ).toHaveLength(0);
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, applicant.userId)).toBe(
+      true,
+    );
+    await service.guestAction(
+      fixture.manager,
+      applicant.userId,
+      true,
+      "Explicit visitor revocation",
+      randomUUID(),
+    );
+    await expect(service.apply(applicant, input)).rejects.toMatchObject({ code: "eligible" });
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, applicant.userId)).toBe(
+      false,
+    );
+  });
+
+  test("form answers, submission audit and outbox roll back together on publication failure", async () => {
+    const fixture = await accessFixture("96040");
+    const applicant = { ...fixture.manager, userId: "96041", officer: false, serverManager: false };
+    await db.query(
+      "CREATE FUNCTION reject_test_guest_review() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='guest.review' AND NEW.guild_id='96040' THEN RAISE EXCEPTION 'injected review publication failure'; END IF; RETURN NEW; END $$",
+    );
+    await db.query(
+      "CREATE TRIGGER reject_test_guest_review BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_test_guest_review()",
+    );
+    try {
+      await expect(
+        service.apply(applicant, await applicationInput(applicant)),
+      ).rejects.toMatchObject({ cause: { code: "P0001" } });
+      expect(
+        await db.query("SELECT id FROM guest_applications WHERE guild_id=$1", [fixture.guild.id]),
+      ).toHaveLength(0);
+      expect(
+        await db.query("SELECT id FROM audit WHERE guild_id=$1 AND action='guest.applied'", [
+          fixture.guild.id,
+        ]),
+      ).toHaveLength(0);
+      expect(
+        await db.query("SELECT id FROM jobs WHERE guild_id=$1 AND kind='guest.review'", [
+          fixture.guild.id,
+        ]),
+      ).toHaveLength(0);
+    } finally {
+      await db.query("DROP TRIGGER reject_test_guest_review ON jobs");
+      await db.query("DROP FUNCTION reject_test_guest_review()");
+    }
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {

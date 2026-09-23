@@ -109,9 +109,21 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 - Created the separate private **officer-chat**, `1552149138148433930`, with staff and bot access. DevBot successfully read it and exercised both permission-edit and channel-edit APIs under its limited role. Reserved community metadata was verified intact.
 - A read-only probe of the compiled 2.10.2 fix passed setup preflight for ten managed channels, excluding the community-updates channel and Admin category. This was a one-shot validation; the running application remains on the published 2.10.1 image until the fix is merged/published/deployed.
 
-The next live action after deploying the fix is `/setup officers:#officer-chat`, followed by `/sync status` and non-owner/non-Administrator visibility tests. Onboarding was still opted out at the last check. The separate room's creation and permission readback do not establish the cause of the earlier community-channel 403 responses.
+At that point onboarding was still opted out. The separate room's creation and permission readback do not establish the cause of the earlier community-channel 403 responses.
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The current plan focuses on community-aware onboarding and registered visitor access. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for the remaining acceptance work.
+### 2.11.1 rollout and completed setup — 2026-09-23
+
+- PR #5 merged as `1de878ef6c314cd83ac26bf7513d5db64210bcad`; matching published 2.11.1 bot/sidecar images replaced the previous release, with no source mounts. The stopped-writer backup is `.cache/backups/tarubot_dev-before-2.11.1-1de878e.dump`; schema 003 and existing ownership/ledger state were retained.
+- Readiness and the bounded officer-room preflight passed. Startup posted [message 1552179968069472363](https://discord.com/channels/1040379370159743139/1040379370931507252/1552179968069472363).
+- The user ran `/setup`, reusing all four role IDs and officer-chat `1552149138148433930`, and creating lobby `1552181036492791818`. Persisted guild revision **10** has onboarding enabled.
+- Access job `8df5614c-3c95-44bb-b3d9-e5c90df4b436` succeeded for 11 managed channels with the community-updates channel and Admin excluded. The final no-op pass reported no changed channels/default and no outstanding work. The user reported that the rest looked good; exhaustive human visibility/recovery checks remain separate acceptance work.
+- Guest-review destination still points at `#dev` (`1040379861153357995`). The next guest-form session should explicitly set `/config guest_applications channel:#officer-chat` before applications are submitted.
+
+### Next session: 2.12.0 unverified-visitor forms
+
+The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. Migration 004, the new `/apply` modal, and its submission component require the checked 2.12.0 deployment before live testing. The current running release remains 2.11.1 until that rollout. Follow `test-plans/current.json` for the new form, staff review, duplicate/restart/rejoin, denial, and role-delivery checks.
+
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The current plan focuses on unverified visitor applications while preserving registered access. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for remaining acceptance work.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 

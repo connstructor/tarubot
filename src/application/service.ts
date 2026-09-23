@@ -24,6 +24,7 @@ import { authorize, authorizeRoleManager, type Actor } from "../domain/policy.js
 import { rankAccess } from "./rank-policy.js";
 import { accessFacts } from "./access-facts.js";
 import { Failure, gil, MAX_GIL, note, normalized } from "../domain/values.js";
+import { guestApplicationInput, type GuestApplicationInput } from "../domain/guest-application.js";
 import {
   audit,
   ensureUser,
@@ -37,7 +38,7 @@ import type {
   Nodestone,
 } from "../infrastructure/nodestone/client.js";
 import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
-import type { DiscordPort, GuildRecord } from "./records.js";
+import type { ApplicationRecord, DiscordPort, GuildRecord } from "./records.js";
 
 /** Guild-scoped operations reused by slash commands, components, and operational workflows. */
 export class Service {
@@ -118,7 +119,20 @@ export class Service {
     const guild = await this.guild(actor);
     return {
       applications: await this.db.orm
-        .select()
+        // Answers belong in the configured review room, not potentially public status replies.
+        .select({
+          id: t.guestApplications.id,
+          guild_id: t.guestApplications.guild_id,
+          user_id: t.guestApplications.user_id,
+          joined_at: t.guestApplications.joined_at,
+          created_at: t.guestApplications.created_at,
+          state: t.guestApplications.state,
+          channel_id: t.guestApplications.channel_id,
+          message_id: t.guestApplications.message_id,
+          reviewer_id: t.guestApplications.reviewer_id,
+          decided_at: t.guestApplications.decided_at,
+          reason: t.guestApplications.reason,
+        })
         .from(t.guestApplications)
         .where(
           and(
@@ -1122,6 +1136,20 @@ export class Service {
       facts.verified === true && facts.membership === "ineligible" && facts.fresh && !facts.revoked
     );
   }
+
+  /** A trusted link makes character eligibility authoritative, even while a roster is uncertain. */
+  private async hasActiveRegistration(
+    client: Connection,
+    guild: string,
+    user: string,
+  ): Promise<boolean> {
+    const links = await orm(client)
+      .select({ id: t.links.id })
+      .from(t.links)
+      .where(and(eq(t.links.guild_id, guild), eq(t.links.user_id, user), eq(t.links.active, true)))
+      .limit(1);
+    return links.length > 0;
+  }
   /** Ledger authority requires actual accepted positive evidence, not just imported role protection. */
   async memberEligible(client: Connection, guild: GuildRecord, user: string): Promise<boolean> {
     if (!guild.fc_id) return false;
@@ -1316,7 +1344,13 @@ export class Service {
     };
   }
   /** One pending application per join context; duplicate submissions reuse the persisted request. */
-  async apply(actor: Actor): Promise<unknown> {
+  async apply(actor: Actor, input: GuestApplicationInput): Promise<ApplicationRecord> {
+    const submitted = guestApplicationInput.safeParse(input);
+    if (!submitted.success)
+      throw new Failure(
+        "input",
+        "Reopen /apply and provide two answers of 10–300 valid text characters.",
+      );
     const guild = await this.guild(actor);
     if (!guild.guest_role_id || !guild.guest_application_channel_id)
       throw new Failure("setup", "Configure a guest role and application review channel first.");
@@ -1331,6 +1365,11 @@ export class Service {
     const member = await this.discord.member(actor.guildId, actor.userId);
     if (!member || member.bot)
       throw new Failure("forbidden", "Only current human guild members may apply.");
+    if (member.joinedAt.getTime() !== submitted.data.joinedAt.getTime())
+      throw new Failure(
+        "stale",
+        "Your server join changed while this form was open. Reopen /apply.",
+      );
     return this.db.transaction(async (client) => {
       const db = orm(client);
       const [current] = await db
@@ -1338,16 +1377,50 @@ export class Service {
         .from(t.guilds)
         .where(eq(t.guilds.id, actor.guildId))
         .for("share");
-      if (!current || current.revision !== guild.revision)
+      if (!current?.active || current.revision !== guild.revision)
         throw new Failure("conflict", "Configuration changed. Retry your application.");
-      await ensureUser(client, actor.guildId, actor.userId, member.joinedAt);
-      await db
-        .select({ user_id: t.guildUsers.user_id })
+      // Lock before refreshing presence so a departed/newer join cannot be overwritten by
+      // the earlier Discord observation. Member events serialize on this same user row.
+      await ensureUser(client, actor.guildId, actor.userId);
+      const [presence] = await db
+        .select({ present: t.guildUsers.present, joined_at: t.guildUsers.joined_at })
         .from(t.guildUsers)
         .where(
           and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, actor.userId)),
         )
         .for("update");
+      if (
+        presence?.joined_at &&
+        (presence.joined_at.getTime() > member.joinedAt.getTime() ||
+          (!presence.present && presence.joined_at.getTime() === member.joinedAt.getTime()))
+      )
+        throw new Failure(
+          "stale",
+          "Your server join changed while this form was open. Reopen /apply.",
+        );
+      await ensureUser(client, actor.guildId, actor.userId, member.joinedAt);
+      if (await this.hasActiveRegistration(client, guild.id, actor.userId))
+        throw new Failure(
+          "eligible",
+          "This form is for visitors without a verified character. Your access follows character/FC eligibility; ask an officer to check /guest status or refresh it.",
+        );
+      const facts = await accessFacts(
+        db,
+        guild,
+        actor.userId,
+        this.config.ROSTER_INTERVAL_SECONDS,
+        member.roles,
+      );
+      if (
+        facts.membership === "member" ||
+        facts.hasMember ||
+        facts.hasGuest ||
+        (!facts.revoked && (facts.grant || facts.former))
+      )
+        throw new Failure(
+          "eligible",
+          "You already have member or guest access; reconciliation can repair a missing role.",
+        );
       const [pending] = await db
         .select()
         .from(t.guestApplications)
@@ -1373,53 +1446,6 @@ export class Service {
           actor.userId,
         );
       }
-      const granted = db
-        .select({ id: t.guestGrants.id })
-        .from(t.guestGrants)
-        .where(
-          and(eq(t.guestGrants.guild_id, actor.guildId), eq(t.guestGrants.user_id, actor.userId)),
-        );
-      const former = guild.fc_id
-        ? exists(
-            db
-              .select({ id: t.membershipHistory.id })
-              .from(t.membershipHistory)
-              .where(
-                and(
-                  eq(t.membershipHistory.guild_id, actor.guildId),
-                  eq(t.membershipHistory.user_id, actor.userId),
-                  eq(t.membershipHistory.fc_id, guild.fc_id),
-                ),
-              ),
-          )
-        : sql`false`;
-      const revoked = db
-        .select({ user_id: t.guestState.user_id })
-        .from(t.guestState)
-        .where(
-          and(
-            eq(t.guestState.guild_id, actor.guildId),
-            eq(t.guestState.user_id, actor.userId),
-            eq(t.guestState.revoked, true),
-          ),
-        );
-      const [guest] = await db
-        .select({
-          eligible: sql<boolean>`(${exists(granted)} OR ${former}) AND NOT ${exists(revoked)}`,
-        })
-        .from(t.guilds)
-        .where(eq(t.guilds.id, actor.guildId));
-      if (
-        guest?.eligible ||
-        (await this.registrationGuestEligible(client, guild, actor.userId)) ||
-        (await this.memberEligible(client, guild, actor.userId)) ||
-        member.roles.includes(guild.guest_role_id ?? "") ||
-        member.roles.includes(guild.member_role_id ?? "")
-      )
-        throw new Failure(
-          "eligible",
-          "You already have member or guest access; reconciliation can repair a missing role.",
-        );
       const denied = await db
         .select({ id: t.guestApplications.id })
         .from(t.guestApplications)
@@ -1442,9 +1468,15 @@ export class Service {
           user_id: actor.userId,
           joined_at: member.joinedAt,
           channel_id: reviewChannel,
+          introduction: submitted.data.introduction,
+          interest: submitted.data.interest,
         })
         .returning();
       if (!application) throw new Error("Missing application");
+      await audit(client, actor.guildId, actor.userId, "guest.applied", application.id, {
+        channelId: reviewChannel,
+        joinedAt: member.joinedAt.toISOString(),
+      });
       await enqueue(
         client,
         "guest.review",
@@ -1508,7 +1540,8 @@ export class Service {
       if (!application) throw new Failure("input", "Unknown application.");
       if (messageId && application.message_id !== messageId)
         throw new Failure("forbidden", "This review message is obsolete.");
-      if (application.state !== "pending") return application;
+      if (application.state !== "pending")
+        return { id: application.id, status: application.state, effects: "unchanged" };
       let state = approve ? "approved" : "denied";
       if (
         !member ||
@@ -1518,7 +1551,11 @@ export class Service {
         presence.joined_at?.getTime() !== application.joined_at.getTime()
       )
         state = "cancelled";
-      else if (await this.memberEligible(client, guild, application.user_id)) state = "superseded";
+      else if (
+        (await this.memberEligible(client, guild, application.user_id)) ||
+        (await this.hasActiveRegistration(client, guild.id, application.user_id))
+      )
+        state = "superseded";
       await db
         .update(t.guestApplications)
         .set({ state, reviewer_id: actor.userId, decided_at: sql`now()`, reason })

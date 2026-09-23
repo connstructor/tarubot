@@ -4,6 +4,7 @@ import type {
   AutocompleteInteraction,
   ChatInputCommandInteraction,
   InteractionEditReplyOptions,
+  ModalBuilder,
   SlashCommandBuilder,
 } from "discord.js";
 import type { Actor } from "../domain/policy.js";
@@ -23,20 +24,33 @@ export interface AutocompleteContext extends BotContext {
 }
 
 /** Metadata and handlers exported together prevent registration/runtime inventories drifting. */
-export interface CommandOptions {
+interface CommandMetadata {
   readonly data: Pick<SlashCommandBuilder, "toJSON">;
   readonly access?: "user" | "officer";
   readonly ephemeral?: boolean;
   readonly requires?: readonly ServiceKey<unknown>[];
-  readonly execute: (
-    context: CommandContext,
-  ) => Promise<InteractionEditReplyOptions> | InteractionEditReplyOptions;
   readonly autocomplete?: (
     context: AutocompleteContext,
   ) =>
     | Promise<ApplicationCommandOptionChoiceData<string>[]>
     | ApplicationCommandOptionChoiceData<string>[];
 }
+
+/** Modal opening is synchronous and unprivileged; its submission authenticates before any work. */
+export type CommandOptions = CommandMetadata &
+  (
+    | {
+        readonly execute: (
+          context: CommandContext,
+        ) => Promise<InteractionEditReplyOptions> | InteractionEditReplyOptions;
+        readonly modal?: never;
+      }
+    | {
+        readonly access?: "user";
+        readonly modal: (interaction: ChatInputCommandInteraction) => ModalBuilder;
+        readonly execute?: never;
+      }
+  );
 
 /** Nominal module type lets discovery validate unknown imports using instanceof. */
 export class Command {
@@ -46,12 +60,25 @@ export class Command {
   readonly ephemeral: boolean;
   readonly requires: readonly ServiceKey<unknown>[];
   readonly execute: CommandOptions["execute"];
+  readonly modal: CommandOptions["modal"];
   readonly autocomplete: CommandOptions["autocomplete"];
 
   constructor(options: CommandOptions) {
-    if (typeof options.data?.toJSON !== "function" || typeof options.execute !== "function") {
-      throw new Error("A command requires a Discord builder and an execute handler.");
+    if (
+      typeof options.data?.toJSON !== "function" ||
+      !(
+        (typeof options.execute === "function" && options.modal === undefined) ||
+        (typeof options.modal === "function" && options.execute === undefined)
+      )
+    ) {
+      throw new Error(
+        "A command requires a Discord builder and exactly one execute or modal handler.",
+      );
     }
+    if (options.modal && options.access && options.access !== "user")
+      throw new Error(
+        "Immediate modal commands must be unprivileged; authorize submissions instead.",
+      );
     if (options.autocomplete !== undefined && typeof options.autocomplete !== "function") {
       throw new Error("Command autocomplete must be a function.");
     }
@@ -62,6 +89,7 @@ export class Command {
     this.ephemeral = options.ephemeral ?? true;
     this.requires = options.requires ?? [];
     this.execute = options.execute;
+    this.modal = options.modal;
     this.autocomplete = options.autocomplete;
   }
 

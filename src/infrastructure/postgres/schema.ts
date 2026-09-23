@@ -195,6 +195,8 @@ export const guestApplications = pgTable("guest_applications", {
   reviewer_id: externalId("reviewer_id"),
   decided_at: instant("decided_at"),
   reason: text("reason"),
+  introduction: text("introduction"),
+  interest: text("interest"),
 });
 export const ledgerAccounts = pgTable("ledger_accounts", {
   id: uuid("id").primaryKey().defaultRandom(),

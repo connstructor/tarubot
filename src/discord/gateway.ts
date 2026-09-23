@@ -16,6 +16,7 @@ import type { Actor } from "../domain/policy.js";
 import type { ApplicationRecord, DiscordPort, MemberView } from "../application/records.js";
 import { rolePositionChanges } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
+import { guestApplicationEmbeds } from "./guest-application.js";
 
 /** Exposes a reusable Discord client plus application-owned projections of SDK state. */
 export class DiscordGateway implements DiscordPort {
@@ -299,6 +300,7 @@ export class DiscordGateway implements DiscordPort {
         nonce,
         enforceNonce: true,
         components,
+        embeds: application ? guestApplicationEmbeds(application) : [],
       })
     ).id;
   }
@@ -330,6 +332,7 @@ export class DiscordGateway implements DiscordPort {
           content: content.slice(0, 1950),
           allowedMentions: { parse: [] },
           components: [this.controls(application)],
+          embeds: guestApplicationEmbeds(application),
         });
         return message.id;
       } catch (error) {

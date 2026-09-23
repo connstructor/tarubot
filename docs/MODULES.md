@@ -57,6 +57,12 @@ For an officer-only root, set both the Discord builder's default `ManageGuild` p
 
 `execute` can return content, embeds, attachments, or components. `dataReply()` is available for bounded structured results. Autocomplete returns up to 25 string choices and uses Discord's permission-bearing interaction payload, since autocomplete cannot defer. Keep private completion queries inside an authorized application operation.
 
+### Open a modal
+
+A command can declare a synchronous `modal(interaction)` factory **instead of** `execute`. It returns a `ModalBuilder`, as `/apply` does using labeled text inputs. These openers are user-access only, receive no resolved actor or service context, and must not do network/database work: `showModal` must be Discord's initial acknowledgement. Opening the form does not create a record or grant authority.
+
+Route submission through a separate discovered component namespace. The router defers that submission, resolves the current actor, and authorizes it before the handler runs. Validate actor/guild bindings, input limits, and current persisted context again in the application operation; custom IDs are context, not credentials. A form may remain open across a process restart. Reject obsolete joins and duplicate submissions according to the feature's durable policy. Pre-acknowledgement failures use the same reply-visibility rules as deferred errors.
+
 ## Add an event
 
 Create `src/events/welcome.event.ts`:
@@ -108,7 +114,7 @@ TaruBot's existing tokens are in `src/application/keys.ts`. They expose the appl
 
 Create a `*.component.ts` default export using `defineComponent` with a unique `prefix`. IDs of the form `prefix:payload` route to that module. Buttons, message-component interactions, and modal submissions share this lookup; the handler narrows the interaction type it supports.
 
-The `guest` component demonstrates durable IDs: it validates action, application UUID, guild, actor permissions, and stored message identity before committing a decision. New components should resolve private payloads through the same owning-guild authorization rules.
+The `guest` component demonstrates durable officer review IDs: it validates action, application UUID, guild, actor permissions, and stored message identity before committing a decision. The separate user-level `guest-apply` namespace handles application forms and their join bindings. New components should resolve private payloads through the same owning-guild authorization rules.
 
 ## Commenting conventions
 
