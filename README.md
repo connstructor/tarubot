@@ -84,14 +84,16 @@ Grant the guild-level management permissions and the channel permissions in each
 
 | Permission | Reason required |
 | --- | --- |
-| **Manage Roles** | Create or reuse, rename, arrange, and display managed roles separately; assign and remove Member, Guest, Officer, and FC Leader roles during reconciliation. |
+| **Manage Roles** | Manage Member/Guest/Officer/FC Leader roles and channel permission overwrites; remove the public View Channel default when onboarding is enabled. |
+| **Manage Channels** | Create/reuse onboarding rooms, detach the lobby from gated categories, and maintain channel visibility. |
 | **Manage Nicknames** | Apply and restore character-based nicknames when users enable nickname management. |
 | **View Channel** | Access configured ledger, officer-notification, guest-review, and development test-plan channels. |
 | **Send Messages** | Deliver ledger and officer notifications, guest review messages, and startup test plans. |
 | **Embed Links** | Render startup-plan and `/version` embeds and other embedded bot responses. |
+| **Attach Files** | Deliver structured command results and retain explicit bot access in managed onboarding channels. |
 | **Read Message History** | Find existing bot-owned messages for notification deduplication and guest-review updates or repair. |
 
-Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Member/guest roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles. See [SETUP.md](docs/SETUP.md) for officer authorization, role-selection authority, and server-manager requirements.
+Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Access roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles; onboarding also excludes Manage Channels. Give the bot's own role View Channel and ensure it can view/manage every channel it will secure. See [SETUP.md](docs/SETUP.md) for authority checks and the onboarding visibility matrix.
 
 All commands are guild-only. Responses use the declared privacy defaults, with public replies enabled for the observed DevBot test guild through `PUBLIC_TEST_RESPONSES`. Review/ledger/officer messages go to their configured destinations. Notifications default to no parsed mentions.
 
@@ -117,7 +119,7 @@ The configured **DevBot** test session uses `docker-compose.devbot.yml` and its 
 
 Use `/config fc link`, `/config roles member`, `/config roles guest`, and the three notification-channel configuration commands. `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles.
 
-`/setup` can create or reuse Member, Guest, Officer, and FC Leader roles in one operation. An optional in-game officer rank enables automatic bot-only Officer access; explicit manager grants/revocations are also supported. See [SETUP.md](docs/SETUP.md).
+`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and officer-only text room. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary channels, and Officers/FC Leaders see staff areas and the lobby. Existing private areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. An optional in-game officer rank enables automatic bot-only Officer access. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
 
 Every development startup posts the current responsibility-separated session plan to `#chat`. Update `test-plans/current.json` for the next session; see [TEST_PLANS.md](docs/TEST_PLANS.md).
 
@@ -141,6 +143,7 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 - Imported users select `/main character:ID` and `/nickname enabled:true` explicitly to opt in to nicknames.
 - `/refresh` returns an inspectable run ID; `/sync status` reports durable work. Officer-only `force:true` bypasses freshness while retaining rate limits and locks.
 - `/apply` opens a durable guest application. Officers can use its persistent review buttons or `/guest approve` and `/guest deny`. `/guest grant` and `/guest revoke` record explicit access decisions.
+- In onboarding-enabled guilds, trusted linked characters qualify their owners for Guest when current evidence excludes FC membership, or when no FC is linked. Confirmed FC members receive Member instead. Explicit Guest revocation remains authoritative; `/guest status` reports derived eligibility separately from durable grants.
 - `/ledger deposit`, `/ledger withdraw`, `/ledger initialize`, and `/ledger adjust` require notes. `/ledger balance` and `/ledger history` expose immutable entries and notification delivery state.
 - A confirmed departure requires two complete accepted observations at least 60 seconds apart. Former-member guest eligibility is scoped to the currently linked FC. Explicit revocation overrides guest eligibility; FC membership takes precedence.
 

@@ -1,22 +1,22 @@
 {
-  "title": "Session: Drizzle persistence regression",
-  "objective": "Validate version 2.9.0 typed persistence against existing PostgreSQL state, exact ledger values, role and guest policy, and durable work recovery before resuming lobby security setup.",
+  "title": "Session: Lobby onboarding and channel access",
+  "objective": "Validate version 2.10.0 lobby, Member/Guest, and staff visibility in the development guild, including registered visitor access, drift repair, and restart recovery.",
   "user": [
-    "Review the Drizzle PR after CI and required CodeQL security/code-quality checks pass; merge to publish its images.",
-    "Pull the published 2.9.0 images with the DevBot Compose overlay and keep the existing isolated tarubot_dev database.",
-    "Run `/version`, `/config validate`, `/characters`, `/guest status`, and `/sync status`; verify retained configuration, links, and guest decisions.",
-    "Run `/refresh` and inspect its run with `/sync status`; confirm role/nickname reconciliation and complete child-work accounting.",
-    "Check `/ledger balance` and `/ledger history`, then report any changed values or blocked work for investigation."
+    "Review the feature PR after required checks pass. Back up tarubot_dev, stop the writer, apply migration 003 with the published 2.10.0 image, and refresh guild command registration before startup.",
+    "Give the bot its documented channel/role permissions and its own View Channel. Choose the existing officer-only room and run `/setup officers:#ROOM`, optionally selecting `lobby:#ROOM`.",
+    "Use non-owner, non-Administrator test users: verify newcomers see only the lobby, Members/Guests see ordinary channels but not the lobby, and Officers/FC Leaders see both and staff rooms.",
+    "Verify an FC member and a non-FC visitor. Check automatic Member/Guest delivery, Guest revocation, rejoin, and `/guest status` without using privileged accounts for the visibility checks.",
+    "Create or edit a test text/voice/forum channel, inspect `/sync status`, restart with repair pending, and confirm convergence. Report results before production use."
   ],
   "assistant": [
-    "Verify schema mappings, exact IDs/money/JSON, atomic policy/audit/outbox rollback, and concurrent lease/generation fencing against PostgreSQL.",
-    "Run source quality and full tests with both the supplied dump and generated CI fixture; inspect PR checks and published image metadata.",
-    "Record the development smoke results, then adapt the saved lobby/security feature to the verified ORM foundation."
+    "Verify effective Discord permissions across channel types, first-snapshot retention, partial-failure recovery, revision/activation fences, and registered visitor policy.",
+    "Run source quality and complete suites with supplied and synthetic migration inputs; inspect PR checks and the matching image publication.",
+    "Record actual role/channel IDs and live outcomes, including least-privilege behavior, retained ledger/ownership state, and pending follow-ups."
   ],
   "bot": [
-    "Run compiled version 2.9.0 with typed Drizzle queries and verify the existing SQL migration checksum at startup.",
-    "Retain links, grants, nicknames, exact ledger history, and queued work in PostgreSQL across container replacement.",
-    "Reconcile current roles and resume durable work after startup; expose capability and delivery status.",
+    "Run compiled version 2.10.0 with Drizzle and require the migration 003 checksum before accepting work.",
+    "Enable onboarding only after explicit setup; persist original channel permissions and queue scoped access work with the configuration decision.",
+    "Reconcile lobby/member/staff visibility, preserve Guest revocation and FC Member precedence, and report blocked or pending work through sync status.",
     "Post this responsibility-separated session plan in the configured development channel."
   ]
 }

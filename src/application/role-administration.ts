@@ -5,8 +5,9 @@ import { Failure, normalized, note } from "../domain/values.js";
 import { audit, ensureUser, orm } from "../infrastructure/postgres/database.js";
 import { and, eq, sql } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
 import type { DiscordPort } from "./records.js";
+import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
+import type { GuildAccess } from "./guild-access.js";
 import type { Service } from "./service.js";
 
 /** Extra provisioning capability, separate from the reconciliation/test port. */
@@ -25,6 +26,7 @@ export class RoleAdministration {
   constructor(
     private readonly app: Service,
     private readonly discord: RoleProvisioner,
+    private readonly access: GuildAccess,
   ) {}
 
   /** Create/reuse four ordinary roles, optionally link an FC and select its officer rank. */
@@ -33,6 +35,7 @@ export class RoleAdministration {
     prefix: string,
     fcId: string | null,
     officerRank: string | null,
+    channels: { lobby: string | null; officers: string | null } = { lobby: null, officers: null },
   ): Promise<unknown> {
     authorizeRoleManager(actor);
     prefix = prefix.trim();
@@ -60,6 +63,7 @@ export class RoleAdministration {
           "input",
           "Unlink the current FC explicitly before selecting a different one.",
         );
+      await this.access.discord.check(actor.guildId, actor.userId);
       const company =
         fcId && fcId !== previous?.fc_id ? await this.app.lodestone.company(fcId) : null;
       const specifications = [
@@ -90,6 +94,18 @@ export class RoleAdministration {
       }
       if (new Set(roles.map((role) => role.id)).size !== 4)
         throw new Failure("input", "The four managed roles must be distinct.");
+      const [member, guest, staff, leader] = roles;
+      if (!member || !guest || !staff || !leader)
+        throw new Error("Incomplete setup role selection");
+      for (const selected of [channels.lobby, channels.officers])
+        if (selected) await this.discord.validateChannel(actor.guildId, selected);
+      const prepared = await this.access.discord.prepare(
+        actor.guildId,
+        actor.userId,
+        { member: member.id, guest: guest.id, officer: staff.id, leader: leader.id },
+        channels.lobby ?? previous?.lobby_channel_id ?? null,
+        channels.officers ?? previous?.officer_channel_id ?? null,
+      );
       const officerRole = roles.find((role) => role.field === "officer_role_id");
       // Adopting an existing staff role is an explicit manager decision; preserve its human holders.
       const adopted =
@@ -137,16 +153,33 @@ export class RoleAdministration {
           .update(t.guilds)
           .set({
             fc_id: targetFc,
-            member_role_id: roles[0]?.id ?? null,
-            guest_role_id: roles[1]?.id ?? null,
-            officer_role_id: roles[2]?.id ?? null,
-            leader_role_id: roles[3]?.id ?? null,
+            member_role_id: member.id,
+            guest_role_id: guest.id,
+            officer_role_id: staff.id,
+            leader_role_id: leader.id,
             officer_rank_name: officerRank ?? t.guilds.officer_rank_name,
             officer_rank_key: officerRank ? normalized(officerRank) : t.guilds.officer_rank_key,
+            lobby_channel_id: prepared.lobby.id,
+            officer_channel_id: prepared.officers.id,
+            access_policy_enabled: true,
+            access_everyone_before:
+              current.access_everyone_before ?? prepared.snapshot.everyonePermissions,
+            officer_notifications_channel_id:
+              current.officer_notifications_channel_id ?? prepared.officers.id,
+            guest_application_channel_id:
+              current.guest_application_channel_id ?? prepared.officers.id,
             revision: sql`${t.guilds.revision}+1`,
             active: true,
           })
           .where(eq(t.guilds.id, actor.guildId));
+        await this.access.remember(
+          client,
+          actor.guildId,
+          prepared.snapshot,
+          prepared.lobby.id,
+          prepared.officers.id,
+          previous?.access_policy_enabled ?? false,
+        );
         for (const member of adopted) {
           await ensureUser(client, actor.guildId, member.id, member.joinedAt);
           await db
@@ -172,10 +205,13 @@ export class RoleAdministration {
         }
         await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
         await layoutGuildRoles(client, actor.guildId);
+        const accessJob = await secureGuildChannels(client, actor.guildId);
         await audit(client, actor.guildId, actor.userId, "setup", actor.guildId, {
           roles,
           fcId: targetFc,
           officerRank,
+          lobby: prepared.lobby,
+          officers: prepared.officers,
         });
         return {
           status: "configured",
@@ -184,7 +220,12 @@ export class RoleAdministration {
           officerRank: officerRank ?? current.officer_rank_name,
           effects: "queued",
           roleLayout: "FC Leader > Officer > Member > Guest; consecutive block; display separately",
-          instructions: "Configure notification channels, then run /config validate and /refresh.",
+          lobby: prepared.lobby,
+          officerChannel: prepared.officers,
+          accessPolicy: "queued",
+          accessJob,
+          instructions:
+            "Channel enforcement is queued; inspect /sync status until secured. Configure a ledger channel if needed, then run /config validate.",
         };
       });
     } finally {
@@ -203,7 +244,12 @@ export class RoleAdministration {
     const guild = await this.app.guild(actor);
     if (!guild.officer_role_id)
       throw new Failure("setup", "Run /setup or configure an Officer role first.");
-    await this.discord.validateRole(guild.id, guild.officer_role_id, actor.userId);
+    await this.discord.validateRole(
+      guild.id,
+      guild.officer_role_id,
+      actor.userId,
+      grant && guild.access_policy_enabled,
+    );
     const member = await this.discord.member(guild.id, user);
     if (member?.bot || (grant && !member))
       throw new Failure("input", "Officer grants require a current human guild member.");

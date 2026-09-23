@@ -5,8 +5,9 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.9.0 full automated suite passed **90 tests / 621 assertions** with both supplied and synthetic migration inputs.
+- The 2.10.0 full automated suite passed **102 tests / 978 assertions** with both supplied and synthetic migration inputs.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
+- Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. Live onboarding verification is the next session.
 - Live setup, original-role reuse, consecutive hierarchy/hoisting, real ownership verification, Member/FC Leader delivery, public development replies, and a complete seven-job refresh have passed.
 - The owner nickname restriction was exercised and cleared by opting out. It is an expected Discord limitation.
 - Nodestone submodule builds, dependency-update checks, clean-clone installation, containers, fixture import, and an earlier backup/restore rehearsal have passed.
@@ -16,7 +17,6 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 
 | Priority | Open item | Requirement / evidence |
 | --- | --- | --- |
-| P1 | Implement the newly requested lobby security model: no-access-role users see only the lobby; Members/Guests cannot see it; staff can; ordinary channels of every type are role-gated. Reuse or create at least one officer-only room, and automatically qualify verified non-FC users for Guest while respecting revocation. | Owner-requested onboarding expansion; resume the saved partial implementation after the separate Drizzle foundation PR. |
 | P1 | Complete officer operational notifications: aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices, with per-guild/run throttling. | **OPS-11, DB-07**. `Synchronization.roster` currently emits roster acceptance/degraded messages; general queue failures go to logs/status through `Queue` and `src/main.ts`. |
 | P1 | Complete operational telemetry: application/job duration, queue age, retry context, and consistent guild/FC/run context. | **OPS-10**. Current reporting has operation IDs, result/error categories, queue counts, and roster age, but does not cover all required measurements. |
 | P2 | Harden and rehearse coalescing/backoff for bursts of role events and complete member enumeration. | **SYNC-02, SYNC-14–17**. Live role changes produced transient gateway rate-limit errors before recovering; exercise this at representative guild size. |
@@ -27,6 +27,7 @@ These paths have implementation and automated coverage. The remaining work is to
 
 | Area | Remaining checks | Requirements |
 | --- | --- | --- |
+| Lobby onboarding | Apply migration 003, register the updated setup command, explicitly enable policy, verify all visibility classes using non-owner/non-Administrator users, and exercise drift/deletion/partial-failure/restart repair and registered non-FC access/revocation. | **ACCESS-01–04**; `test-plans/current.json` |
 | Guest applications | `/apply`; approve/deny via commands and buttons; original buttons after restart; deleted review-message repair; blocked DMs; deny/reapply cooldown; grant/revoke/rejoin; visible delivery outcomes. | **GUEST-01–09, AC-12–13** |
 | Ledger | Initialize the isolated DevBot account; deposit/withdraw/adjust; balance/history pagination; ordinary-member versus officer authorization; blocked notification and retry without a second financial mutation; historical account access after unlink/relink. | **LEDGER-01–11, AC-15–17** |
 | Character workflows | By-name/world search and selection, private autocomplete, officer assignment, offline local unassignment, multiple characters, primary selection, and expired/replaced proof through actual interactions. | **CHAR-01–05, VERIFY-01–06, AC-03–06** |
@@ -46,8 +47,8 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Merge/publish the verified Drizzle foundation and run the 2.9.0 DevBot persistence smoke plan.
-2. Complete and verify lobby/officer-channel security and registered non-FC Guest eligibility.
+1. Merge/publish the verified 2.10.0 onboarding feature, apply its migration, and refresh guild command registration.
+2. Run the DevBot lobby/staff/registered-visitor session, including retained persistence and least-privilege visibility checks.
 3. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
 4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
 5. Least-privilege and interruption/recovery rehearsal.

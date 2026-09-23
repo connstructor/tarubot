@@ -1,5 +1,5 @@
 /** Idempotent guild bootstrap, with a default DevBot prefix in development scope. */
-import { PermissionFlagsBits } from "discord.js";
+import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { applicationKey, roleAdministrationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
@@ -7,8 +7,12 @@ import { dataReply } from "../../discord/replies.js";
 import { lodestoneId } from "../../domain/values.js";
 
 export default defineCommand({
-  data: command("setup", "Create or reuse Member, Guest, Officer, and FC Leader roles")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ManageRoles)
+  data: command("setup", "Set up access roles, a newcomer lobby, and officer-only channels")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild |
+        PermissionFlagsBits.ManageRoles |
+        PermissionFlagsBits.ManageChannels,
+    )
     .addStringOption(string("fc_id", "Optional FC ID or canonical Lodestone URL"))
     .addStringOption((option) =>
       option
@@ -16,8 +20,18 @@ export default defineCommand({
         .setDescription("Role-name prefix; defaults to DevBot in the test guild")
         .setMaxLength(50),
     )
-    .addStringOption(
-      string("officer_rank", "Optional in-game FC rank granting bot officer access"),
+    .addStringOption(string("officer_rank", "Optional in-game FC rank granting bot officer access"))
+    .addChannelOption((option) =>
+      option
+        .setName("lobby")
+        .setDescription("Existing lobby to reuse")
+        .addChannelTypes(ChannelType.GuildText),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName("officers")
+        .setDescription("Existing officer-only room to reuse")
+        .addChannelTypes(ChannelType.GuildText),
     ),
   access: "officer",
   requires: [applicationKey, roleAdministrationKey],
@@ -33,6 +47,10 @@ export default defineCommand({
           options.getString("prefix") ?? (app.config.TEST_GUILD_ID ? "DevBot" : ""),
           fc ? lodestoneId(fc, "freecompany") : null,
           options.getString("officer_rank"),
+          {
+            lobby: options.getChannel("lobby")?.id ?? null,
+            officers: options.getChannel("officers")?.id ?? null,
+          },
         ),
     );
   },

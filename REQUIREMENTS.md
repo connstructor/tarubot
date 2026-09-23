@@ -407,6 +407,18 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 ## 10. Persistence, transactions, and durable effects
 
+### Approved onboarding extension
+
+**ACCESS-01.** Explicit `/setup` enables a persisted guild-scoped channel policy and provisions/reuses distinct lobby and officer text rooms alongside the four access roles. Require current Manage Server, Manage Roles, and Manage Channels for setup. Existing guilds remain opted out until that action; enforce the bot's channel and role capabilities before mutation.
+
+**ACCESS-02.** Role-less newcomers see the lobby; ordinary Members/Guests see ordinary channels and not the lobby. Officers and FC Leaders see the lobby, ordinary channels, and staff areas. Preserve existing private areas as staff-only. Apply visibility to every non-thread guild channel type and categories, with threads inheriting their parent's visibility. Discord owner/Administrator bypass remains intrinsic.
+
+**ACCESS-03.** Own channel visibility overwrites explicitly, retain unrelated permission bits, persist first-observed ACL/parent/default-permission snapshots, and repair drift through deduplicated durable work. Bind writes to current activation/configuration/job ownership, verify the full resulting policy, retain recovery across partial failure/restart, and include channel work in refresh status.
+
+**ACCESS-04.** In enabled guilds, derive Guest for active trusted registered owners who are not eligible FC members, using accepted current membership evidence; registration suffices when no FC is linked. Preserve explicit Guest revocation, FC Member precedence, guild isolation, and conservative treatment of unknown/stale evidence. Derived registration must not recreate a revoked durable grant.
+
+### Database and durable work
+
 **DB-01.** PostgreSQL is the runtime database. Use Drizzle ORM for typed application persistence over the node-postgres driver, with table mappings and inferred record types maintained alongside explicit versioned SQL migrations. The migrations own foreign keys, unique constraints, indexes, domains, and triggers; already-applied migrations are immutable. Bind ORM work inside an application transaction to its exact checked-out client. Retain narrowly scoped parameterized PostgreSQL control/locking SQL and catalog-based restore verification. Application startup checks the required schema version and checksum.
 
 The physical schema may use different names, but it must represent these logical records and constraints:

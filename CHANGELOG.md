@@ -1,6 +1,15 @@
 # Version history
 
-The current application version is **2.9.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.10.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.10.0 — Lobby onboarding and channel access
+
+- Extend `/setup` to create/reuse a newcomer lobby and officer room, with explicit channel selections and manager/channel permission checks.
+- Enforce lobby, Member/Guest, and staff-only visibility across all non-thread channel types; threads inherit parent visibility. Officers and FC Leaders can see the lobby while ordinary Members/Guests cannot.
+- Preserve first-observed channel permissions/parents and the original everyone permission bitfield; retain existing private areas as staff-only. Persist the opt-in policy in `003_guild_access.sql` using Drizzle.
+- Reconcile channel creation, edits, deletion, startup, refresh, and role rebinding through durable, revision-fenced work with full readback and no-op convergence.
+- Derive Guest access for trusted registered non-FC visitors, preserving revocation, FC Member precedence, stale-evidence safeguards, and guild isolation.
+- Verify effective Discord.js permissions, provisioning/reuse, partial-failure recovery, snapshot durability, authorization, refresh accounting, and visitor access transitions.
 
 ## 2.9.0 — Drizzle persistence
 
@@ -77,6 +86,7 @@ These numbers are assigned now to the completed work stages to establish a meani
 | 2.8.3 | Non-cancelling release publication and exact registry version tags |
 | 2.8.4 | Weekly Bun dependency-update pull requests |
 | 2.9.0 | Typed Drizzle persistence with exact-value, transaction, and queue regression coverage |
+| 2.10.0 | Opt-in lobby/staff channel security and derived registered-visitor Guest access |
 
 ## Increment policy
 

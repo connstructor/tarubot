@@ -62,3 +62,35 @@ test("nickname truncation does not split graphemes or exceed Discord's limit", (
   const name = `${"x".repeat(30)}👩‍🚀`;
   expect(nickname(name)).toBe("x".repeat(30));
 });
+
+test("verified visitors require current classification; revocation wins and uncertain rosters never invent access", () => {
+  const visitor = {
+    membership: "ineligible" as const,
+    fresh: true,
+    former: false,
+    grant: false,
+    revoked: false,
+    hasMember: false,
+    hasGuest: false,
+    verified: true,
+  };
+  expect(desiredAccess(visitor)).toEqual({ member: false, guest: true });
+  expect(desiredAccess({ ...visitor, verified: false })).toEqual({ member: false, guest: false });
+  expect(desiredAccess({ ...visitor, revoked: true, hasGuest: true })).toEqual({
+    member: false,
+    guest: false,
+  });
+  expect(desiredAccess({ ...visitor, fresh: false })).toEqual({ member: false, guest: false });
+  expect(desiredAccess({ ...visitor, fresh: false, hasGuest: true })).toEqual({
+    member: false,
+    guest: true,
+  });
+  expect(desiredAccess({ ...visitor, membership: "uncertain" })).toEqual({
+    member: false,
+    guest: false,
+  });
+  expect(desiredAccess({ ...visitor, membership: "member", revoked: true })).toEqual({
+    member: true,
+    guest: false,
+  });
+});

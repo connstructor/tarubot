@@ -2,6 +2,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { ChannelType, OverwriteType, PermissionFlagsBits as P } from "discord.js";
+import type { AccessChannel } from "../../src/domain/channel-access.js";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import * as t from "../../src/infrastructure/postgres/schema.js";
@@ -26,6 +28,8 @@ import { readDump } from "../../src/import/dump.js";
 import { importLegacy, mappings, type Snapshot } from "../../src/import/importer.js";
 import { enqueue, layoutGuildRoles, Queue, type Job } from "../../src/jobs/queue.js";
 import { dispatcher } from "../../src/jobs/dispatch.js";
+import { GuildAccess } from "../../src/application/guild-access.js";
+import { FakeGuildAccess } from "../fixtures/guild-access.js";
 
 const url = process.env.TEST_DATABASE_URL;
 // These tests deliberately recreate a disposable schema; production connections are rejected below.
@@ -183,6 +187,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   const nodestone = new FakeNodestone("http://unused");
   const service = new Service(db, discord, nodestone, config);
   const sync = new Synchronization(service);
+  const accessPort = new FakeGuildAccess();
+  const access = new GuildAccess(service, accessPort);
   const actor: Actor = {
     guildId: guild,
     userId: "999999999999999990",
@@ -596,7 +602,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )
     )[0];
     if (!queued) throw new Error("Missing notification");
-    const queue = new Queue(db, dispatcher(service, sync), () => {});
+    const queue = new Queue(db, dispatcher(service, sync, access), () => {});
     sendBlocked = true;
     await queue.perform(await leased(queued.id));
     expect(
@@ -834,7 +840,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       { id: "77777781", name: "Blocked Nickname", world: "Diabolos", dc: "Crystal", fcId: null },
       "Nickname failure fixture",
     );
-    const queue = new Queue(db, dispatcher(service, sync), () => {});
+    const queue = new Queue(db, dispatcher(service, sync, access), () => {});
     const reconcile = async () => {
       const key = await enqueue(
         db.pool,
@@ -987,12 +993,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         return { id: role, created: true };
       },
     };
-    const administration = new RoleAdministration(service, provisioner);
+    const administration = new RoleAdministration(service, provisioner, access);
     await expect(
       administration.setup({ ...manager, serverManager: false }, "DevBot", fc, "Officer"),
     ).rejects.toThrow("Manage Server");
     await administration.setup(manager, "DevBot", fc, "Officer");
     const configured = await service.guild(manager);
+    expect(configured.access_policy_enabled).toBe(true);
+    expect(configured.officer_notifications_channel_id).toBe(configured.officer_channel_id);
+    expect(configured.guest_application_channel_id).toBe(configured.officer_channel_id);
     await administration.setup(manager, "DevBot", null, null);
     expect(created.size).toBe(4);
     expect((await service.guild(manager)).officer_role_id).toBe(configured.officer_role_id);
@@ -1107,10 +1116,14 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       },
     };
     const app = new Service(db, layoutPort, nodestone, config);
-    const run = dispatcher(app, new Synchronization(app));
+    const run = dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort));
     const disabled = new Service(db, layoutPort, nodestone, { ...config, ENABLE_EFFECTS: false });
     await expect(
-      dispatcher(disabled, new Synchronization(disabled))(job, async () => {}),
+      dispatcher(
+        disabled,
+        new Synchronization(disabled),
+        new GuildAccess(disabled, accessPort),
+      )(job, async () => {}),
     ).rejects.toMatchObject({ code: "disabled" });
     await db.query("UPDATE guilds SET effects_enabled=false WHERE id=$1", [layoutGuild]);
     await expect(run(job, async () => {})).rejects.toMatchObject({ code: "disabled" });
@@ -1153,7 +1166,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       },
     };
     const app = new Service(db, layoutPort, nodestone, config);
-    const queue = new Queue(db, dispatcher(app, new Synchronization(app)), () => {});
+    const queue = new Queue(
+      db,
+      dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort)),
+      () => {},
+    );
     await queue.perform(await leased(key));
     expect(
       (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]?.status,
@@ -1163,6 +1180,412 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]?.status,
     ).toBe("succeeded");
     expect(calls).toBe(2);
+  });
+
+  /** A pre-existing guild captures its original public/private areas before enabling the opt-in policy. */
+  async function accessFixture(guildId: string, fcId: string | null = null) {
+    const port = new FakeGuildAccess();
+    const remote = port.state(guildId);
+    const room = (
+      id: string,
+      type: ChannelType,
+      privateArea = false,
+      parentId: string | null = null,
+    ): AccessChannel => ({
+      id,
+      type,
+      name: id,
+      parentId,
+      everyoneVisible: !privateArea,
+      memberVisible: !privateArea,
+      guestVisible: !privateArea,
+      overwrites: privateArea
+        ? [{ id: guildId, type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) }]
+        : [],
+    });
+    remote.channels = [
+      room("81001", ChannelType.GuildText, false, "81003"),
+      room("81002", ChannelType.GuildText, true),
+      room("81003", ChannelType.GuildCategory),
+      room("81004", ChannelType.GuildVoice),
+      room("81005", ChannelType.GuildForum),
+      room("81006", ChannelType.GuildCategory, true),
+      room("81007", ChannelType.GuildMedia, true, "81006"),
+    ];
+    const policy = new GuildAccess(service, port);
+    await db.transaction(async (client) => {
+      await orm(client).insert(t.guilds).values({
+        id: guildId,
+        fc_id: fcId,
+        effects_enabled: true,
+        member_role_id: "81101",
+        guest_role_id: "81102",
+        officer_role_id: "81103",
+        leader_role_id: "81104",
+        lobby_channel_id: "81001",
+        officer_channel_id: "81002",
+        access_policy_enabled: true,
+        access_everyone_before: remote.everyonePermissions,
+        guest_application_channel_id: "81002",
+      });
+      await policy.remember(client, guildId, structuredClone(remote), "81001", "81002", false);
+    });
+    const manager = { ...actor, guildId, serverManager: true };
+    return { port, remote, policy, manager, guild: await service.guild(manager) };
+  }
+
+  test("channel access retains first snapshots and private areas through partial failure, restart and role replacement", async () => {
+    const fixture = await accessFixture("666666666666666671");
+    const original = structuredClone(fixture.remote.channels);
+    fixture.port.beforeWrite = async (id) => {
+      if (id === "81004") throw new Failure("blocked", "Injected channel permission failure");
+    };
+    await expect(fixture.policy.reconcile(fixture.guild.id, async () => {})).rejects.toThrow(
+      "Injected",
+    );
+    expect(fixture.port.writes.slice(0, 2)).toEqual(["81001", "everyone"]);
+    expect(BigInt(fixture.remote.everyonePermissions) & P.ViewChannel).toBe(0n);
+    fixture.port.beforeWrite = undefined;
+    const restarted = new GuildAccess(service, fixture.port);
+    expect(await restarted.reconcile(fixture.guild.id, async () => {})).toMatchObject({
+      status: "secured",
+    });
+    const writes = fixture.port.writes.length;
+    expect(await restarted.reconcile(fixture.guild.id, async () => {})).toMatchObject({
+      changed: [],
+      defaultChanged: false,
+    });
+    expect(fixture.port.writes).toHaveLength(writes);
+    const saved = await db.orm
+      .select()
+      .from(t.channelAccessPolicies)
+      .where(eq(t.channelAccessPolicies.guild_id, fixture.guild.id));
+    for (const row of saved)
+      expect(row.original_state).toEqual(original.find((channel) => channel.id === row.channel_id));
+    expect(
+      saved
+        .filter((row) => row.staff_only)
+        .map((row) => row.channel_id)
+        .sort(),
+    ).toEqual(["81002", "81006", "81007"]);
+    await service.configure(fixture.manager, "member_role_id", "81109");
+    await expect(service.configure(fixture.manager, "guest_role_id", null)).rejects.toThrow(
+      "all four roles",
+    );
+    await expect(
+      service.configure({ ...fixture.manager, serverManager: false }, "guest_role_id", "81110"),
+    ).rejects.toThrow("Manage Server");
+    await restarted.reconcile(fixture.guild.id, async () => {});
+    const voice = fixture.remote.channels.find((channel) => channel.id === "81004");
+    expect(
+      voice?.overwrites.some(
+        (overwrite) => overwrite.id === "81101" && (BigInt(overwrite.allow) & P.ViewChannel) !== 0n,
+      ),
+    ).toBe(false);
+    expect(
+      voice?.overwrites.some(
+        (overwrite) => overwrite.id === "81109" && (BigInt(overwrite.allow) & P.ViewChannel) !== 0n,
+      ),
+    ).toBe(true);
+    expect(
+      (
+        await db.orm
+          .select()
+          .from(t.channelAccessPolicies)
+          .where(
+            and(
+              eq(t.channelAccessPolicies.guild_id, fixture.guild.id),
+              eq(t.channelAccessPolicies.channel_id, "81001"),
+            ),
+          )
+      )[0]?.original_state,
+    ).toEqual(original[0]);
+  });
+
+  test("channel effects honor activation, setup exclusion, revision fencing and missing-room readback", async () => {
+    const fixture = await accessFixture("666666666666666672");
+    const disabled = new Service(db, discord, nodestone, { ...config, ENABLE_EFFECTS: false });
+    await expect(
+      new GuildAccess(disabled, fixture.port).reconcile(fixture.guild.id, async () => {}),
+    ).rejects.toMatchObject({ code: "disabled" });
+    const lock = await db.pool.connect();
+    try {
+      await lock.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [
+        `setup:${fixture.guild.id}`,
+      ]);
+      await expect(
+        fixture.policy.reconcile(fixture.guild.id, async () => {}),
+      ).rejects.toMatchObject({ code: "busy" });
+    } finally {
+      await lock.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [
+        `setup:${fixture.guild.id}`,
+      ]);
+      lock.release();
+    }
+    fixture.port.beforeWrite = async () => {
+      await db.orm
+        .update(t.guilds)
+        .set({ revision: sql`${t.guilds.revision}+1` })
+        .where(eq(t.guilds.id, fixture.guild.id));
+    };
+    await expect(fixture.policy.reconcile(fixture.guild.id, async () => {})).rejects.toMatchObject({
+      code: "superseded",
+    });
+    expect(fixture.port.writes).toHaveLength(0);
+    fixture.port.beforeWrite = undefined;
+    fixture.port.afterWrite = async (id) => {
+      if (id === "81007")
+        fixture.remote.channels = fixture.remote.channels.filter(
+          (channel) => channel.id !== "81002",
+        );
+    };
+    await expect(fixture.policy.reconcile(fixture.guild.id, async () => {})).rejects.toMatchObject({
+      code: "blocked",
+    });
+    expect(
+      await db.orm
+        .select()
+        .from(t.auditEvents)
+        .where(
+          and(
+            eq(t.auditEvents.guild_id, fixture.guild.id),
+            eq(t.auditEvents.action, "channels.secured"),
+          ),
+        ),
+    ).toEqual([]);
+  });
+
+  test("channel events coalesce without member enumeration and refresh status tracks channel repair", async () => {
+    const fixture = await accessFixture("666666666666666673");
+    const events = new GuildEvents(db);
+    await events.channelChanged(fixture.guild.id);
+    await events.channelChanged(fixture.guild.id);
+    const pending = await db.orm
+      .select()
+      .from(t.jobs)
+      .where(and(eq(t.jobs.guild_id, fixture.guild.id), eq(t.jobs.kind, "channels.access")));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.generation).toBe(2);
+    const parent = await enqueue(
+      db.pool,
+      "reconcile.guild",
+      `guild:${fixture.guild.id}`,
+      {},
+      fixture.guild.id,
+    );
+    const [run] = await db.orm
+      .insert(t.syncRuns)
+      .values({ guild_id: fixture.guild.id, requester_id: actor.userId, job_id: parent })
+      .returning();
+    if (!run) throw new Error("Missing refresh run");
+    await db.orm.insert(t.syncRunJobs).values({ run_id: run.id, job_id: parent });
+    let enumerations = 0;
+    const app = new Service(
+      db,
+      {
+        ...discord,
+        async members() {
+          enumerations++;
+          return [];
+        },
+      },
+      nodestone,
+      config,
+    );
+    const sync = new Synchronization(app);
+    await sync.guild(fixture.guild.id, parent);
+    expect(enumerations).toBe(1);
+    const children = await db.orm
+      .select({ kind: t.jobs.kind })
+      .from(t.syncRunJobs)
+      .innerJoin(t.jobs, eq(t.jobs.id, t.syncRunJobs.job_id))
+      .where(eq(t.syncRunJobs.run_id, run.id));
+    expect(children.map((row) => row.kind).sort()).toEqual([
+      "channels.access",
+      "reconcile.guild",
+      "roles.layout",
+    ]);
+    await dispatcher(app, sync, fixture.policy)(await leased(pending[0]?.id ?? ""), async () => {});
+    // A new default-closed channel is ordinary; a newly explicit private channel stays staff-only.
+    fixture.remote.channels.push({
+      id: "81008",
+      name: "new",
+      type: ChannelType.GuildStageVoice,
+      parentId: null,
+      overwrites: [],
+      everyoneVisible: false,
+      memberVisible: false,
+      guestVisible: false,
+    });
+    await events.channelChanged(fixture.guild.id);
+    await fixture.policy.reconcile(fixture.guild.id, async () => {});
+    expect(
+      (
+        await db.orm
+          .select()
+          .from(t.channelAccessPolicies)
+          .where(
+            and(
+              eq(t.channelAccessPolicies.guild_id, fixture.guild.id),
+              eq(t.channelAccessPolicies.channel_id, "81008"),
+            ),
+          )
+      )[0]?.staff_only,
+    ).toBe(false);
+    expect(enumerations).toBe(1);
+    await db.orm.insert(t.guilds).values({ id: "666666666666666679" });
+    await events.channelChanged("666666666666666679");
+    expect(
+      await db.orm.select().from(t.jobs).where(eq(t.jobs.guild_id, "666666666666666679")),
+    ).toEqual([]);
+  });
+
+  test("verified visitors get derived Guest access while revocation, FC membership, staleness and unlink remain authoritative", async () => {
+    const fixture = await accessFixture("666666666666666674", fc);
+    await db.orm
+      .update(t.freeCompanies)
+      .set({ last_successful_roster_at: sql`now()` })
+      .where(eq(t.freeCompanies.id, fc));
+    const visitor = {
+      id: "77777200",
+      name: "Verified Visitor",
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId: fc,
+    };
+    await service.assign(fixture.manager, "94001", visitor, "Trusted visitor");
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(false);
+    const reconcile = async (user: string) =>
+      sync.user(
+        await leased(
+          await enqueue(
+            db.pool,
+            "reconcile.user",
+            `user:${fixture.guild.id}:${user}`,
+            {},
+            fixture.guild.id,
+            user,
+          ),
+        ),
+        async () => {},
+      );
+    await reconcile("94001");
+    expect(members.get("94001")?.roles).toContain(fixture.guild.guest_role_id ?? "");
+    expect(members.get("94001")?.roles).not.toContain(fixture.guild.member_role_id ?? "");
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(true);
+    expect(
+      await db.orm
+        .select()
+        .from(t.guestGrants)
+        .where(
+          and(eq(t.guestGrants.guild_id, fixture.guild.id), eq(t.guestGrants.user_id, "94001")),
+        ),
+    ).toEqual([]);
+    await expect(
+      service.apply({ ...fixture.manager, userId: "94001", officer: false, serverManager: false }),
+    ).rejects.toMatchObject({ code: "eligible" });
+    await service.guestAction(fixture.manager, "94001", true, "Explicit revoke", randomUUID());
+    await reconcile("94001");
+    expect(members.get("94001")?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+    const events = new GuildEvents(db);
+    await events.memberLeft(fixture.guild.id, "94001");
+    const rejoined = members.get("94001");
+    if (!rejoined) throw new Error("Missing rejoining visitor");
+    rejoined.joinedAt = new Date();
+    await events.memberJoined(fixture.guild.id, "94001", rejoined.joinedAt);
+    const restarted = new Service(db, discord, nodestone, config);
+    expect(await restarted.registrationGuestEligible(db.pool, fixture.guild, "94001")).toBe(false);
+    await reconcile("94001");
+    expect(rejoined.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+    // Positive accepted roster evidence grants Member even though the independent Guest revoke persists.
+    const [positive] = await db.orm
+      .insert(t.rosterSnapshots)
+      .values({
+        fc_id: fc,
+        started_at: new Date(),
+        observed_at: new Date(),
+        member_count: 1,
+        evidence: { fixture: true },
+      })
+      .returning();
+    if (!positive) throw new Error("Missing positive snapshot");
+    await db.orm
+      .insert(t.rosterMembers)
+      .values({ snapshot_id: positive.id, character_id: visitor.id });
+    await db.orm
+      .update(t.membership)
+      .set({ state: "present", snapshot_id: positive.id, confirmed_snapshot_id: positive.id })
+      .where(
+        and(
+          eq(t.membership.guild_id, fixture.guild.id),
+          eq(t.membership.character_id, visitor.id),
+          eq(t.membership.fc_id, fc),
+        ),
+      );
+    await reconcile("94001");
+    expect(members.get("94001")?.roles).toContain(fixture.guild.member_role_id ?? "");
+    expect(members.get("94001")?.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+    const second = { ...visitor, id: "77777201" };
+    await service.assign(fixture.manager, "94002", second, "Second visitor");
+    await reconcile("94002");
+    const current = members.get("94002");
+    if (!current) throw new Error("Missing second visitor");
+    expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
+    await db.orm
+      .update(t.freeCompanies)
+      .set({ last_successful_roster_at: sql`now()-interval '7 hours'` })
+      .where(eq(t.freeCompanies.id, fc));
+    await reconcile("94002");
+    expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
+    current.roles = [];
+    await reconcile("94002");
+    expect(current.roles).toEqual([]);
+    await db.orm
+      .update(t.freeCompanies)
+      .set({ last_successful_roster_at: sql`now()` })
+      .where(eq(t.freeCompanies.id, fc));
+    await reconcile("94002");
+    expect(current.roles).toContain(fixture.guild.guest_role_id ?? "");
+    await service.unclaim(
+      { ...fixture.manager, userId: "94002", officer: false },
+      "94002",
+      second.id,
+    );
+    await reconcile("94002");
+    expect(current.roles).not.toContain(fixture.guild.guest_role_id ?? "");
+  });
+
+  test("registered visitor access is opt-in, guild-scoped and works before linking an FC", async () => {
+    const fixture = await accessFixture("666666666666666675");
+    const character = {
+      id: "77777202",
+      name: "Local Registration",
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId: null,
+    };
+    await service.assign(fixture.manager, "94003", character, "FC-less registration");
+    expect(await service.registrationGuestEligible(db.pool, fixture.guild, "94003")).toBe(true);
+    const work = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${fixture.guild.id}:94003`,
+      {},
+      fixture.guild.id,
+      "94003",
+    );
+    await sync.user(await leased(work), async () => {});
+    expect(members.get("94003")?.roles).toContain(fixture.guild.guest_role_id ?? "");
+    const other = await accessFixture("666666666666666676");
+    expect(await service.registrationGuestEligible(db.pool, other.guild, "94003")).toBe(false);
+    const legacy = { ...fixture.manager, guildId: "666666666666666678" };
+    await db.orm
+      .insert(t.guilds)
+      .values({ id: legacy.guildId, member_role_id: "81201", guest_role_id: "81202" });
+    await service.assign(legacy, "94003", character, "Legacy local link");
+    const configured = await service.guild(legacy);
+    expect(configured.access_policy_enabled).toBe(false);
+    expect(await service.registrationGuestEligible(db.pool, configured, "94003")).toBe(false);
   });
 
   test("Drizzle mappings agree with every migrated application column", async () => {
