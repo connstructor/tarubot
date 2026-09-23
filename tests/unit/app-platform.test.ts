@@ -140,7 +140,7 @@ test("the migration job and console tools in the worker pass the production tool
   if (!database) throw new Error("Missing database component");
   // Stand-ins for what App Platform binds: the cluster's direct URL for db_user/db_name and its CA.
   const bindings: Record<string, string> = {
-    [`\${${database.name}.DATABASE_URL}`]: `postgresql://${database.db_user}:fixture-password@tarubot-pg-do-user-0-0.k.db.ondigitalocean.com:25060/${database.db_name}?sslmode=require`,
+    [`\${${database.name}.DATABASE_URL}`]: `postgresql://${database.db_user}:fixture-password@managed-db.example:25060/${database.db_name}?sslmode=require`,
     [`\${${database.name}.CA_CERT}`]:
       "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----",
   };

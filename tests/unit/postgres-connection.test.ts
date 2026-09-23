@@ -51,8 +51,7 @@ test("local connections retain their original driver options and malformed TLS U
 
 test("Database takes an explicit provider CA and otherwise falls back to DATABASE_CA_CERT", async () => {
   // check-restore gives a PITR fork its own CA; constructing a pool never opens a connection.
-  const managed =
-    "postgresql://tarubot:fixture@tarubot-pg-do-user-1-0.m.db.ondigitalocean.com:25060/tarubot?sslmode=require";
+  const managed = "postgresql://tarubot:fixture@managed-db.example:25060/tarubot?sslmode=require";
   const explicit = new Database(managed, "restore-ca-fixture");
   const previous = process.env.DATABASE_CA_CERT;
   let fallback: Database;
@@ -71,7 +70,7 @@ test("Database takes an explicit provider CA and otherwise falls back to DATABAS
     });
     // The URL sslmode is removed so node-postgres cannot replace the verified provider CA.
     expect(explicit.pool.options.connectionString).toBe(
-      "postgresql://tarubot:fixture@tarubot-pg-do-user-1-0.m.db.ondigitalocean.com:25060/tarubot",
+      "postgresql://tarubot:fixture@managed-db.example:25060/tarubot",
     );
     expect<unknown>(fallback.pool.options.ssl).toEqual({
       ca: "environment-ca-fixture",
