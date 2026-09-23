@@ -6,6 +6,8 @@ import type { BotContext } from "../../src/bot/context.js";
 import { bindEvents, loadCommands, loadComponents, loadEvents } from "../../src/bot/discovery.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { ServiceKey, Services } from "../../src/bot/services.js";
+import { viewerOf } from "../../src/discord/presenters/audience.js";
+import { Presented, reply } from "../../src/discord/presenters/reply.js";
 
 /** Real EventEmitter behavior needs no login, sockets, or game-service mocks. */
 function context(client: Client, services = new Services()): BotContext {
@@ -52,6 +54,13 @@ test("pre-modal checks are accepted only as functions on modal commands", () => 
   expect(typeof defineCommand({ data, modal, beforeModal: () => null }).beforeModal).toBe(
     "function",
   );
+  // A refusal is a presenter reply; the router sends it as the only acknowledgement.
+  const closed = defineCommand({
+    data,
+    modal,
+    beforeModal: async () => reply({ tone: "info", title: "Closed" }),
+  });
+  expect(typeof closed.beforeModal).toBe("function");
   expect(defineCommand({ data, modal }).beforeModal).toBeUndefined();
   // Discovered modules are untyped at runtime; Reflect.construct bypasses the compile-time union
   // to prove the constructor rejects what the option types already forbid.
@@ -148,6 +157,25 @@ test("component discovery owns custom-ID namespaces independently", async () => 
   const components = await loadComponents(new URL("components/", fixtures));
   expect([...components.keys()]).toEqual(["fixture"]);
   expect(components.get("fixture")?.access).toBe("user");
+  // Components acknowledge with a new reply unless they choose to update their message.
+  expect(components.get("fixture")?.acknowledge).toBe("reply");
+});
+
+test("discovered fixtures answer with presenter replies and receive a viewer", async () => {
+  const client = new Client({ intents: [] });
+  try {
+    const actor = { guildId: "100", userId: "400", officer: false, manageRoles: false };
+    const viewer = viewerOf(actor, "1290000000000000001");
+    const runtime = { ...context(client), actor, viewer };
+    const second = (await loadCommands(new URL("valid/", fixtures))).get("fixture-second");
+    const component = (await loadComponents(new URL("components/", fixtures))).get("fixture");
+    // The handlers ignore the interaction, so a placeholder stands in for Discord's payload.
+    const interaction = {} as never;
+    expect(await second?.execute?.({ ...runtime, interaction })).toBeInstanceOf(Presented);
+    expect(await component?.execute({ ...runtime, interaction })).toBeInstanceOf(Presented);
+  } finally {
+    await client.destroy();
+  }
 });
 
 test("removing the final module permits an empty feature directory after clean compilation", async () => {

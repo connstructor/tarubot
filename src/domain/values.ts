@@ -174,12 +174,6 @@ export const json = (value: unknown, indent = 0): string =>
     (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item),
     indent,
   );
-/** Only approved Failure messages are exposed to users; unknown exceptions get a safe fallback. */
-export const message = (error: unknown): string =>
-  error instanceof Failure
-    ? error.message
-    : "The operation failed. Inspect the operation ID in the logs.";
-
 /** Fit Discord's UTF-16 limit without splitting emoji, combining marks, or other graphemes. */
 export function nickname(name: string): string {
   let result = "";

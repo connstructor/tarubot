@@ -7,13 +7,26 @@ import type {
   ModalBuilder,
   SlashCommandBuilder,
 } from "discord.js";
+import type { Viewer } from "../discord/presenters/audience.js";
+import type { Presented } from "../discord/presenters/reply.js";
 import type { Actor } from "../domain/policy.js";
 import type { BotContext } from "./context.js";
 import type { ServiceKey } from "./services.js";
 
+/**
+ * What a handler returns: a presenter reply, or, until every group has migrated to presenters in
+ * 2.14.0, legacy edit-reply options. The router forces mentions off either way.
+ */
+export type HandlerResult = Presented | InteractionEditReplyOptions;
+
 /** Both command and autocomplete handlers receive an already authenticated guild actor. */
 export interface CommandContext extends BotContext {
   readonly actor: Actor;
+  /**
+   * Who the reply is written for, derived once by the router from the same fresh actor the
+   * services authorize against. Presenters choose wording and detail from it, never access.
+   */
+  readonly viewer: Viewer;
   readonly interaction: ChatInputCommandInteraction;
 }
 
@@ -53,9 +66,7 @@ interface CommandMetadata {
 export type CommandOptions = CommandMetadata &
   (
     | {
-        readonly execute: (
-          context: CommandContext,
-        ) => Promise<InteractionEditReplyOptions> | InteractionEditReplyOptions;
+        readonly execute: (context: CommandContext) => Promise<HandlerResult> | HandlerResult;
         readonly modal?: never;
         readonly beforeModal?: never;
       }
@@ -63,15 +74,17 @@ export type CommandOptions = CommandMetadata &
         readonly access?: "user";
         readonly modal: (interaction: ChatInputCommandInteraction) => ModalBuilder;
         /**
-         * Optional availability check before the form opens. Return refusal text to answer with it
-         * instead of the form, or null to open the form. Keep it to one fast local read: Discord
+         * Optional availability check before the form opens. Return a presenter reply to answer
+         * with it instead of the form, or null to open the form. The router sends the refusal as
+         * the only acknowledgement with the usual visibility; it is an expected state, so it is
+         * not reported and carries no Code · Ref footer. Keep it to one fast local read: Discord
          * allows three seconds for the first acknowledgement, so the router opens the form anyway
          * if the check errors or overruns its budget. It is a courtesy, not authorization; the
          * submission still resolves a fresh actor and repeats every check.
          */
         readonly beforeModal?: (
           context: ModalGateContext,
-        ) => Promise<string | null> | string | null;
+        ) => Promise<Presented | null> | Presented | null;
         readonly execute?: never;
       }
   );

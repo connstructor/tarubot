@@ -6,17 +6,44 @@ import {
   Client,
   ComponentType,
   InteractionType,
+  MessageFlags,
   ModalSubmitInteraction,
 } from "discord.js";
+import type { RequestData } from "discord.js";
+
+/** The message a button sits on: its visibility, who it was created for, and its last edit. */
+export interface ButtonSource {
+  /** An ephemeral message only its recipient can see (and click). */
+  readonly ephemeral?: boolean;
+  /** The user whose interaction created the message (interaction_metadata.user). */
+  readonly ownerId?: string;
+  /** When the message was last edited, for throttles that read the source's timestamps. */
+  readonly editedAt?: string;
+}
+
+/** One recorded REST call: its route, JSON body, and the names of any uploaded files. */
+export interface RecordedRequest {
+  readonly method: string;
+  readonly route: string;
+  readonly body: unknown;
+  readonly files?: readonly string[];
+}
+
+/** File names from a REST call's options; discord.js passes uploads beside the JSON body. */
+function fileNames(options: RequestData | undefined) {
+  return options?.files?.length ? { files: options.files.map((file) => file.name) } : {};
+}
 
 export function interactionFixture() {
   const client = new Client<true>({ intents: [] });
-  const requests: { method: string; route: string; body: unknown }[] = [];
+  const requests: RecordedRequest[] = [];
   const member = {
     guildId: "100",
     userId: "400",
     joinedAt: "2026-01-01T00:00:00.000Z",
     bot: false,
+    /** The member's permission bitfield in the channel, as Discord sends it with the payload. */
+    permissions: "0",
   };
   let serial = 10000;
   const user = () => ({
@@ -26,13 +53,27 @@ export function interactionFixture() {
     avatar: null,
     bot: member.bot,
   });
-  const message = (id = "123456789") => ({
+  const message = (id = "123456789", source: ButtonSource = {}) => ({
     id,
     channel_id: "200",
     author: { id: "900", username: "bot", discriminator: "0", avatar: null, bot: true },
     content: "Review",
     timestamp: "2026-01-01T00:00:00.000Z",
-    edited_timestamp: null,
+    edited_timestamp: source.editedAt ?? null,
+    flags: source.ephemeral ? MessageFlags.Ephemeral : 0,
+    ...(source.ownerId && {
+      interaction_metadata: {
+        id: "600",
+        type: InteractionType.ApplicationCommand,
+        user: {
+          id: source.ownerId,
+          username: "owner",
+          discriminator: "0",
+          avatar: null,
+        },
+        authorizing_integration_owners: {},
+      },
+    }),
     tts: false,
     mention_everyone: false,
     mentions: [],
@@ -52,7 +93,13 @@ export function interactionFixture() {
     channel: { id: "200", type: 0 },
     user: user(),
     member: member.guildId
-      ? { user: user(), roles: [], joined_at: member.joinedAt, permissions: "0", flags: 0 }
+      ? {
+          user: user(),
+          roles: [],
+          joined_at: member.joinedAt,
+          permissions: member.permissions,
+          flags: 0,
+        }
       : undefined,
     app_permissions: "0",
     locale: "en-US",
@@ -61,12 +108,31 @@ export function interactionFixture() {
     authorizing_integration_owners: {},
     attachment_size_limit: 10000000,
   });
+  // Errors the next matching REST call throws instead of answering, in order (not recorded).
+  const rejections: { method: "post" | "patch"; error: unknown }[] = [];
+  const reject = (method: "post" | "patch") => {
+    const index = rejections.findIndex((rejection) => rejection.method === method);
+    if (index >= 0) throw rejections.splice(index, 1)[0]?.error;
+  };
   const post = spyOn(client.rest, "post").mockImplementation(async (route, options) => {
-    requests.push({ method: "post", route, body: structuredClone(options?.body) });
-    return {};
+    reject("post");
+    requests.push({
+      method: "post",
+      route,
+      body: structuredClone(options?.body),
+      ...fileNames(options),
+    });
+    // A follow-up executes the interaction webhook, which answers with the created message.
+    return route.startsWith("/webhooks/") ? message(String(++serial)) : {};
   });
   const patch = spyOn(client.rest, "patch").mockImplementation(async (route, options) => {
-    requests.push({ method: "patch", route, body: structuredClone(options?.body) });
+    reject("patch");
+    requests.push({
+      method: "patch",
+      route,
+      body: structuredClone(options?.body),
+      ...fileNames(options),
+    });
     return message();
   });
   const get = spyOn(client.rest, "get").mockImplementation(async (route) => {
@@ -84,6 +150,13 @@ export function interactionFixture() {
     client,
     requests,
     member,
+    /**
+     * Make the next POST (an acknowledgement or follow-up) or PATCH (an edit) throw `error`, as
+     * Discord does for an expired interaction or an outage.
+     */
+    failNext(method: "post" | "patch", error: unknown) {
+      rejections.push({ method, error });
+    },
     /**
      * `options` and `resolved` are raw Discord payload shapes, so a test can exercise the real
      * option resolver (subcommand groups, booleans, resolved roles) of a command module.
@@ -130,14 +203,18 @@ export function interactionFixture() {
       if (!(value instanceof ModalSubmitInteraction)) throw new Error("Invalid modal fixture");
       return value;
     },
-    button(customId: string, messageId = "123456789") {
+    /**
+     * A button press by the fixture member. `source` describes the message it sits on: public and
+     * without interaction metadata (a channel post) unless it says otherwise.
+     */
+    button(customId: string, messageId = "123456789", source: ButtonSource = {}) {
       const value: unknown = Reflect.construct(ButtonInteraction, [
         client,
         {
           ...payload(),
           type: InteractionType.MessageComponent,
           data: { custom_id: customId, component_type: ComponentType.Button },
-          message: message(messageId),
+          message: message(messageId, source),
         },
       ]);
       if (!(value instanceof ButtonInteraction)) throw new Error("Invalid button fixture");

@@ -28,6 +28,13 @@ export function authorizeRoleManager(actor: Actor): void {
 }
 
 /**
+ * The generic officer-level refusal. The reply presenter recognises exactly this text and names the
+ * command instead ("Only FC officers can use /config."); refusals with their own approved wording
+ * (withdrawals, a past FC's ledger, forced refreshes) are shown as written.
+ */
+export const OFFICERS_ONLY = "Only FC officers can do that.";
+
+/**
  * Recheck guild ownership and privilege at the application boundary, including private reads.
  * Each refusal names its rule in the scope detail (another guild, the officer level, or another
  * member's record), so replies never match on message text. The decisions themselves are
@@ -45,7 +52,7 @@ export function authorize(
       scope: "test_guild",
     });
   if (level === "officer" && !actor.officer)
-    throw new Failure("forbidden", "Only FC officers can do that.", 0, {
+    throw new Failure("forbidden", OFFICERS_ONLY, 0, {
       kind: "scope",
       scope: "officer",
     });

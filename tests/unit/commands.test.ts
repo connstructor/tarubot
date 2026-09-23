@@ -12,6 +12,7 @@ import guestCommand from "../../src/commands/guests/guest.command.js";
 import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
 import syncCommand from "../../src/commands/synchronization/sync.command.js";
 import type { Command } from "../../src/bot/command.js";
+import { viewerOf } from "../../src/discord/presenters/audience.js";
 import { cursor, userId, uuid } from "../../src/discord/selectors.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure, lodestoneId } from "../../src/domain/values.js";
@@ -118,6 +119,8 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
       report: () => {},
       resolveActor: async () => actor,
       actor,
+      // The router derives the viewer from the same actor; these officers render officer views.
+      viewer: viewerOf(actor, "1290000000000000001"),
       interaction: fixture.slash("config", options, resolved),
     });
   };
@@ -280,6 +283,7 @@ test("commands reject malformed IDs with an option detail before any service cal
       report: () => {},
       resolveActor: async () => actor,
       actor,
+      viewer: viewerOf(actor, "1290000000000000001"),
       interaction: fixture.slash(name, options),
     });
   const cases: [Command, string, unknown[], string][] = [

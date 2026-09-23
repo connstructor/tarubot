@@ -1066,9 +1066,19 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     );
     try {
       await router.handle(interactions.slash());
+      // The approved closed card (guests#21): an expected state, so no Code · Ref footer.
       expect(interactions.requests.at(-1)?.body).toMatchObject({
         type: InteractionResponseType.ChannelMessageWithSource,
-        data: { content: GUEST_APPLICATIONS_CLOSED, flags: MessageFlags.Ephemeral },
+        data: {
+          content: "",
+          embeds: [
+            { title: "Guest applications are closed", description: GUEST_APPLICATIONS_CLOSED },
+          ],
+          flags: MessageFlags.Ephemeral,
+        },
+      });
+      expect(interactions.requests.at(-1)?.body).not.toMatchObject({
+        data: { embeds: [{ footer: expect.anything() }] },
       });
       // A form opened earlier, or a forged submission, is refused again at submission.
       const applicant: Actor = {
@@ -4369,9 +4379,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await deliver(await leased(job.id), async () => {});
       expect(review).toMatchObject({ introduction: input.introduction, interest: input.interest });
       // A visitor cannot approve their own application; the officer's fresh actor can.
-      await router.handle(interactions.button(`guest:approve:${application.id}`));
+      const refused = interactions.button(`guest:approve:${application.id}`);
+      await router.handle(refused);
       expect(interactions.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("Only FC officers"),
+        embeds: [
+          {
+            title: "Officers only",
+            description: "Only officers can decide guest access. Nothing was changed.",
+            footer: { text: `Code forbidden · Ref ${refused.id}` },
+          },
+        ],
       });
       interactions.member.userId = fixture.manager.userId;
       await router.handle(interactions.button(`guest:approve:${application.id}`));

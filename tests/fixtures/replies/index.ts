@@ -10,6 +10,7 @@ import type { Audience } from "../../../src/discord/presenters/audience.js";
 import type { Presented } from "../../../src/discord/presenters/reply.js";
 import type { Tone } from "../../../src/discord/presenters/style.js";
 import { expectHouseStyle } from "../replies.js";
+import { FAILURE_CASES } from "./failures.js";
 
 /** One catalogued reply state. */
 export interface ReplyCase {
@@ -20,6 +21,12 @@ export interface ReplyCase {
   readonly spec: string | null;
   /** Who receives it: a viewer audience, anyone (failures before the actor is known), or a channel. */
   readonly audience: Audience | "any" | "channel";
+  /**
+   * The concept it presents, when the same concept is reachable from several commands or states
+   * (a failure concept such as 'ownership_conflict'). reply-consistency.test requires one title
+   * and tone per (concept, audience) across every catalog.
+   */
+  readonly concept?: string;
   readonly tone: Tone;
   readonly title: string;
   /** Whether the embed carries a timestamp, as the approved card's `timestamp` records. */
@@ -37,7 +44,9 @@ export type ReplyCatalog<Kind extends string> = Readonly<Record<Kind, ReplyCase>
  * Every group's catalog. Group workstreams import their catalog module here as they migrate from
  * the JSON replies; the cross-group consistency pins read this map.
  */
-export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {};
+export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
+  failures: FAILURE_CASES,
+};
 
 /**
  * Register one bun test per case: it renders within the house style, with its catalogued tone,
