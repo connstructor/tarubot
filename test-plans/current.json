@@ -1,8 +1,8 @@
 {
   "title": "Session: Unverified visitor application forms",
-  "objective": "Validate version 2.12.0 guest forms and officer approval for unverified visitors, while retaining automatic verified Guest/FC Member access and the established lobby policy.",
+  "objective": "Validate version 2.12.1 guest forms and officer approval for unverified visitors, while retaining automatic verified Guest/FC Member access and the established lobby policy.",
   "user": [
-    "After PR checks/merge, deploy 2.12.0 with a stopped-writer backup, migration 004, and updated command registration.",
+    "After this release is checked and published, deploy 2.12.1 with a stopped-writer backup, migration 004, and updated command registration.",
     "Run `/config guest_applications channel:#officer-chat`, then `/config validate`. Existing reviews stay in their original room.",
     "As an unverified visitor, use `/apply` in the lobby. Check both questions, no early Guest grant, and the same application on repeat.",
     "As an officer, inspect answers and Approve. Check Guest delivery, ordinary channels, lobby removal, the DM, and `/guest status`.",
@@ -15,7 +15,7 @@
     "Record live application IDs and outcomes, review-channel selection, pending delivery/recovery work, and preservation of ownership, ledger, and existing access."
   ],
   "bot": [
-    "Run compiled version 2.12.0 with Drizzle and require the migration 004 checksum before accepting work.",
+    "Run compiled version 2.12.1 with Drizzle and require the migration 004 checksum before accepting work.",
     "Persist form answers, audit, and review work atomically; show answers only in the configured review room and require a current officer decision before manual Guest access.",
     "Preserve current join binding, cooldown, revocation, registered-visitor policy, channel exclusions, and restart-safe review/role delivery; expose pending or blocked work through status commands.",
     "Post this responsibility-separated session plan in the configured development channel."

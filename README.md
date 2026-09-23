@@ -35,7 +35,7 @@ Add a `*.command.ts` under `src/commands/`, a `*.event.ts` under `src/events/`, 
 
 See [MODULES.md](docs/MODULES.md) for complete command/event/component examples and service injection, and [CONFIGURATION.md](docs/CONFIGURATION.md) for configuration-code commentary.
 
-See [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) for the remaining requirements-backed implementation, live acceptance, and production-delivery work. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
+**Continuing in a new session? Start with [SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)** for the current merged/published/deployed state and immediate next steps. [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) tracks the remaining requirements-backed v2 release work; [ROADMAP.md](docs/ROADMAP.md) records the planned v3–v6 dashboard, ModMail, and profile milestones. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
 
 ## Persistence
 
