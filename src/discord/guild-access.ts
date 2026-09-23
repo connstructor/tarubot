@@ -11,7 +11,19 @@ import {
   type ChannelAudience,
 } from "../domain/channel-access.js";
 import { Failure, normalized } from "../domain/values.js";
-import type { GuildAccessPort, PreparedAccess } from "../application/records.js";
+import type {
+  GuildAccessPort,
+  GuildAccessSession,
+  PreparedAccess,
+} from "../application/records.js";
+
+/** Immutable identity fences around the Gateway-updated SDK cache for one pass only. */
+interface ReconciliationScope {
+  guild: Guild;
+  channelIds: ReadonlySet<string>;
+  communityUpdatesId: string | null;
+  communityParentId: string | null;
+}
 
 export class DiscordGuildAccess implements GuildAccessPort {
   constructor(private readonly client: Client) {}
@@ -136,17 +148,69 @@ export class DiscordGuildAccess implements GuildAccessPort {
     return { channels, excluded, preserveEveryoneView };
   }
 
-  /** Recheck Discord-owned scope before reading or changing a target, even after a guild setting changes. */
-  private async managedChannel(guildId: string, channelId: string) {
-    const guild = await this.client.guilds.fetch({ guild: guildId, force: true });
-    const scope = await this.channelScope(guild);
-    if (scope.excluded.has(channelId))
+  /** Retain only identities; channel objects continue receiving normal Guilds Gateway updates. */
+  private retainScope(
+    guild: Guild,
+    channels: readonly { id: string; parentId: string | null }[],
+  ): ReconciliationScope {
+    const communityUpdatesId = guild.publicUpdatesChannelId ?? null;
+    return {
+      guild,
+      channelIds: new Set(channels.map((channel) => channel.id)),
+      communityUpdatesId,
+      communityParentId:
+        channels.find((channel) => channel.id === communityUpdatesId)?.parentId ?? null,
+    };
+  }
+
+  /** Hidden community channels cannot be read individually; require a connected, coherent Gateway cache. */
+  private currentScope(scope: ReconciliationScope) {
+    const guild = this.client.guilds.cache.get(scope.guild.id);
+    if (!this.client.isReady() || guild !== scope.guild || !guild.available)
+      throw new Failure(
+        "transient",
+        "Discord scope is unavailable; retry after the gateway reconnects.",
+      );
+    if ((guild.publicUpdatesChannelId ?? null) !== scope.communityUpdatesId)
+      throw new Failure("superseded", "The community channel scope changed; retry reconciliation.");
+    const excluded = new Set<string>();
+    if (scope.communityUpdatesId) {
+      const updates = guild.channels.cache.get(scope.communityUpdatesId);
+      if (!updates || updates.isThread() || updates.parentId !== scope.communityParentId)
+        throw new Failure(
+          "superseded",
+          "The community channel scope changed; retry reconciliation.",
+        );
+      excluded.add(updates.id);
+      if (updates.parentId) excluded.add(updates.parentId);
+    }
+    const preserveEveryoneView = [...excluded].some((id) => {
+      const channel = guild.channels.cache.get(id);
+      if (!channel || channel.isThread())
+        throw new Failure(
+          "superseded",
+          "Protected channel metadata changed; retry reconciliation.",
+        );
+      // Obfuscated overwrites are synthetic; they cannot justify lowering a shared default.
+      if (channel.flags.has(1 << 17)) return true;
+      const everyone = channel.permissionOverwrites.cache.get(guild.id);
+      return (
+        !everyone || ((everyone.allow.bitfield | everyone.deny.bitfield) & P.ViewChannel) === 0n
+      );
+    });
+    return { guild, excluded, preserveEveryoneView };
+  }
+
+  /** No catalogue request here: scope changes invalidate the pass instead of rescanning per target. */
+  private managedChannel(scope: ReconciliationScope, channelId: string) {
+    const current = this.currentScope(scope);
+    if (current.excluded.has(channelId))
       throw new Failure(
         "blocked",
         "The community-updates channel and its parent category are reserved. Select a separate officer-chat channel.",
       );
-    const channel = scope.channels.find((channel) => channel.id === channelId);
-    if (!channel)
+    const channel = current.guild.channels.cache.get(channelId);
+    if (!scope.channelIds.has(channelId) || !channel || channel.isThread())
       throw new Failure(
         "blocked",
         "An onboarding channel was deleted or is unavailable. Run /setup to repair it.",
@@ -156,6 +220,11 @@ export class DiscordGuildAccess implements GuildAccessPort {
 
   /** Check capabilities only in managed channels; inaccessible community resources are outside scope. */
   async snapshot(guildId: string, bindings: AccessRoles): Promise<AccessSnapshot> {
+    return (await this.begin(guildId, bindings)).snapshot;
+  }
+
+  /** Fetch the full inventory once and share it through all effects in this reconciliation. */
+  async begin(guildId: string, bindings: AccessRoles): Promise<GuildAccessSession> {
     const { guild, bot } = await this.management(guildId);
     const roles = this.roles(guild, bot, bindings);
     const scope = await this.channelScope(guild);
@@ -183,12 +252,19 @@ export class DiscordGuildAccess implements GuildAccessPort {
         guestVisible: channel.permissionsFor(roles.guest).has(P.ViewChannel, false),
       });
     }
-    return {
+    const snapshot: AccessSnapshot = {
       botId: bot.id,
       everyonePermissions: String(guild.roles.everyone.permissions.bitfield),
       excludedChannelIds: [...scope.excluded].sort(),
       preserveEveryoneView: scope.preserveEveryoneView,
       channels,
+    };
+    const retained = this.retainScope(guild, scope.channels);
+    return {
+      snapshot,
+      channel: (channel, audience, guard) =>
+        this.channelWithin(retained, channel, bindings, audience, guard),
+      restrictEveryone: (guard) => this.restrictEveryoneWithin(retained, guard),
     };
   }
 
@@ -297,7 +373,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     };
   }
 
-  /** Fresh read/modify/write preserves unrelated bits; readback checks the entire owned visibility policy. */
+  /** Standalone convenience; guild reconciliation opens one shared session instead. */
   async channel(
     guildId: string,
     channelId: string,
@@ -305,12 +381,28 @@ export class DiscordGuildAccess implements GuildAccessPort {
     audience: ChannelAudience,
     guard: () => Promise<void>,
   ): Promise<boolean> {
-    let channel = await this.managedChannel(guildId, channelId);
+    return (await this.begin(guildId, roles)).channel(channelId, audience, guard);
+  }
+
+  /** Cached no-op detection, targeted reads before writes, and targeted readback avoid N full scans. */
+  private async channelWithin(
+    scope: ReconciliationScope,
+    channelId: string,
+    roles: AccessRoles,
+    audience: ChannelAudience,
+    guard: () => Promise<void>,
+  ): Promise<boolean> {
+    const guildId = scope.guild.id;
+    let channel = this.managedChannel(scope, channelId);
     const freshForWrite = async () => {
       await guard();
-      const current = await this.managedChannel(guildId, channelId);
+      this.managedChannel(scope, channelId);
+      // Refresh just this target; Gateway events keep the protected binding/parent cache current.
+      const fetched = await this.client.channels.fetch(channelId, { force: true });
+      if (!fetched || !("guildId" in fetched) || fetched.guildId !== guildId || fetched.isThread())
+        throw new Failure("superseded", "The channel scope changed before mutation.");
       await guard();
-      return current;
+      return this.managedChannel(scope, channelId);
     };
     const botId = this.client.user?.id;
     if (!botId) throw new Failure("blocked", "Discord bot identity is unavailable.");
@@ -362,16 +454,29 @@ export class DiscordGuildAccess implements GuildAccessPort {
 
   /** Close the default only when excluded community resources have independent View overwrites. */
   async restrictEveryone(guildId: string, guard: () => Promise<void>): Promise<boolean> {
-    let { guild } = await this.management(guildId);
-    let everyone = guild.roles.everyone;
-    if ((await this.channelScope(guild)).preserveEveryoneView) return false;
+    const { guild } = await this.management(guildId);
+    const scope = await this.channelScope(guild);
+    return this.restrictEveryoneWithin(this.retainScope(guild, scope.channels), guard);
+  }
+
+  /** A shared-default mutation gets one extra authoritative catalogue check, never one per target. */
+  private async restrictEveryoneWithin(
+    scope: ReconciliationScope,
+    guard: () => Promise<void>,
+  ): Promise<boolean> {
+    const current = this.currentScope(scope);
+    let everyone = current.guild.roles.everyone;
+    if (current.preserveEveryoneView) return false;
     if (!everyone.permissions.has(P.ViewChannel, false)) return false;
     await guard();
-    ({ guild } = await this.management(guildId));
-    if ((await this.channelScope(guild)).preserveEveryoneView) return false;
+    const guildId = scope.guild.id;
+    const { guild } = await this.management(guildId);
+    const refreshed = await this.channelScope(guild);
+    if (refreshed.preserveEveryoneView) return false;
     everyone = guild.roles.everyone;
     if (!everyone.permissions.has(P.ViewChannel, false)) return false;
     await guard();
+    if (this.currentScope(scope).preserveEveryoneView) return false;
     await everyone.setPermissions(
       everyone.permissions.bitfield & ~P.ViewChannel,
       "TaruBot lobby-only newcomer visibility",

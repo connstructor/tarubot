@@ -1,8 +1,8 @@
 {
   "title": "Session: Lobby onboarding and channel access",
-  "objective": "Validate version 2.11.0 onboarding with a separate officer-chat, preserved Discord community resources, limited bot permissions, and registered visitor access; App Platform deployment follows its dedicated runbook.",
+  "objective": "Validate version 2.11.1 onboarding with bounded channel scans, a separate officer-chat, preserved community resources, and limited bot permissions; App Platform deployment follows its dedicated runbook.",
   "user": [
-    "Review the PR after required checks pass and pull its 2.11.0 images. DevBot already has migration 003; restart it on the published release.",
+    "Review the PR after required checks pass and pull its 2.11.1 images. DevBot already has migration 003; restart it on the published release.",
     "Run `/setup officers:#officer-chat`. Confirm the configured community-updates channel and its parent category keep their existing permission settings.",
     "Use non-owner, non-Administrator test users: verify newcomers see only the lobby, Members/Guests see ordinary channels but not the lobby, and Officers/FC Leaders see both and staff rooms.",
     "Verify an FC member and a non-FC visitor. Check automatic Member/Guest delivery, Guest revocation, rejoin, and `/guest status` without using privileged accounts for the visibility checks.",
@@ -14,7 +14,7 @@
     "Record actual role/channel IDs and live outcomes, including least-privilege behavior, retained ledger/ownership state, and pending follow-ups."
   ],
   "bot": [
-    "Run compiled version 2.11.0 with Drizzle and require the migration 003 checksum before accepting work.",
+    "Run compiled version 2.11.1 with Drizzle and require the migration 003 checksum before accepting work.",
     "Enable onboarding only after explicit setup; persist original channel permissions and queue scoped access work with the configuration decision.",
     "Reconcile managed lobby/member/staff visibility, exclude community updates and its parent, preserve Guest revocation, and report blocked or pending work through sync status.",
     "Post this responsibility-separated session plan in the configured development channel."

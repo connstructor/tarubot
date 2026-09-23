@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ChannelType, OverwriteType, PermissionFlagsBits as P } from "discord.js";
 import type { AccessChannel } from "../../src/domain/channel-access.js";
+import { channelAccessOverwrites } from "../../src/domain/channel-access.js";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import * as t from "../../src/infrastructure/postgres/schema.js";
@@ -30,6 +31,7 @@ import { enqueue, layoutGuildRoles, Queue, type Job } from "../../src/jobs/queue
 import { dispatcher } from "../../src/jobs/dispatch.js";
 import { GuildAccess } from "../../src/application/guild-access.js";
 import { FakeGuildAccess } from "../fixtures/guild-access.js";
+import { discordAccessFixture } from "../fixtures/discord-access.js";
 
 const url = process.env.TEST_DATABASE_URL;
 // These tests deliberately recreate a disposable schema; production connections are rejected below.
@@ -1543,6 +1545,86 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       "reserved community channel",
     );
     expect(fixture.port.writes).toHaveLength(writes);
+  });
+
+  test("large-guild reconciliation uses two catalogues and reads only changed targets", async () => {
+    // Exercise the real application loop, SDK adapter, and database together; count REST endpoints.
+    const fixture = discordAccessFixture();
+    try {
+      const everyone = fixture.roles.find((role) => role.id === "100");
+      if (!everyone) throw new Error("Missing everyone role");
+      everyone.permissions = String(BigInt(everyone.permissions) & ~P.ViewChannel);
+      const closed = [
+        { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+      ];
+      const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
+      const updates = fixture.add(
+        "community-updates",
+        ChannelType.GuildText,
+        structuredClone(closed),
+        parent.id,
+      );
+      fixture.community.updatesChannelId = updates.id;
+      const lobby = fixture.add(
+        "lobby",
+        ChannelType.GuildText,
+        channelAccessOverwrites([], "100", "900", fixture.bindings, "lobby"),
+      );
+      const officers = fixture.add(
+        "officer-chat",
+        ChannelType.GuildText,
+        channelAccessOverwrites([], "100", "900", fixture.bindings, "officers"),
+      );
+      const ordinary = Array.from({ length: 80 }, (_, index) =>
+        fixture.add(
+          `room-${index}`,
+          ChannelType.GuildText,
+          channelAccessOverwrites([], "100", "900", fixture.bindings, "members"),
+        ),
+      );
+      await db.orm.insert(t.guilds).values({
+        id: "100",
+        effects_enabled: true,
+        access_policy_enabled: true,
+        lobby_channel_id: lobby.id,
+        officer_channel_id: officers.id,
+        member_role_id: fixture.bindings.member,
+        guest_role_id: fixture.bindings.guest,
+        officer_role_id: fixture.bindings.officer,
+        leader_role_id: fixture.bindings.leader,
+        access_everyone_before: everyone.permissions,
+      });
+      const policy = new GuildAccess(service, fixture.port);
+      expect(await policy.reconcile("100", async () => {})).toMatchObject({
+        status: "secured",
+        channels: 82,
+        changed: [],
+        defaultChanged: false,
+      });
+      expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
+      expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toHaveLength(0);
+      expect(fixture.writes).toEqual([]);
+      fixture.reads.length = 0;
+      const changed = ordinary[0];
+      if (!changed) throw new Error("Missing drift target");
+      changed.permission_overwrites = [];
+      expect(await policy.reconcile("100", async () => {})).toMatchObject({
+        status: "secured",
+        changed: [changed.id],
+      });
+      expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
+      expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toEqual([
+        `/channels/${changed.id}`,
+        `/channels/${changed.id}`,
+      ]);
+      expect(fixture.writes).toEqual([`/channels/${changed.id}`]);
+      expect([parent.permission_overwrites, updates.permission_overwrites]).toEqual([
+        closed,
+        closed,
+      ]);
+    } finally {
+      await fixture.close();
+    }
   });
 
   test("verified visitors get derived Guest access while revocation, FC membership, staleness and unlink remain authoritative", async () => {

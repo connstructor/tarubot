@@ -35,6 +35,7 @@ class FixtureClientUser extends ClientUser {
 export function discordAccessFixture() {
   const client = new Client<true>({ intents: [] });
   client.user = new FixtureClientUser(client);
+  const ready = spyOn(client, "isReady").mockReturnValue(true);
   const bindings: AccessRoles = { member: "201", guest: "202", officer: "203", leader: "204" };
   const base =
     P.ViewChannel |
@@ -79,6 +80,7 @@ export function discordAccessFixture() {
   const channels: ChannelFixture[] = [];
   const community: { updatesChannelId: string | null } = { updatesChannelId: null };
   const writes: string[] = [];
+  const reads: string[] = [];
   let serial = 1000;
   const add = (
     name: string,
@@ -98,12 +100,16 @@ export function discordAccessFixture() {
     return channel;
   };
   const get = spyOn(client.rest, "get").mockImplementation(async (route) => {
+    reads.push(route);
     if (route === "/guilds/100")
       return {
         id: "100",
         name: "Access fixture",
         owner_id: "300",
         public_updates_channel_id: community.updatesChannelId,
+        // Model the available guild/channel cache normally populated by GUILD_CREATE.
+        unavailable: false,
+        channels: structuredClone(channels),
         roles: structuredClone(roles),
       };
     if (route === "/guilds/100/roles") return structuredClone(roles);
@@ -168,12 +174,15 @@ export function discordAccessFixture() {
     channels,
     community,
     writes,
+    reads,
+    ready,
     add,
     port: new DiscordGuildAccess(client),
     async close() {
       get.mockRestore();
       patch.mockRestore();
       post.mockRestore();
+      ready.mockRestore();
       await client.destroy();
     },
   };

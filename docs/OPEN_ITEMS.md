@@ -5,7 +5,7 @@ Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and 
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.11.0 full automated suite passed **113 tests / 1,097 assertions** with both supplied and synthetic migration inputs.
+- The 2.11.1 full automated suite passed **115 tests / 1,109 assertions** with both supplied and synthetic migration inputs, including a large-guild REST request-budget regression.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. Live onboarding verification is the next session.
 - DevBot 2.10.1 was deployed after a backup/restore comparison and migration rehearsal. Administrator is now off, the separate officer-chat was created and managed successfully, and compiled 2.10.2 preflight passed with the configured community-updates channel/category excluded. Full human visibility verification remains.
@@ -50,7 +50,7 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Merge/publish the verified 2.11.0 release and update DevBot; migration 003 is already installed. App Platform deployment is a separate operator-run workflow.
+1. Merge/publish the verified 2.11.1 release and update DevBot; migration 003 is already installed. App Platform deployment is a separate operator-run workflow.
 2. Run the DevBot lobby/staff/registered-visitor session, including retained persistence and least-privilege visibility checks.
 3. Guest and ledger end-to-end sessions, while completing operational alerting/telemetry.
 4. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.

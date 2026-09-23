@@ -309,14 +309,22 @@ test("reserved bindings and mid-write community reconfiguration cannot redirect 
     await expect(
       fixture.port.channel("100", updates.id, fixture.bindings, "officers", async () => {
         fixture.community.updatesChannelId = updates.id;
+        // The Gateway applies this setting to the cached guild before dispatching GuildUpdate.
+        const guild = fixture.client.guilds.cache.get("100");
+        if (!guild) throw new Error("Missing cached guild");
+        guild.publicUpdatesChannelId = updates.id;
       }),
-    ).rejects.toThrow("reserved");
+    ).rejects.toMatchObject({ code: "superseded" });
     const parent = fixture.add("new-parent", ChannelType.GuildCategory);
     await expect(
       fixture.port.channel("100", parent.id, fixture.bindings, "members", async () => {
         updates.parent_id = parent.id;
+        // Hidden channels still receive parent metadata through Guilds Gateway updates.
+        const cached = fixture.client.guilds.cache.get("100")?.channels.cache.get(updates.id);
+        if (!cached || cached.isThread()) throw new Error("Missing cached community channel");
+        cached.parentId = parent.id;
       }),
-    ).rejects.toThrow("reserved");
+    ).rejects.toMatchObject({ code: "superseded" });
     await expect(
       fixture.port.prepare("100", "301", fixture.bindings, null, updates.id),
     ).rejects.toThrow("reserved");
@@ -377,6 +385,37 @@ test("missing community metadata blocks changes instead of guessing a protected 
     await expect(fixture.port.restrictEveryone("100", async () => {})).rejects.toThrow(
       "metadata is unavailable",
     );
+    expect(fixture.writes).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a scoped pass stops on a disconnected gateway or missing protected metadata", async () => {
+  const fixture = discordAccessFixture();
+  try {
+    const closed = [
+      { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+    ];
+    const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
+    const updates = fixture.add(
+      "updates",
+      ChannelType.GuildText,
+      structuredClone(closed),
+      parent.id,
+    );
+    fixture.community.updatesChannelId = updates.id;
+    const target = fixture.add("ordinary");
+    const session = await fixture.port.begin("100", fixture.bindings);
+    fixture.ready.mockReturnValue(false);
+    await expect(session.channel(target.id, "members", async () => {})).rejects.toMatchObject({
+      code: "transient",
+    });
+    fixture.ready.mockReturnValue(true);
+    fixture.client.guilds.cache.get("100")?.channels.cache.delete(parent.id);
+    await expect(session.restrictEveryone(async () => {})).rejects.toMatchObject({
+      code: "superseded",
+    });
     expect(fixture.writes).toEqual([]);
   } finally {
     await fixture.close();

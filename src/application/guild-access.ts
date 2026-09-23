@@ -131,7 +131,8 @@ export class GuildAccess {
           );
       };
       await currentGuard();
-      const snapshot = await this.discord.snapshot(guildId, roles);
+      const session = await this.discord.begin(guildId, roles);
+      const snapshot = session.snapshot;
       const validateRooms = (value: AccessSnapshot): void => {
         if (value.excludedChannelIds.includes(lobby) || value.excludedChannelIds.includes(officers))
           throw new Failure(
@@ -169,9 +170,8 @@ export class GuildAccess {
         id === lobby ? "lobby" : id === officers || policies.get(id) ? "officers" : "members";
       const changed = new Set<string>();
       // Establish the newcomer exception before closing the guild-level default.
-      if (await this.discord.channel(guildId, lobby, roles, "lobby", currentGuard))
-        changed.add(lobby);
-      const defaultChanged = await this.discord.restrictEveryone(guildId, currentGuard);
+      if (await session.channel(lobby, "lobby", currentGuard)) changed.add(lobby);
+      const defaultChanged = await session.restrictEveryone(currentGuard);
       // Categories may propagate overwrites to synced children, so finish with the leaf channels.
       for (const channel of snapshot.channels
         .filter((channel) => !snapshot.excludedChannelIds.includes(channel.id))
@@ -180,12 +180,18 @@ export class GuildAccess {
             Number(b.type === ChannelType.GuildCategory) -
             Number(a.type === ChannelType.GuildCategory),
         ))
-        if (
-          await this.discord.channel(guildId, channel.id, roles, audience(channel.id), currentGuard)
-        )
+        if (await session.channel(channel.id, audience(channel.id), currentGuard))
           changed.add(channel.id);
       await currentGuard();
       const verified = await this.discord.snapshot(guildId, roles);
+      if (
+        [...snapshot.excludedChannelIds].sort().join(":") !==
+        [...verified.excludedChannelIds].sort().join(":")
+      )
+        throw new Failure(
+          "superseded",
+          "The community channel scope changed during reconciliation.",
+        );
       validateRooms(verified);
       if (verified.channels.find((channel) => channel.id === lobby)?.parentId !== null)
         throw new Failure(

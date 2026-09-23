@@ -16,6 +16,12 @@ export interface PreparedAccess {
   officers: { id: string; created: boolean };
   snapshot: AccessSnapshot;
 }
+/** One captured inventory per reconciliation; target writes still revalidate their own state. */
+export interface GuildAccessSession {
+  snapshot: AccessSnapshot;
+  channel(channel: string, audience: ChannelAudience, guard: () => Promise<void>): Promise<boolean>;
+  restrictEveryone(guard: () => Promise<void>): Promise<boolean>;
+}
 /** Channel policy has its own port so membership reconciliation remains independently testable. */
 export interface GuildAccessPort {
   check(guild: string, actor: string): Promise<void>;
@@ -27,14 +33,7 @@ export interface GuildAccessPort {
     officers: string | null,
   ): Promise<PreparedAccess>;
   snapshot(guild: string, roles: AccessRoles): Promise<AccessSnapshot>;
-  channel(
-    guild: string,
-    channel: string,
-    roles: AccessRoles,
-    audience: ChannelAudience,
-    guard: () => Promise<void>,
-  ): Promise<boolean>;
-  restrictEveryone(guild: string, guard: () => Promise<void>): Promise<boolean>;
+  begin(guild: string, roles: AccessRoles): Promise<GuildAccessSession>;
 }
 
 /** A nickname baseline distinguishes successful bot writes from pending/ambiguous delivery. */

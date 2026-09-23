@@ -1,6 +1,10 @@
 /** Controlled channel effects for PostgreSQL policy/recovery scenarios; SDK permissions are tested separately. */
 import { ChannelType, PermissionFlagsBits as P } from "discord.js";
-import type { GuildAccessPort, PreparedAccess } from "../../src/application/records.js";
+import type {
+  GuildAccessPort,
+  GuildAccessSession,
+  PreparedAccess,
+} from "../../src/application/records.js";
 import {
   channelAccessOverwrites,
   sameOverwrites,
@@ -65,6 +69,14 @@ export class FakeGuildAccess implements GuildAccessPort {
   }
   async snapshot(guild: string): Promise<AccessSnapshot> {
     return structuredClone(this.state(guild));
+  }
+  /** Match the application session contract while retaining the existing effect hooks. */
+  async begin(guild: string, roles: AccessRoles): Promise<GuildAccessSession> {
+    return {
+      snapshot: await this.snapshot(guild),
+      channel: (channel, audience, guard) => this.channel(guild, channel, roles, audience, guard),
+      restrictEveryone: (guard) => this.restrictEveryone(guild, guard),
+    };
   }
   async channel(
     guild: string,
