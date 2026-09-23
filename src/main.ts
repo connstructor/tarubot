@@ -1,6 +1,8 @@
 /** Composition root: create capabilities once, discover modules, then connect the bot. */
 import { pino } from "pino";
 import { GuildEvents } from "./application/guild-events.js";
+import { GuildAccess } from "./application/guild-access.js";
+import { DiscordGuildAccess } from "./discord/guild-access.js";
 import {
   applicationKey,
   databaseKey,
@@ -56,7 +58,8 @@ const db = new Database(config.DATABASE_URL);
 const gateway = new DiscordGateway();
 const app = new Service(db, gateway, new Nodestone(config.NODESTONE_URL), config);
 const sync = new Synchronization(app);
-const queue = new Queue(db, dispatcher(app, sync), (error, job) =>
+const access = new GuildAccess(app, new DiscordGuildAccess(gateway.client));
+const queue = new Queue(db, dispatcher(app, sync, access), (error, job) =>
   report(error, job?.id ?? "queue"),
 );
 const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue, log, report);
@@ -65,7 +68,7 @@ const services = new Services()
   .provide(synchronizationKey, sync)
   .provide(databaseKey, db)
   .provide(gatewayKey, gateway)
-  .provide(roleAdministrationKey, new RoleAdministration(app, gateway))
+  .provide(roleAdministrationKey, new RoleAdministration(app, gateway, access))
   .provide(versionInformationKey, new VersionInformation(new GitHubHistory()))
   .provide(guildEventsKey, new GuildEvents(db))
   .provide(lifecycleKey, lifecycle);

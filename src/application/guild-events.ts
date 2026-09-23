@@ -2,7 +2,7 @@
 import { ensureUser, orm, type Database } from "../infrastructure/postgres/database.js";
 import { and, eq, sql } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
+import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
 
 /** Application operations shared by independently loaded guild/member/role listeners. */
 export class GuildEvents {
@@ -75,10 +75,11 @@ export class GuildEvents {
         .update(t.guilds)
         .set({ active: true })
         .where(eq(t.guilds.id, guildId))
-        .returning({ id: t.guilds.id });
+        .returning({ id: t.guilds.id, access_policy_enabled: t.guilds.access_policy_enabled });
       if (configured.length) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
         await layoutGuildRoles(client, guildId);
+        if (configured[0]?.access_policy_enabled) await secureGuildChannels(client, guildId);
       }
     });
   }
@@ -93,7 +94,29 @@ export class GuildEvents {
       if (configured.length) {
         await enqueue(client, "reconcile.guild", `guild:${guildId}`, {}, guildId);
         await layoutGuildRoles(client, guildId);
+        const secured = await orm(client)
+          .select({ id: t.guilds.id })
+          .from(t.guilds)
+          .where(and(eq(t.guilds.id, guildId), eq(t.guilds.access_policy_enabled, true)));
+        if (secured.length) await secureGuildChannels(client, guildId);
       }
+    });
+  }
+
+  /** Channel lifecycle events repair access without triggering expensive member enumeration. */
+  async channelChanged(guildId: string): Promise<void> {
+    await this.db.transaction(async (client) => {
+      const enabled = await orm(client)
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(
+          and(
+            eq(t.guilds.id, guildId),
+            eq(t.guilds.active, true),
+            eq(t.guilds.access_policy_enabled, true),
+          ),
+        );
+      if (enabled.length) await secureGuildChannels(client, guildId);
     });
   }
 }

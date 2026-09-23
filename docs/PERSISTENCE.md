@@ -34,7 +34,7 @@ For a future schema change:
 3. Verify migration/schema parity and relevant behavior in disposable PostgreSQL with both migration fixtures.
 4. Increment the application version/changelog and follow the PR/check/publication workflow. Apply the matching migration during the documented deployment window.
 
-The **2.9.0 adoption adds no migration** and still requires `002_setup_and_ranks.sql`. Existing databases, rows, queued work, and migration checksums remain compatible. `bun run db:migrate` remains the deployment command; there is no Drizzle Kit push or automatic runtime schema mutation.
+The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. The current **2.10.1** release requires `003_guild_access.sql`, adding opt-in channel policy bindings and first-observed recovery snapshots. It maps 25 application tables and keeps all prior migration checksums immutable. `bun run db:migrate` remains the deployment command; there is no Drizzle Kit push or automatic runtime schema mutation. See [SETUP.md](SETUP.md) for enabling onboarding after migration.
 
 Raw SQL is limited to transaction/migration control, advisory locks, health probes, and independent catalog/restore verification. The dump reader still decodes legacy SQL as data. Integration tests also use independent SQL observations and fault injection to validate ORM behavior rather than relying exclusively on the same mappings under test.
 

@@ -62,6 +62,10 @@ export const reconcileUser = (client: Connection, guild: string, user: string): 
 export const layoutGuildRoles = (client: Connection, guild: string): Promise<string> =>
   enqueue(client, "roles.layout", `role-layout:${guild}`, {}, guild);
 
+/** Channel edits coalesce independently from member enumeration and role-layout effects. */
+export const secureGuildChannels = (client: Connection, guild: string): Promise<string> =>
+  enqueue(client, "channels.access", `channel-access:${guild}`, {}, guild);
+
 /** A small worker pool uses leases rather than keeping database transactions open during I/O. */
 export class Queue {
   private stopping = false;

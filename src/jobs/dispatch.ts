@@ -6,6 +6,7 @@ import { orm } from "../infrastructure/postgres/database.js";
 import * as t from "../infrastructure/postgres/schema.js";
 import type { Service } from "../application/service.js";
 import type { Synchronization } from "../application/synchronization.js";
+import type { GuildAccess } from "../application/guild-access.js";
 import { Failure } from "../domain/values.js";
 import { managedRoleOrder } from "../domain/role-layout.js";
 import { enqueue, reconcileUser, type Job } from "./queue.js";
@@ -14,6 +15,7 @@ import { enqueue, reconcileUser, type Job } from "./queue.js";
 export function dispatcher(
   app: Service,
   sync: Synchronization,
+  access: GuildAccess,
 ): (job: Job, guard: () => Promise<void>) => Promise<unknown> {
   return async (job, guard) => {
     if (job.payload_version !== 1)
@@ -22,6 +24,11 @@ export function dispatcher(
         "Unsupported job payload version. Use a compatible application image.",
       );
     if (job.kind === "roster") return sync.roster(job, guard);
+    if (job.kind === "channels.access") {
+      if (!job.guild_id)
+        throw new Failure("invalid_job", "Missing guild for access reconciliation.");
+      return access.reconcile(job.guild_id, guard);
+    }
     if (job.kind === "roster.confirm") {
       // Confirmation shares the normal FC lock, deduplication key, and acquisition bounds.
       const input = z.object({ fcId: z.string() }).parse(job.payload);

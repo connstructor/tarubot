@@ -79,7 +79,12 @@ export class DiscordGateway implements DiscordPort {
     );
   }
   /** Access roles must be assignable, nonadministrative, and below the applicable hierarchies. */
-  async validateRole(guildId: string, roleId: string, actorId?: string): Promise<void> {
+  async validateRole(
+    guildId: string,
+    roleId: string,
+    actorId?: string,
+    channelAccess = false,
+  ): Promise<void> {
     const guild = await this.client.guilds.fetch({ guild: guildId, force: true });
     const role = (await guild.roles.fetch()).get(roleId);
     const bot = await guild.members.fetchMe({ force: true });
@@ -100,6 +105,8 @@ export class DiscordGateway implements DiscordPort {
         "blocked",
         "Access roles must not grant Administrator, Manage Server, or Manage Roles.",
       );
+    if (channelAccess && role.permissions.has(PermissionFlagsBits.ManageChannels, false))
+      throw new Failure("blocked", "Onboarding access roles must not grant Manage Channels.");
     if (
       !bot.permissions.has(PermissionFlagsBits.ManageRoles) ||
       bot.roles.highest.comparePositionTo(role) <= 0

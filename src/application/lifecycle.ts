@@ -6,7 +6,7 @@ import { Failure } from "../domain/values.js";
 import { orm, type Database } from "../infrastructure/postgres/database.js";
 import { and, eq, notInArray } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue, layoutGuildRoles, type Queue } from "../jobs/queue.js";
+import { enqueue, layoutGuildRoles, secureGuildChannels, type Queue } from "../jobs/queue.js";
 import type { Service } from "./service.js";
 import type { Synchronization } from "./synchronization.js";
 import { capabilityMetrics } from "./metrics.js";
@@ -88,10 +88,11 @@ export class ApplicationLifecycle {
             .update(t.guilds)
             .set({ active: true })
             .where(eq(t.guilds.id, guild))
-            .returning({ id: t.guilds.id });
+            .returning({ id: t.guilds.id, access_policy_enabled: t.guilds.access_policy_enabled });
           if (configured.length) {
             await enqueue(client, "reconcile.guild", `guild:${guild}`, {}, guild);
             await layoutGuildRoles(client, guild);
+            if (configured[0]?.access_policy_enabled) await secureGuildChannels(client, guild);
           }
         }
       });

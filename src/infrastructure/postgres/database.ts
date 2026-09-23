@@ -23,7 +23,7 @@ export function orm(connection: Connection): Orm {
   }
   return instance;
 }
-export const SCHEMA_VERSION = "002_setup_and_ranks.sql";
+export const SCHEMA_VERSION = "003_guild_access.sql";
 /** The pool is application-owned; remote Discord/Lodestone work stays outside transactions. */
 export class Database {
   readonly pool: pg.Pool;

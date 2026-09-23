@@ -26,9 +26,16 @@ import {
   sql,
 } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue, layoutGuildRoles, reconcileUser, type Job } from "../jobs/queue.js";
+import {
+  enqueue,
+  layoutGuildRoles,
+  reconcileUser,
+  secureGuildChannels,
+  type Job,
+} from "../jobs/queue.js";
 import type { GuildRecord, MemberView } from "./records.js";
 import type { Service } from "./service.js";
+import { accessFacts } from "./access-facts.js";
 
 /** Evidence publication and Discord delivery have distinct transactions, timestamps, and failures. */
 export class Synchronization {
@@ -402,105 +409,13 @@ export class Synchronization {
   }
   /** Assemble policy facts without granting authority to manually assigned Discord roles. */
   async facts(guild: GuildRecord, member: MemberView): Promise<AccessFacts> {
-    const db = this.app.db.orm;
-    const [row] = await db
-      .select({
-        confirmed:
-          sql<bigint>`count(*) FILTER(WHERE ${t.membership.state} IN ('present','missing'))`.mapWith(
-            BigInt,
-          ),
-        unknown: sql<bigint>`count(*) FILTER(WHERE ${t.membership.state} IS NULL)`.mapWith(BigInt),
-      })
-      .from(t.links)
-      .leftJoin(
-        t.membership,
-        and(
-          eq(t.membership.guild_id, t.links.guild_id),
-          eq(t.membership.character_id, t.links.character_id),
-          guild.fc_id ? eq(t.membership.fc_id, guild.fc_id) : sql`false`,
-        ),
-      )
-      .where(
-        and(
-          eq(t.links.guild_id, guild.id),
-          eq(t.links.user_id, member.id),
-          eq(t.links.active, true),
-        ),
-      );
-    const [state] = await db
-      .select({
-        local_loss: exists(
-          db
-            .select({ user_id: t.guildUsers.user_id })
-            .from(t.guildUsers)
-            .where(
-              and(
-                eq(t.guildUsers.guild_id, guild.id),
-                eq(t.guildUsers.user_id, member.id),
-                eq(t.guildUsers.local_member_loss, true),
-              ),
-            ),
-        ).mapWith(Boolean),
-        former: exists(
-          db
-            .select({ id: t.membershipHistory.id })
-            .from(t.membershipHistory)
-            .where(
-              and(
-                eq(t.membershipHistory.guild_id, guild.id),
-                eq(t.membershipHistory.user_id, member.id),
-                guild.fc_id ? eq(t.membershipHistory.fc_id, guild.fc_id) : sql`false`,
-              ),
-            ),
-        ).mapWith(Boolean),
-        grant: exists(
-          db
-            .select({ id: t.guestGrants.id })
-            .from(t.guestGrants)
-            .where(and(eq(t.guestGrants.guild_id, guild.id), eq(t.guestGrants.user_id, member.id))),
-        ).mapWith(Boolean),
-        revoked: exists(
-          db
-            .select({ user_id: t.guestState.user_id })
-            .from(t.guestState)
-            .where(
-              and(
-                eq(t.guestState.guild_id, guild.id),
-                eq(t.guestState.user_id, member.id),
-                eq(t.guestState.revoked, true),
-              ),
-            ),
-        ).mapWith(Boolean),
-        fresh: exists(
-          db
-            .select({ id: t.freeCompanies.id })
-            .from(t.freeCompanies)
-            .where(
-              and(
-                guild.fc_id ? eq(t.freeCompanies.id, guild.fc_id) : sql`false`,
-                gt(
-                  t.freeCompanies.last_successful_roster_at,
-                  sql`now()-${this.app.config.ROSTER_INTERVAL_SECONDS}*interval '1 second'`,
-                ),
-              ),
-            ),
-        ).mapWith(Boolean),
-      })
-      .from(t.guilds)
-      .where(eq(t.guilds.id, guild.id));
-    if (!state || !row) throw new Error("Missing access facts");
-    return {
-      ...state,
-      membership: !guild.fc_id
-        ? "ineligible"
-        : row.confirmed > 0n
-          ? "member"
-          : row.unknown > 0n && !state.local_loss
-            ? "uncertain"
-            : "ineligible",
-      hasMember: member.roles.includes(guild.member_role_id ?? ""),
-      hasGuest: member.roles.includes(guild.guest_role_id ?? ""),
-    };
+    return accessFacts(
+      this.app.db.orm,
+      guild,
+      member.id,
+      this.app.config.ROSTER_INTERVAL_SECONDS,
+      member.roles,
+    );
   }
   /** Complete member coverage creates per-user work and associates it with requesting runs. */
   async guild(guildId: string, parentJob: string): Promise<unknown> {
@@ -522,6 +437,14 @@ export class Synchronization {
       };
       const layout = await layoutGuildRoles(client, guildId);
       await attach(layout);
+      const secured = await db
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(and(eq(t.guilds.id, guildId), eq(t.guilds.access_policy_enabled, true)));
+      if (secured.length) {
+        const access = await secureGuildChannels(client, guildId);
+        await attach(access);
+      }
       for (const member of members) {
         if (member.bot) continue;
         await ensureUser(client, guildId, member.id, member.joinedAt);
@@ -611,7 +534,8 @@ export class Synchronization {
       const member = await this.app.discord.member(guild.id, job.user_id);
       if (!member || member.bot) return { skipped: "user absent or bot" };
       if (!preview) await this.seedFreshLink(guild, member.id);
-      const desired = desiredAccess(await this.facts(guild, member));
+      const facts = await this.facts(guild, member);
+      const desired = desiredAccess(facts);
       const rank = await rankAccess(
         this.app.db,
         guild,
@@ -697,6 +621,9 @@ export class Synchronization {
         throw new Failure("superseded", "Configuration changed.");
       let roleError: unknown;
       try {
+        if (guild.access_policy_enabled)
+          for (const role of add)
+            await this.app.discord.validateRole(guild.id, role, undefined, true);
         await this.app.discord.roles(guild.id, member.id, add, remove);
       } catch (error) {
         roleError = error;
@@ -723,7 +650,7 @@ export class Synchronization {
             gt(t.jobs.lease_until, sql`now()`),
           ),
         );
-      if (desired.member) {
+      if (desired.member || (desired.guest && facts.verified)) {
         const apps = await db
           .update(t.guestApplications)
           .set({ state: "superseded", decided_at: sql`now()` })

@@ -5,9 +5,38 @@ import type {
   guestApplications,
   ledgerEntries,
 } from "../infrastructure/postgres/schema.js";
+import type { AccessRoles, AccessSnapshot, ChannelAudience } from "../domain/channel-access.js";
 
 /** Configuration revision fences queued effects; activation is separate from bot membership. */
 export type GuildRecord = Omit<typeof guilds.$inferSelect, "created_at">;
+
+/** Provisioned identities plus the original snapshot captured before durable ACL enforcement. */
+export interface PreparedAccess {
+  lobby: { id: string; created: boolean };
+  officers: { id: string; created: boolean };
+  snapshot: AccessSnapshot;
+}
+/** Channel policy has its own port so membership reconciliation remains independently testable. */
+export interface GuildAccessPort {
+  check(guild: string, actor: string): Promise<void>;
+  prepare(
+    guild: string,
+    actor: string,
+    roles: AccessRoles,
+    lobby: string | null,
+    officers: string | null,
+  ): Promise<PreparedAccess>;
+  snapshot(guild: string, roles: AccessRoles): Promise<AccessSnapshot>;
+  channel(
+    guild: string,
+    channel: string,
+    roles: AccessRoles,
+    audience: ChannelAudience,
+    guard: () => Promise<void>,
+  ): Promise<boolean>;
+  restrictEveryone(guild: string, guard: () => Promise<void>): Promise<boolean>;
+}
+
 /** A nickname baseline distinguishes successful bot writes from pending/ambiguous delivery. */
 export type UserRecord = Omit<typeof guildUsers.$inferSelect, "imported" | "local_member_loss">;
 /** A review's join context, decision, and message identity survive process restarts. */
@@ -35,7 +64,7 @@ export interface DiscordPort {
   /** Resolve only after complete member enumeration has been checked. */
   members(guild: string): Promise<MemberView[]>;
   /** Validate access-role permissions and both actor/bot hierarchy where applicable. */
-  validateRole(guild: string, role: string, actor?: string): Promise<void>;
+  validateRole(guild: string, role: string, actor?: string, channelAccess?: boolean): Promise<void>;
   /** Check guild ownership and the message/embed/history permissions needed for delivery. */
   validateChannel(guild: string, channel: string): Promise<void>;
   /** Individual deltas must preserve unrelated roles, including concurrent external changes. */

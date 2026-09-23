@@ -22,6 +22,7 @@ import type { PoolClient } from "pg";
 import type { Configuration } from "../config/env.js";
 import { authorize, authorizeRoleManager, type Actor } from "../domain/policy.js";
 import { rankAccess } from "./rank-policy.js";
+import { accessFacts } from "./access-facts.js";
 import { Failure, gil, MAX_GIL, note, normalized } from "../domain/values.js";
 import {
   audit,
@@ -35,7 +36,7 @@ import type {
   CompanyIdentity,
   Nodestone,
 } from "../infrastructure/nodestone/client.js";
-import { enqueue, layoutGuildRoles, reconcileUser } from "../jobs/queue.js";
+import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
 import type { DiscordPort, GuildRecord } from "./records.js";
 
 /** Guild-scoped operations reused by slash commands, components, and operational workflows. */
@@ -174,6 +175,7 @@ export class Service {
         .where(and(eq(t.jobs.guild_id, actor.guildId), eq(t.jobs.user_id, owner)))
         .orderBy(desc(t.jobs.created_at))
         .limit(10),
+      verifiedGuestEligible: await this.registrationGuestEligible(this.db.pool, guild, owner),
     };
   }
   /** Aggregate child work without exposing another requester's private run or user effects. */
@@ -286,7 +288,8 @@ export class Service {
         continue;
       }
       try {
-        if (field.endsWith("role_id")) await this.discord.validateRole(guild.id, value);
+        if (field.endsWith("role_id"))
+          await this.discord.validateRole(guild.id, value, undefined, guild.access_policy_enabled);
         else await this.discord.validateChannel(guild.id, value);
         capabilities[field] = "available";
       } catch (error) {
@@ -442,6 +445,12 @@ export class Service {
       .select()
       .from(t.guilds)
       .where(eq(t.guilds.id, actor.guildId));
+    if (existing?.access_policy_enabled && field.endsWith("role_id") && value === null)
+      throw new Failure(
+        "input",
+        "Onboarding requires all four roles. Select a replacement role or rerun /setup.",
+      );
+    if (existing?.access_policy_enabled && field.endsWith("role_id")) authorizeRoleManager(actor);
     if (field === "fc_id" && existing?.officer_rank_key) authorizeRoleManager(actor);
     let fc: CompanyIdentity | undefined;
     if (field === "fc_id" && value) {
@@ -451,7 +460,13 @@ export class Service {
     }
     if (field.endsWith("role_id")) {
       if (!actor.manageRoles) throw new Failure("forbidden", "Manage Roles is required.");
-      if (value) await this.discord.validateRole(actor.guildId, value, actor.userId);
+      if (value)
+        await this.discord.validateRole(
+          actor.guildId,
+          value,
+          actor.userId,
+          existing?.access_policy_enabled ?? false,
+        );
     } else if (field.endsWith("channel_id") && value)
       await this.discord.validateChannel(actor.guildId, value);
     const adopted =
@@ -472,6 +487,20 @@ export class Service {
         .where(eq(t.guilds.id, actor.guildId))
         .for("update");
       if (!saved) throw new Error("Missing guild");
+      // A concurrent setup may have enabled channel gating after the remote role preflight.
+      if (saved.access_policy_enabled && field.endsWith("role_id")) {
+        authorizeRoleManager(actor);
+        if (!value)
+          throw new Failure(
+            "input",
+            "Onboarding requires all four roles. Select a replacement role or rerun /setup.",
+          );
+        if (!existing?.access_policy_enabled)
+          throw new Failure(
+            "conflict",
+            "Onboarding was enabled during configuration. Retry the role selection.",
+          );
+      }
       if (field === "fc_id" && value && saved.fc_id && saved.fc_id !== value)
         throw new Failure("conflict", "Another FC was linked; unlink it explicitly first.");
       if (fc) await this.storeCompany(client, fc);
@@ -516,6 +545,7 @@ export class Service {
       }
       await audit(client, actor.guildId, actor.userId, "config", field, { value });
       if (field.endsWith("role_id")) await layoutGuildRoles(client, actor.guildId);
+      if (saved.access_policy_enabled) await secureGuildChannels(client, actor.guildId);
       for (const member of adopted) {
         await ensureUser(client, actor.guildId, member.id, member.joinedAt);
         await db
@@ -1081,6 +1111,17 @@ export class Service {
       return { status: "saved", effects: "queued" };
     });
   }
+  /** Registration is derived from current trusted links; it never recreates a revoked durable grant. */
+  async registrationGuestEligible(
+    client: Connection,
+    guild: GuildRecord,
+    user: string,
+  ): Promise<boolean> {
+    const facts = await accessFacts(orm(client), guild, user, this.config.ROSTER_INTERVAL_SECONDS);
+    return (
+      facts.verified === true && facts.membership === "ineligible" && facts.fresh && !facts.revoked
+    );
+  }
   /** Ledger authority requires actual accepted positive evidence, not just imported role protection. */
   async memberEligible(client: Connection, guild: GuildRecord, user: string): Promise<boolean> {
     if (!guild.fc_id) return false;
@@ -1280,7 +1321,12 @@ export class Service {
     if (!guild.guest_role_id || !guild.guest_application_channel_id)
       throw new Failure("setup", "Configure a guest role and application review channel first.");
     const reviewChannel = guild.guest_application_channel_id;
-    await this.discord.validateRole(actor.guildId, guild.guest_role_id);
+    await this.discord.validateRole(
+      actor.guildId,
+      guild.guest_role_id,
+      undefined,
+      guild.access_policy_enabled,
+    );
     await this.discord.validateChannel(actor.guildId, guild.guest_application_channel_id);
     const member = await this.discord.member(actor.guildId, actor.userId);
     if (!member || member.bot)
@@ -1365,6 +1411,7 @@ export class Service {
         .where(eq(t.guilds.id, actor.guildId));
       if (
         guest?.eligible ||
+        (await this.registrationGuestEligible(client, guild, actor.userId)) ||
         (await this.memberEligible(client, guild, actor.userId)) ||
         member.roles.includes(guild.guest_role_id ?? "") ||
         member.roles.includes(guild.member_role_id ?? "")

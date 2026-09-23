@@ -47,6 +47,8 @@ export interface AccessFacts {
   revoked: boolean;
   hasMember: boolean;
   hasGuest: boolean;
+  /** Enabled onboarding treats an active trusted character link as a verified visitor credential. */
+  verified?: boolean;
 }
 
 /** Member access wins; revocation suppresses guest access without changing FC eligibility. */
@@ -63,7 +65,12 @@ export function desiredAccess(facts: AccessFacts): { member: boolean; guest: boo
       guest: !facts.hasMember && !facts.revoked && (facts.grant || facts.hasGuest),
     };
   }
-  return { member: false, guest: !facts.revoked && (facts.grant || facts.former) };
+  return {
+    member: false,
+    guest:
+      !facts.revoked &&
+      (facts.grant || facts.former || (facts.verified === true && (facts.fresh || facts.hasGuest))),
+  };
 }
 
 /** Advance only on accepted complete observations; reappearance clears pending departure. */

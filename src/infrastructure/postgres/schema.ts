@@ -60,6 +60,10 @@ export const guilds = pgTable("guilds", {
   ledger_channel_id: externalId("ledger_channel_id"),
   officer_notifications_channel_id: externalId("officer_notifications_channel_id"),
   guest_application_channel_id: externalId("guest_application_channel_id"),
+  lobby_channel_id: externalId("lobby_channel_id"),
+  officer_channel_id: externalId("officer_channel_id"),
+  access_policy_enabled: boolean("access_policy_enabled").notNull().default(false),
+  access_everyone_before: text("access_everyone_before"),
   revision: money("revision").notNull().default(1n),
   active: boolean("active").notNull().default(true),
   effects_enabled: boolean("effects_enabled").notNull().default(false),
@@ -297,4 +301,17 @@ export const officerOverrides = pgTable(
     changed_at: instant("changed_at").notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.guild_id, table.user_id] })],
+);
+
+/** First-observed ACLs support recovery; stored audience classification survives role replacement. */
+export const channelAccessPolicies = pgTable(
+  "channel_access_policies",
+  {
+    guild_id: externalId("guild_id").notNull(),
+    channel_id: externalId("channel_id").notNull(),
+    staff_only: boolean("staff_only").notNull(),
+    original_state: payload("original_state").notNull(),
+    created_at: instant("created_at").notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.guild_id, table.channel_id] })],
 );
