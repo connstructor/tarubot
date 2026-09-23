@@ -14,6 +14,7 @@ import {
   versionInformationKey,
 } from "./application/keys.js";
 import { ApplicationLifecycle } from "./application/lifecycle.js";
+import { createReporter } from "./application/reporting.js";
 import { Service } from "./application/service.js";
 import { Synchronization } from "./application/synchronization.js";
 import { RoleAdministration } from "./application/role-administration.js";
@@ -25,7 +26,6 @@ import { InteractionRouter, interactionRouterKey } from "./bot/router.js";
 import { Services } from "./bot/services.js";
 import { configuration } from "./config/env.js";
 import { DiscordGateway } from "./discord/gateway.js";
-import { Failure } from "./domain/values.js";
 import { Nodestone } from "./infrastructure/nodestone/client.js";
 import { Database } from "./infrastructure/postgres/database.js";
 import { dispatcher } from "./jobs/dispatch.js";
@@ -36,17 +36,10 @@ const log = pino({
   level: config.LOG_LEVEL,
   redact: ["token", "biography", "authorization", "password", "interaction.token"],
 });
-const report = (error: unknown, operation: string): void => {
-  // Error objects may contain transport credentials or page bodies; log only safe diagnostics.
-  log.error(
-    {
-      operation,
-      code: error instanceof Failure ? error.code : error instanceof Error ? error.name : "unknown",
-      diagnostic: error instanceof Failure ? error.message : undefined,
-    },
-    "Operation failed; inspect scoped work status.",
-  );
-};
+// Error objects may contain transport credentials or page bodies; the reporter logs only the
+// catalog code, error class and approved Failure messages. Interactions pass their classified
+// level; lifecycle, gateway-event, queue-worker and shutdown reports keep the error default.
+const report = createReporter(log);
 
 // Discovery is independent of login, database connections, and feature construction.
 const [commands, components, events] = await Promise.all([

@@ -2,6 +2,7 @@
 import { PermissionFlagsBits } from "discord.js";
 import type { AutocompleteInteraction, ChatInputCommandInteraction, Interaction } from "discord.js";
 import { z } from "zod";
+import { classifyFailure } from "../domain/failures.js";
 import { authorize, type Actor } from "../domain/policy.js";
 import { Failure, message } from "../domain/values.js";
 import type { Command } from "./command.js";
@@ -104,7 +105,9 @@ export class InteractionRouter {
         });
       }
     } catch (error) {
-      this.context.report(error, interaction.id);
+      // Routine refusals log at info, dependency and settings trouble at warn, and only failures
+      // without an approved explanation at error, so the interaction ID stays findable.
+      this.context.report(error, interaction.id, { level: classifyFailure(error).level });
       const explanation =
         error instanceof z.ZodError
           ? "Invalid input or unexpected external data. Check the selected values and try again."
@@ -143,13 +146,14 @@ export class InteractionRouter {
         budget,
       ]);
       if (outcome !== overrun) return outcome;
-      this.context.report(
-        new Failure("unavailable", "The pre-form check overran its budget; the form opened."),
-        interaction.id,
+      const overran = new Failure(
+        "unavailable",
+        "The pre-form check overran its budget; the form opened.",
       );
+      this.context.report(overran, interaction.id, { level: classifyFailure(overran).level });
       return null;
     } catch (error) {
-      this.context.report(error, interaction.id);
+      this.context.report(error, interaction.id, { level: classifyFailure(error).level });
       return null;
     } finally {
       clearTimeout(timer);
@@ -190,7 +194,7 @@ export class InteractionRouter {
         (await module.autocomplete({ ...this.context, actor, interaction })).slice(0, 25),
       );
     } catch (error) {
-      this.context.report(error, interaction.id);
+      this.context.report(error, interaction.id, { level: classifyFailure(error).level });
       await interaction.respond([]).catch(() => {});
     }
   }

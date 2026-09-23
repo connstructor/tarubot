@@ -1,6 +1,7 @@
 /** PostgreSQL-backed work leases: deduplicate decisions and recover abandoned delivery. */
 import { randomUUID } from "node:crypto";
 import { DiscordAPIError } from "discord.js";
+import { DISCORD_BLOCKED_CODES, WAITING_CODES } from "../domain/failures.js";
 import { Failure, json } from "../domain/values.js";
 import { orm, type Connection, type Database } from "../infrastructure/postgres/database.js";
 import { and, asc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
@@ -69,8 +70,6 @@ export const layoutGuildRoles = (client: Connection, guild: string): Promise<str
 export const secureGuildChannels = (client: Connection, guild: string): Promise<string> =>
   enqueue(client, "channels.access", `channel-access:${guild}`, {}, guild);
 
-/** Waiting for ordering, locks, cooldowns, new inputs or a lost lease is not a failed delivery. */
-const WAITING = new Set(["ordered", "busy", "cooldown", "superseded", "lease_lost"]);
 /** Attempts at or beyond this count end an ordinary retry as a failed delivery. */
 const MAX_ATTEMPTS = 8;
 /**
@@ -109,12 +108,14 @@ export function jobOutcome(error: unknown, attempts: number, waitingMs = 0): Job
   const code =
     error instanceof Failure
       ? error.code
-      : discord !== undefined && [50001, 50013, 10003, 10011].includes(discord)
+      : discord !== undefined && DISCORD_BLOCKED_CODES.has(discord)
         ? "blocked"
         : discord !== undefined && [10004, 10007, 10013].includes(discord)
           ? "gone"
           : "transient";
-  const waiting = WAITING.has(code);
+  // The catalog's waiting codes (ordering, locks, cooldowns, new inputs, a lost lease) are shared
+  // with reply presentation, so a job line and its logged outcome agree on what is waiting.
+  const waiting = WAITING_CODES.has(code);
   // Waiting for ordering/locks is not a failed delivery and must not exhaust attempts.
   const status =
     code === "lease_lost"

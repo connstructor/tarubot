@@ -1,5 +1,7 @@
 /** Lossless boundary values shared by application policy, persistence, and presentation. */
 import { z } from "zod";
+// Type-only: failures.ts imports Failure at runtime, and this erased import avoids a cycle.
+import type { FailureCode, FailureDetail } from "./failures.js";
 
 /** External IDs may exceed signed bigint; their application/storage representation is text. */
 export const MAX_ID = 18_446_744_073_709_551_615n;
@@ -18,12 +20,17 @@ export const idSchema = z
   .refine((v) => ID_PATTERN.test(v) && BigInt(v) <= MAX_ID);
 export type Id = string;
 
-/** Deliberately user-safe diagnostics; raw transport/database exceptions stay out of replies. */
+/**
+ * Deliberately user-safe diagnostics; raw transport/database exceptions stay out of replies. The
+ * code must be catalogued in failures.ts, which gives it a presentation category and log level.
+ * The optional detail carries structured, presentation-safe context for the reply presenter.
+ */
 export class Failure extends Error {
   constructor(
-    public readonly code: string,
+    public readonly code: FailureCode,
     message: string,
     public readonly retryAfter = 0,
+    public readonly detail?: FailureDetail,
   ) {
     super(message);
     this.name = "Failure";
@@ -75,11 +82,25 @@ export function gil(value: unknown): bigint {
   return parsed;
 }
 
-/** Enforce accepted UTF-16 length and PostgreSQL-compatible Unicode before a mutation. */
-export function note(value: string): string {
+/**
+ * Ledger history cursor for newest-first pages: an entry number from a previous page, 1 to
+ * MAX_GIL. It has its own parser so a malformed cursor never reports a balance error.
+ */
+export function sequenceCursor(value: unknown): bigint {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,18}$/.test(value) || BigInt(value) > MAX_GIL)
+    throw new Failure("input", "Use an entry number from a previous page, such as 34.");
+  return BigInt(value);
+}
+
+/**
+ * Enforce accepted UTF-16 length and PostgreSQL-compatible Unicode before a mutation. The label
+ * names the option being checked (a ledger note, an officer's reason, or a rank name), so the
+ * approved message reads correctly for each caller.
+ */
+export function note(value: string, label: "note" | "reason" | "rank" = "note"): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 1_000)
-    throw new Failure("input", "A note of 1–1,000 characters is required.");
+    throw new Failure("input", `Add a ${label} of 1–1,000 characters.`);
   if (!trimmed.isWellFormed() || trimmed.includes("\0"))
     throw new Failure("input", "Use valid Unicode text without NUL characters.");
   return trimmed;

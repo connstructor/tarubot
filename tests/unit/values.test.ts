@@ -1,6 +1,17 @@
-/** Lossless ID parsing rejects every malformed input as a user-safe Failure, never a raw SDK error. */
+/**
+ * Boundary values reject every malformed input as a user-safe Failure, never a raw SDK error:
+ * lossless IDs, labelled notes, and ledger history cursors.
+ */
 import { expect, test } from "bun:test";
-import { Failure, id, idSchema, MAX_ID } from "../../src/domain/values.js";
+import {
+  Failure,
+  id,
+  idSchema,
+  MAX_GIL,
+  MAX_ID,
+  note,
+  sequenceCursor,
+} from "../../src/domain/values.js";
 
 test("valid decimal IDs parse losslessly up to the unsigned 64-bit maximum", () => {
   expect(id("1010097911566180445")).toBe("1010097911566180445");
@@ -19,4 +30,43 @@ test("typed names, mentions and spaced IDs fail validation instead of throwing S
 test("out-of-range IDs are rejected without losing precision", () => {
   expect(idSchema.safeParse((MAX_ID + 1n).toString()).success).toBe(false);
   expect(() => id("99999999999999999999")).toThrow("Expected a lossless positive decimal ID.");
+});
+
+test("note() names the option it checks in the approved message", () => {
+  expect(note("  Weekly dues  ")).toBe("Weekly dues");
+  expect(() => note("   ")).toThrow("Add a note of 1–1,000 characters.");
+  expect(() => note("", "reason")).toThrow("Add a reason of 1–1,000 characters.");
+  expect(() => note("x".repeat(1_001), "rank")).toThrow("Add a rank of 1–1,000 characters.");
+  expect(() => note("bad\0text", "reason")).toThrow(
+    "Use valid Unicode text without NUL characters.",
+  );
+  try {
+    note("");
+  } catch (error) {
+    expect(error).toBeInstanceOf(Failure);
+    expect((error as Failure).code).toBe("input");
+  }
+});
+
+test("sequenceCursor() accepts entry numbers 1 through MAX_GIL and nothing else", () => {
+  expect(sequenceCursor("34")).toBe(34n);
+  expect(sequenceCursor("1")).toBe(1n);
+  expect(sequenceCursor(MAX_GIL.toString())).toBe(MAX_GIL);
+  for (const input of [
+    "0",
+    "-1",
+    "034",
+    "3.4",
+    " 34",
+    "34 ",
+    "abc",
+    "",
+    (MAX_GIL + 1n).toString(),
+    34,
+  ])
+    expect(() => sequenceCursor(input)).toThrow(
+      "Use an entry number from a previous page, such as 34.",
+    );
+  // Nineteen digits pass the shape check but exceed the range; BigInt never sees malformed text.
+  expect(() => sequenceCursor("9999999999999999999")).toThrow(Failure);
 });

@@ -1,6 +1,15 @@
 # Version history
 
-The current application version is **2.13.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.14.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.14.0 — Embed replies instead of JSON
+
+Draft; completed as the release's reply presenters land.
+
+- Add a failure catalog (`src/domain/failures.ts`) that gives every thrown code one presentation category and log level, with an optional typed, presentation-safe detail on `Failure`. It catalogues the new codes `pending_proof`, `insufficient_funds`, `fc_linked` and `idempotency_conflict` beside the codes they will replace.
+- Log interaction failures by category: routine refusals at info (so a reply's reference stays findable at the default level), Lodestone, Discord and settings trouble at warn, and only failures without an approved explanation at error. Lifecycle, gateway-event, queue-worker and shutdown reports stay at error; job outcomes keep their 2.12.3 levels.
+- Report logs gain `category`, `source` and `scope`. **Log change:** an error that is not an approved `Failure` now logs `code: "unexpected"` with its class in `source` (for example `DiscordAPIError[50013]` or `ZodError`); 2.13.0 logged the class name as the code. Raw Discord permission, unknown-member, rate-limit and server errors in interactions classify as blocked, forbidden and upstream failures instead of unexpected ones.
+- Reword the note check as "Add a note of 1–1,000 characters." with a label, so reason and rank checks can name their own option, and add `sequenceCursor()` for ledger history cursors, so a bad `before` value can report an entry-number error instead of a balance error.
 
 ## 2.13.0 — Launch policy and cutover tooling
 
