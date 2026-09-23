@@ -11,7 +11,7 @@ Use [`.do/app.yaml`](../.do/app.yaml) to create the app with a **new inline Post
 | `migrate` | Pre-deploy job, 512 MB | Apply/check numbered SQL migrations using the same bot image |
 | `db` | Inline PostgreSQL 18 dev database | Persistent application state provisioned by App Platform |
 
-All application components use matching **2.12.2** GHCR images; wait for their checked merge/publication before deploying this template. The images contain Linux AMD64 support required by App Platform. GHCR does not support App Platform image-push autodeploy, so update the image reference explicitly. Immutable digests may replace tags after publication; keep bot and migration references identical.
+All application components use matching **2.12.3** GHCR images; wait for their checked merge/publication before deploying this template. The images contain Linux AMD64 support required by App Platform. GHCR does not support App Platform image-push autodeploy, so update the image reference explicitly. Immutable digests may replace tags after publication; keep bot and migration references identical.
 
 Nodestone has `internal_ports: [8080]`, no `http_port`, and no ingress route. The worker reaches it at `http://nodestone:8080`. Only the worker receives the Discord token; only the worker and migration job receive database connection variables. The worker's HTTP liveness probe uses port 3000 and `/health/live`; readiness remains available inside its console at `/health/ready`. Both processes have a 30-second termination grace period.
 

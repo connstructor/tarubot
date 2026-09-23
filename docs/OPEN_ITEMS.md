@@ -7,7 +7,8 @@ Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which disting
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 40 paths**.
-- The 2.12.2 full automated suite passed **132 tests / 1,219 assertions** with both supplied and synthetic migration inputs, including guest-form acknowledgement/persistence/review, large-guild REST request-budget, Lodestone display-text, and runtime-pin regressions.
+- The 2.12.3 full automated suite passed **143 tests / 1,274 assertions** with both supplied and synthetic migration inputs, including guest-form acknowledgement/persistence/review, large-guild REST request-budget, Lodestone display-text, runtime-pin, and queue outcome/lease/applied-delta regressions.
+- 2.12.3 logs expected queue waits at debug (escalating to warn after 10 minutes of continuous waiting), reports lost leases separately from superseded inputs, and keeps role changes applied by superseded reconciliation passes.
 - Application and maintenance persistence use Drizzle with exact-value mappings and shared transaction clients. Catalog parity, policy/audit/outbox rollback, concurrent queue fencing, and capability aggregates passed PostgreSQL verification; the versioned live smoke remains to record.
 - Opt-in lobby/member/staff visibility and registered-visitor Guest access are implemented with migration 003, SDK-effective permission tests, durable recovery snapshots, and PostgreSQL restart/revocation coverage. DevBot's 2.11.1 setup enabled onboarding at revision 10; its 11-channel access job succeeded with community resources excluded.
 - DevBot runs the published **2.12.1** images (revision `da7ed72`) on schema 004, applied on 2026-09-23 after a stopped-writer backup and an exact restore/migration rehearsal; the updated commands are registered and guest reviews go to officer-chat (revision 11). Administrator remains off, all four existing roles and officer-chat were reused, and the lobby was created. Full human visibility verification remains.
@@ -24,7 +25,6 @@ Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which disting
 | --- | --- | --- |
 | P1 | Complete officer operational notifications: aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices, with per-guild/run throttling. | **OPS-11, DB-07**. `Synchronization.roster` currently emits roster acceptance/degraded messages; general queue failures go to logs/status through `Queue` and `src/main.ts`. |
 | P1 | Complete operational telemetry: application/job duration, queue age, retry context, and consistent guild/FC/run context. | **OPS-10**. Current reporting has operation IDs, result/error categories, queue counts, and roster age, but does not cover all required measurements. |
-| P2 | Report expected queue waits below error level with their actual cause, and retain role changes applied by a superseded reconciliation pass. | **OPS-10, OPS-11**. On DevBot 2.12.1, role-layout lock waits (`busy`) and a gateway-echo generation change (`superseded: Worker lease expired`) were logged as errors, and the final no-op pass replaced the approved Guest role delta in the job result. |
 | P2 | Harden and rehearse coalescing/backoff for bursts of role events and complete member enumeration. | **SYNC-02, SYNC-14–17**. Live role changes produced transient gateway rate-limit errors before recovering; exercise this at representative guild size. |
 
 ## Live acceptance still to record
@@ -54,10 +54,13 @@ These paths have implementation and automated coverage. The remaining work is to
 
 ## Recommended delivery order
 
-1. Finish the unverified-visitor form/approval session in officer-chat, including denial/cooldown, restart/rejoin, and retained automatic registered-visitor access. DevBot already runs 2.12.1 on schema 004; later checked releases such as 2.12.2 deploy without a new migration. App Platform deployment is a separate operator-run workflow.
-2. Finish the lobby visibility and ledger end-to-end sessions, while completing operational alerting/telemetry.
-3. Officer authorization, nickname lifecycle, and remaining membership/character scenarios.
-4. Least-privilege and interruption/recovery rehearsal.
-5. Production capture, import preview, and coordinated cutover.
+The owner put guest-form acceptance and lobby onboarding on hold until after launch (2026-09-23) and chose App Platform with a managed PostgreSQL cluster for production.
+
+1. Deploy 2.12.3 to DevBot (no migration) and run the launch-scope session in `test-plans/current.json`: ledger end to end, non-officer denials, `/assign`/`/unassign`, Member/Guest removals and drift repair, and `/guest grant`/`/guest revoke`.
+2. Release the cutover policy and tooling: onboarding-independent registered-visitor Guest, first-activation grandfathered Guest grants, a per-guild role-layout switch, `/apply` off at launch, production tool separation, legacy command cleanup, and the managed-database App Platform spec.
+3. Complete operational alerting/telemetry (OPS-10/OPS-11).
+4. Provision the managed database and App Platform app, establish backups/PITR, and rehearse restore on production-shaped data.
+5. Run the read-only dress rehearsal against the production guild, then the coordinated cutover.
+6. After launch: guest-form acceptance, lobby onboarding, and the remaining nickname/character scenarios.
 
 PR validation, required CodeQL security/code-quality analysis, and post-merge GHCR publication are defined in `.github/workflows/ci.yml`, `codeql.yml`, and `publish.yml`, with synthetic PostgreSQL fixtures and AMD64/ARM64 image builds. Publication and pull-only DevBot deployment were verified for 2.8.3; subsequent releases follow the same checked PR/publication/deployment flow. This automation complements the live acceptance and cutover work above.

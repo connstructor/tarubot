@@ -19,7 +19,7 @@ The core v2 functionality is implemented and tested. The next live milestone is 
 | Schema required by 2.12.x | **`004_guest_application_form.sql`**, not yet applied to DevBot |
 | Production cutover | Not performed |
 
-The handoff's documentation version is not evidence of a deployed image. **2.12.0 is already available for the guest-form rollout**; a later version must finish its own checked PR/publication first. The current source's startup plan and App Platform template track 2.12.2 as required by repository versioning.
+The handoff's documentation version is not evidence of a deployed image. **2.12.0 is already available for the guest-form rollout**; a later version must finish its own checked PR/publication first. The current source's startup plan and App Platform template track 2.12.3 as required by repository versioning.
 
 **Update later on 2026-09-23:** DevBot now runs the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
 

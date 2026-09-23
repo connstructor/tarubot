@@ -1,6 +1,14 @@
 # Version history
 
-The current application version is **2.12.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.12.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.12.3 — Queue outcome logging and retained role changes
+
+- Classify each failed or waiting job attempt once and log it by severity with timing and cause: expected waits at debug, escalating to warn after 10 minutes of continuous waiting; lost leases, blocks, and retries at warn; gone work at info; terminal failures at error. Row age alone never escalates, so activation-time echoes on re-queued rows stay quiet.
+- Distinguish superseded reconciliation inputs (with the generation change) from a lost worker lease. A lost lease writes nothing, and a lost roster lease is no longer reported as Lodestone degradation.
+- Keep an append-only `applied` list (newest 20) of role changes on `reconcile.user` results, so a pass superseded by the bot's own gateway echo no longer loses the evidence of what it applied; successful results carry only that key forward.
+- Replace the paused guest-form session plan with the launch-scope DevBot session: ledger, non-officer denials, assignment, role removals and drift repair, and Guest grant/revoke.
+- Record the owner's hold on guest-form acceptance and onboarding until after launch, the managed-database hosting choice, and the updated delivery order.
 
 ## 2.12.2 — Workflow and code-scanning hardening
 

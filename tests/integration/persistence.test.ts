@@ -27,7 +27,15 @@ import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
 import type { Roster } from "../../src/infrastructure/nodestone/client.js";
 import { readDump } from "../../src/import/dump.js";
 import { importLegacy, mappings, type Snapshot } from "../../src/import/importer.js";
-import { enqueue, layoutGuildRoles, Queue, type Job } from "../../src/jobs/queue.js";
+import {
+  enqueue,
+  layoutGuildRoles,
+  Queue,
+  reconcileUser,
+  STALE_WAIT_MS,
+  type Job,
+  type QueueEvent,
+} from "../../src/jobs/queue.js";
 import { dispatcher } from "../../src/jobs/dispatch.js";
 import { GuildAccess } from "../../src/application/guild-access.js";
 import { FakeGuildAccess } from "../fixtures/guild-access.js";
@@ -790,13 +798,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.query("UPDATE jobs SET status='disabled'");
     const key = await enqueue(db.pool, "probe", "test:lease", {});
     expect(await enqueue(db.pool, "probe", "test:lease", {})).toBe(key);
+    const events: QueueEvent[] = [];
     const queue = new Queue(
       db,
       async (_job, guard) => {
         await guard();
         return { ok: true };
       },
-      () => {},
+      (event) => {
+        events.push(event);
+      },
     );
     const old = await queue.claim();
     if (!old) throw new Error("Missing lease");
@@ -805,10 +816,113 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     if (!recovered) throw new Error("Missing recovered lease");
     expect(recovered.lease_token).not.toBe(old.lease_token);
     await queue.perform(old);
+    // The stale worker reports the actual cause at warn and leaves the new owner's row untouched.
+    const stale = events.find((event) => event.type === "job" && event.job === old);
+    expect(stale?.type === "job" ? stale.outcome : undefined).toMatchObject({
+      code: "lease_lost",
+      status: "unchanged",
+      level: "warn",
+    });
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, key)))[0]).toMatchObject({
+      status: "running",
+      lease_token: recovered.lease_token,
+      last_error: null,
+    });
     await queue.perform(recovered);
     expect(
       (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]?.status,
     ).toBe("succeeded");
+  });
+  test("an expired, unreclaimed lease writes nothing and is reclaimed as a counted attempt", async () => {
+    // The worker outlived its lease but nobody reclaimed it yet: it must not refund or requeue the row.
+    await db.query("UPDATE jobs SET status='disabled'");
+    const key = await enqueue(db.pool, "probe", "test:unreclaimed", {});
+    const events: QueueEvent[] = [];
+    const queue = new Queue(
+      db,
+      async (_job, guard) => {
+        await guard();
+        return { ok: true };
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+    const old = await queue.claim();
+    if (!old || old.id !== key) throw new Error("Missing lease");
+    await db.query("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=$1", [key]);
+    await queue.perform(old);
+    const event = events.at(-1);
+    expect(event?.type === "job" ? event.outcome : undefined).toMatchObject({
+      code: "lease_lost",
+      status: "unchanged",
+      delaySeconds: 0,
+      level: "warn",
+    });
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, key)))[0]).toMatchObject({
+      status: "running",
+      lease_token: old.lease_token,
+      attempts: 1,
+      last_error: null,
+    });
+    // claim() reclaims the expired running row directly, counting the new attempt.
+    const again = await queue.claim();
+    if (!again || again.id !== key) throw new Error("Missing reclaimed lease");
+    expect(again.lease_token).not.toBe(old.lease_token);
+    expect(again.attempts).toBe(2);
+    await queue.perform(again);
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, key)))[0]?.status).toBe(
+      "succeeded",
+    );
+  });
+  test("only a continuous wait streak escalates, never a first wait on an old row", async () => {
+    // Activation re-queues long-lived disabled rows; their first echo supersession stays at debug.
+    await db.query("UPDATE jobs SET status='disabled'");
+    const key = await enqueue(db.pool, "probe", "test:wait-streak", {});
+    await db.orm
+      .update(t.jobs)
+      .set({ created_at: sql`now()-interval '1 day'` })
+      .where(eq(t.jobs.id, key));
+    let clock = Date.now();
+    const events: QueueEvent[] = [];
+    const queue = new Queue(
+      db,
+      async () => {
+        throw new Failure("busy", "Held elsewhere.");
+      },
+      (event) => {
+        events.push(event);
+      },
+      () => clock,
+    );
+    /** Make the row due now, run one attempt, and return its job event. */
+    const attempt = async () => {
+      await db.orm.update(t.jobs).set({ due_at: sql`now()` }).where(eq(t.jobs.id, key));
+      const job = await queue.claim();
+      if (!job || job.id !== key) throw new Error("Missing wait-streak candidate");
+      await queue.perform(job);
+      const event = events.at(-1);
+      if (event?.type !== "job") throw new Error("Missing job event");
+      return event;
+    };
+    const first = await attempt();
+    expect(first.outcome).toMatchObject({ code: "busy", status: "queued", level: "debug" });
+    expect(first.ageMs).toBeGreaterThan(STALE_WAIT_MS);
+    clock += STALE_WAIT_MS;
+    expect((await attempt()).outcome.level).toBe("debug");
+    clock += 1;
+    expect((await attempt()).outcome).toMatchObject({
+      code: "busy",
+      status: "queued",
+      level: "warn",
+    });
+    // Escalation changes visibility only: every wait still returned its attempt.
+    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, key)))[0]).toMatchObject({
+      status: "queued",
+      attempts: 0,
+      last_error: "busy: Held elsewhere.",
+    });
+    await db.orm.delete(t.jobs).where(eq(t.jobs.id, key));
   });
   test("application operations enforce officer and target-owner authorization", async () => {
     const ordinary = { ...actor, officer: false, manageRoles: false };
@@ -1128,6 +1242,36 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect((await rankAccess(db, await service.guild(manager), "90030", 21600)).manualOfficer).toBe(
       true,
     );
+  });
+
+  test("a lost roster lease is an ownership change, not Lodestone degradation", async () => {
+    // The reclaiming worker owns FC state: no FC error, degraded metric, or officer notice here.
+    await db.query(
+      "UPDATE free_companies SET last_error=NULL,last_attempt_at=now()-interval '61 seconds' WHERE id=$1",
+      [fc],
+    );
+    const notices = () =>
+      db.query<{ id: string; generation: number }>(
+        "SELECT id,generation FROM jobs WHERE kind='officer.notify' ORDER BY id",
+      );
+    const before = await notices();
+    const job = await leased(await enqueue(db.pool, "roster", `roster:${fc}`, { fcId: fc }));
+    // The lease expires after the Lodestone fetch, so the publication transaction finds no live lease.
+    const expire = async (): Promise<void> => {
+      await db.query("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=$1", [job.id]);
+    };
+    await expect(sync.roster(job, expire)).rejects.toMatchObject({ code: "lease_lost" });
+    await db.query("UPDATE jobs SET status='succeeded',lease_until=NULL WHERE id=$1", [job.id]);
+    expect(
+      (
+        await db.query<{ last_error: string | null }>(
+          "SELECT last_error FROM free_companies WHERE id=$1",
+          [fc],
+        )
+      )[0]?.last_error,
+    ).toBeNull();
+    // A degraded notice would insert a row or bump a pending notice's generation.
+    expect(await notices()).toEqual(before);
   });
 
   test("role layout checks activation, setup exclusion and current configuration before writes", async () => {
@@ -2027,6 +2171,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const second = await enqueue(db.pool, "probe", "orm:claim:second", {});
     const third = await enqueue(db.pool, "probe", "orm:claim:third", {});
     let supersede = true;
+    const events: QueueEvent[] = [];
     const queue = new Queue(
       db,
       async (job, guard) => {
@@ -2038,7 +2183,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         await guard();
         return { generation: job.generation };
       },
-      () => {},
+      (event) => {
+        events.push(event);
+      },
     );
     const lock = await db.pool.connect();
     try {
@@ -2058,23 +2205,135 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const old = await queue.claim();
     if (!old || old.id !== first) throw new Error("Missing unlocked candidate");
     await queue.perform(old);
-    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first)))[0]).toMatchObject({
+    const [superseded] = await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first));
+    expect(superseded).toMatchObject({
       status: "queued",
       generation: 2,
       result: null,
       payload: { revision: 2 },
     });
+    // The guard names the changed generation rather than a lease expiry, and waits log at debug.
+    expect(superseded?.last_error).toStartWith(
+      "superseded: Reconciliation inputs changed (generation 1→2)",
+    );
+    const waited = events.find((event) => event.type === "job" && event.job === old);
+    expect(waited?.type === "job" ? waited.outcome : undefined).toMatchObject({
+      code: "superseded",
+      status: "queued",
+      level: "debug",
+    });
     expect(await queue.claim()).toBeUndefined();
-    // Advance the persisted due time instead of sleeping through the normal retry backoff.
-    await db.orm.update(t.jobs).set({ due_at: sql`now()` }).where(eq(t.jobs.id, first));
+    // Advance the persisted due time instead of sleeping through the normal retry backoff, and
+    // seed an earlier pass's evidence: only `applied` may carry into the new result, never stale keys.
+    await db.orm
+      .update(t.jobs)
+      .set({ due_at: sql`now()`, result: { skipped: "stale", applied: [{ generation: 1 }] } })
+      .where(eq(t.jobs.id, first));
     const current = await queue.claim();
     if (!current || current.id !== first) throw new Error("Missing superseding candidate");
     await queue.perform(current);
-    expect((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first)))[0]).toMatchObject({
-      status: "succeeded",
-      result: { generation: 2 },
-    });
+    const [done] = await db.orm.select().from(t.jobs).where(eq(t.jobs.id, first));
+    expect(done?.status).toBe("succeeded");
+    // Exact equality: this attempt's keys plus the carried `applied` list, with `skipped` dropped.
+    expect(done?.result).toEqual({ generation: 2, applied: [{ generation: 1 }] });
     await db.orm.delete(t.jobs).where(inArray(t.jobs.id, [first, second, third]));
+  });
+
+  test("superseded reconciliation retains the applied Guest delta", async () => {
+    // Discord echoes the bot's own role write as a member update, superseding the running pass.
+    const fixture = await accessFixture("666666666666666681");
+    const user = "94004";
+    const guestRole = fixture.guild.guest_role_id ?? "";
+    await service.assign(
+      fixture.manager,
+      user,
+      { id: "77777203", name: "Echoed Guest", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Gateway echo fixture",
+    );
+    let echoed = false;
+    const echoPort: DiscordPort = {
+      ...discord,
+      async roles(guildId, userId, add, remove) {
+        await discord.roles(guildId, userId, add, remove);
+        if (echoed) return;
+        echoed = true;
+        await reconcileUser(db.pool, guildId, userId);
+      },
+    };
+    const app = new Service(db, echoPort, nodestone, config);
+    const events: QueueEvent[] = [];
+    const queue = new Queue(
+      db,
+      dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort)),
+      (event) => {
+        events.push(event);
+      },
+    );
+    const key = await reconcileUser(db.pool, fixture.guild.id, user);
+    const read = async () => (await db.orm.select().from(t.jobs).where(eq(t.jobs.id, key)))[0];
+    await queue.perform(await leased(key));
+    const superseded = await read();
+    expect(superseded?.status).toBe("queued");
+    expect(superseded?.last_error).toStartWith("superseded: Reconciliation inputs changed");
+    expect(members.get(user)?.roles).toContain(guestRole);
+    // The follow-up pass finds nothing left to change but keeps the delta Discord already received.
+    await queue.perform(await leased(key));
+    const completed = await read();
+    expect(completed?.status).toBe("succeeded");
+    const result = z
+      .object({
+        add: z.array(z.string()),
+        remove: z.array(z.string()),
+        applied: z.array(
+          z.object({
+            generation: z.number(),
+            at: z.iso.datetime(),
+            add: z.array(z.string()),
+            remove: z.array(z.string()),
+            status: z.string(),
+          }),
+        ),
+      })
+      .parse(completed?.result);
+    expect(result.add).toEqual([]);
+    expect(result.remove).toEqual([]);
+    expect(result.applied).toHaveLength(1);
+    expect(result.applied[0]?.add).toContain(guestRole);
+    expect(result.applied[0]?.status).toBe("applied");
+    expect(
+      events.flatMap((event) =>
+        event.type === "job" ? [[event.outcome.code, event.outcome.level]] : [],
+      ),
+    ).toEqual([["superseded", "debug"]]);
+    // A long-lived job keeps only the newest 20 deltas: seed a full history, then append one.
+    const other = "94005";
+    await service.assign(
+      fixture.manager,
+      other,
+      { id: "77777204", name: "Bounded History", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Bounded history fixture",
+    );
+    const bounded = await reconcileUser(db.pool, fixture.guild.id, other);
+    const seeded = Array.from({ length: 20 }, (_, index) => ({
+      generation: 0,
+      at: new Date(0).toISOString(),
+      add: [],
+      remove: [String(index)],
+      status: "applied",
+    }));
+    await db.orm
+      .update(t.jobs)
+      .set({ result: { applied: seeded } })
+      .where(eq(t.jobs.id, bounded));
+    await queue.perform(await leased(bounded));
+    const history = z
+      .object({
+        applied: z.array(z.object({ add: z.array(z.string()), remove: z.array(z.string()) })),
+      })
+      .parse((await db.orm.select().from(t.jobs).where(eq(t.jobs.id, bounded)))[0]?.result);
+    expect(history.applied).toHaveLength(20);
+    expect(history.applied[0]?.remove).toEqual(["1"]);
+    expect(history.applied[19]?.add).toContain(guestRole);
   });
 
   test("modal answers survive restart, duplicate submission and officer approval without granting early access", async () => {
