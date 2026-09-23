@@ -204,6 +204,6 @@ test("compiled output discovers the same module inventory as source", async () =
   expect(JSON.parse(output)).toEqual({
     commands: [...source.keys()],
     events: 15,
-    components: ["details", "guest-apply", "guest", "verify"],
+    components: ["details", "guest-apply", "guest", "ledger", "verify"],
   });
 }, 30000);

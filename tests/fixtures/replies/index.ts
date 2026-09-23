@@ -12,6 +12,7 @@ import type { Tone } from "../../../src/discord/presenters/style.js";
 import { expectHouseStyle } from "../replies.js";
 import { CHARACTER_CASES } from "./characters.js";
 import { FAILURE_CASES } from "./failures.js";
+import { LEDGER_CASES } from "./ledger.js";
 
 /** One catalogued reply state. */
 export interface ReplyCase {
@@ -53,6 +54,7 @@ export type ReplyCatalog<Kind extends string> = Readonly<Record<Kind, ReplyCase>
 export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
   failures: FAILURE_CASES,
   characters: CHARACTER_CASES,
+  ledger: LEDGER_CASES,
 };
 
 /**

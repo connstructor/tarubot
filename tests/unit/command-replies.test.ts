@@ -1,9 +1,10 @@
 /**
- * Character commands end to end at the module boundary: the real option resolver parses raw
- * payloads, prototype-backed Service stubs return catalog results, and each command returns its
- * presenter's single embed (no flags: the router owns visibility; content only for the /claim
- * token). Through the router, an ownership conflict shows its current owner to an officer on
- * /assign and to no member (owner decision O3).
+ * Character and ledger commands end to end at the module boundary: the real option resolver
+ * parses raw payloads, prototype-backed Service stubs return catalog results, and each command
+ * returns its presenter's single embed (no flags: the router owns visibility; content only for the
+ * /claim token). Through the router, an ownership conflict shows its current owner to an officer
+ * on /assign and to no member (owner decision O3), and malformed ledger options are input failures
+ * that never reach the service.
  */
 import { afterEach, expect, test } from "bun:test";
 import { ApplicationCommandOptionType } from "discord.js";
@@ -21,17 +22,21 @@ import nicknameCommand from "../../src/commands/characters/nickname.command.js";
 import unassignCommand from "../../src/commands/characters/unassign.command.js";
 import unclaimCommand from "../../src/commands/characters/unclaim.command.js";
 import verifyCommand from "../../src/commands/characters/verify.command.js";
+import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
 import { Presented } from "../../src/discord/presenters/reply.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R, TARGET_ID, TOKEN } from "../fixtures/replies/characters.js";
+import { ENTRY_IDS, LEDGER_RESULTS as L } from "../fixtures/replies/ledger.js";
 import { CHARACTER, GUEST_ID } from "../fixtures/results.js";
 
 /** The fixture's interaction user (400 in guild 100), as a member and as a server manager. */
 const MEMBER: Actor = { guildId: "100", userId: "400", officer: false, manageRoles: false };
 const MANAGER: Actor = { ...MEMBER, officer: true, manageRoles: true, serverManager: true };
+/** The first interaction ID a fresh fixture assigns: /ledger's idempotency key. */
+const INTERACTION_ID = "10001";
 
 /** The Lodestone profile the stubbed sidecar returns for any character selector. */
 const IDENTITY = { ...CHARACTER, dc: "Crystal", fcId: null };
@@ -39,6 +44,12 @@ const IDENTITY = { ...CHARACTER, dc: "Crystal", fcId: null };
 const S = ApplicationCommandOptionType;
 /** A raw string option payload. */
 const text = (name: string, value: string) => ({ type: S.String, name, value });
+/** A raw subcommand payload with its options. */
+const subcommand = (name: string, options: unknown[] = []) => ({
+  type: S.Subcommand,
+  name,
+  options,
+});
 
 /** One recorded service call: the method, the actor's user ID and the remaining arguments. */
 type Call = [string, string, ...unknown[]];
@@ -59,6 +70,8 @@ function stubService(results: Readonly<Record<string, unknown>>) {
     "characters",
     "preferences",
     "assign",
+    "ledger",
+    "ledgerRead",
   ] as const)
     Object.assign(app, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
@@ -222,9 +235,83 @@ const PATHS: readonly {
     title: "Character unassigned",
     call: ["unclaim", "400", TARGET_ID, "12345678", "Character transferred to another account."],
   },
+  {
+    command: ledgerCommand,
+    options: [
+      subcommand("deposit", [
+        { type: S.Integer, name: "amount", value: 10_005_000 },
+        text("note", "Sold housing furnishings on the market board"),
+      ]),
+    ],
+    actor: MEMBER,
+    results: { ledger: L.deposit },
+    title: "Deposit recorded",
+    call: [
+      "ledger",
+      "400",
+      "deposit",
+      10_005_000,
+      "Sold housing furnishings on the market board",
+      INTERACTION_ID,
+      null,
+    ],
+  },
+  {
+    command: ledgerCommand,
+    options: [
+      subcommand("adjust", [
+        text("balance", "117900000"),
+        text("note", "Recount"),
+        text("entry", ` ${ENTRY_IDS[42]} `),
+      ]),
+    ],
+    actor: MANAGER,
+    results: { ledger: L.adjust },
+    title: "Correction recorded",
+    call: ["ledger", "400", "adjust", "117900000", "Recount", INTERACTION_ID, ENTRY_IDS[42]],
+  },
+  {
+    command: ledgerCommand,
+    options: [
+      subcommand("initialize", [text("balance", "95000000"), text("note", "Counted the chest")]),
+    ],
+    actor: MANAGER,
+    results: { ledger: L.unchanged },
+    title: "No correction needed",
+    call: ["ledger", "400", "initialize", "95000000", "Counted the chest", INTERACTION_ID, null],
+  },
+  {
+    command: ledgerCommand,
+    options: [subcommand("balance")],
+    actor: MEMBER,
+    results: { ledgerRead: L.balance },
+    title: "Example Free Company ledger",
+    call: ["ledgerRead", "400", null, null, false],
+  },
+  {
+    // A Lodestone link is accepted for fc_id and reduced to the FC ID.
+    command: ledgerCommand,
+    options: [
+      subcommand("balance", [
+        text("fc_id", "https://na.finalfantasyxiv.com/lodestone/freecompany/9200000000000000002/"),
+      ]),
+    ],
+    actor: MANAGER,
+    results: { ledgerRead: L.historical },
+    title: "Historical ledger · Example Old Company",
+    call: ["ledgerRead", "400", "9200000000000000002", null, false],
+  },
+  {
+    command: ledgerCommand,
+    options: [subcommand("history", [text("before", " 34 ")])],
+    actor: MEMBER,
+    results: { ledgerRead: L.history },
+    title: "Ledger history · Example Free Company",
+    call: ["ledgerRead", "400", null, "34", true],
+  },
 ];
 
-test("every character command returns its presenter's one embed, with content only for /claim", async () => {
+test("every character and ledger command returns its presenter's one embed, with content only for /claim", async () => {
   for (const path of PATHS) {
     const { app, calls } = stubService(path.results);
     const result = await run(path.command, path.options, path.actor, app);
@@ -295,4 +382,34 @@ test("ownership conflicts show the owner to officers on /assign and to no member
     expect(member.embed.title).toBe("Linked to another member");
     expect(member.sent).not.toContain(GUEST_ID);
   }
+});
+
+test("malformed ledger options are input failures that name the option and skip the service", async () => {
+  const cases: [unknown[], string][] = [
+    [[subcommand("history", [text("before", "latest")])], "before"],
+    [[subcommand("history", [text("before", "0")])], "before"],
+    [[subcommand("balance", [text("fc_id", "Example Free Company")])], "fc_id"],
+    [
+      [subcommand("adjust", [text("balance", "1"), text("note", "Fix"), text("entry", "#42")])],
+      "entry",
+    ],
+  ];
+  for (const [options, option] of cases) {
+    const { app, calls } = stubService({});
+    const error = await run(ledgerCommand, options, MANAGER, app).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Failure);
+    expect(error).toMatchObject({ code: "input", detail: { kind: "option", option } });
+    expect(calls.filter(([method]) => method !== "guild")).toEqual([]);
+  }
+});
+
+test("the history cursor option describes an entry number", () => {
+  const history = ledgerCommand.toJSON().options?.find((option) => option.name === "history");
+  const before =
+    history && "options" in history
+      ? history.options?.find((option) => option.name === "before")
+      : undefined;
+  expect(before?.description).toBe("Entry number from a previous page (e.g. 34)");
 });

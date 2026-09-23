@@ -39,6 +39,36 @@ export default defineComponent({
           await app.characters(actor, control.userId),
           new Date(),
         );
+      case "balance":
+        // /ledger balance (approved ledger#17): the account, balance state, latest entry and the
+        // newest ten posts with their diagnostics. Scope c refuses a view whose FC was replaced.
+        return dataReply(
+          viewer,
+          "ledger-balance",
+          await app.ledgerRead(
+            actor,
+            control.fcId,
+            null,
+            false,
+            control.scope === "c" ? "current" : "any",
+          ),
+          new Date(),
+        );
+      case "history":
+        // The officer /ledger history page it sat on: the same FC, scope and cursor, with every
+        // entry's full note and the page's posts, which the embed quotes and summarizes.
+        return dataReply(
+          viewer,
+          "ledger-history",
+          await app.ledgerRead(
+            actor,
+            control.fcId,
+            control.before === null ? null : String(control.before),
+            true,
+            control.scope === "c" ? "current" : "any",
+          ),
+          new Date(),
+        );
       default:
         throw obsolete();
     }

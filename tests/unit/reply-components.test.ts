@@ -1,8 +1,10 @@
 /**
  * Reply components through the real router, discord.js interactions and a local REST recorder:
  * 'I've added it — verify now' opens a new reply so the /claim token message is never edited;
- * 'Check again' re-renders its own private card in place, throttled by the card's timestamps; and
- * 'Full details (JSON)' is refused to members before it runs and re-reads for officers.
+ * 'Check again' re-renders its own private card in place, throttled by the card's timestamps;
+ * 'Full details (JSON)' is refused to members before it runs and re-reads for officers; and the
+ * ledger's View history opens a new reply while its pager re-reads each page in place as whoever
+ * clicked.
  */
 import { afterEach, expect, test } from "bun:test";
 import { InteractionResponseType, MessageFlags } from "discord.js";
@@ -13,11 +15,13 @@ import type { Component } from "../../src/bot/component.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
 import details from "../../src/components/details.component.js";
+import ledger from "../../src/components/ledger.component.js";
 import verify from "../../src/components/verify.component.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R } from "../fixtures/replies/characters.js";
+import { LEDGER_FC, LEDGER_RESULTS as L, OLD_FC } from "../fixtures/replies/ledger.js";
 import { at, CHARACTER } from "../fixtures/results.js";
 
 /** Actors the fixture member (user 400 in guild 100) resolves as. */
@@ -235,4 +239,195 @@ test("a details view this release renders no button for is out of date", async (
   await router.handle(fixture.button("details:config", "123456789", { ephemeral: true }));
   expect(calls).toEqual([]);
   expect(embedOf(fixture.requests[1]).title).toBe("This control is out of date");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Ledger history buttons
+
+/**
+ * A router over the real ledger and details components whose ledgerRead stub records each call
+ * and returns `read(history)`. The actor is resolved per click from `actors`, so consecutive
+ * clicks can change audience the way a revoked or granted officer role does.
+ */
+function ledgerHarness(actors: readonly Actor[], read: (history: boolean) => unknown) {
+  const fixture = interactionFixture();
+  open = fixture;
+  const calls: Call[] = [];
+  const app: unknown = Object.create(Service.prototype);
+  if (!(app instanceof Service)) throw new Error("Invalid application fixture");
+  Object.assign(app, {
+    ledgerRead: async (caller: Actor, ...args: unknown[]) => {
+      calls.push(["ledgerRead", caller.officer ? "officer" : "member", ...args]);
+      return read(args[2] === true);
+    },
+  });
+  let click = 0;
+  const components: readonly Component[] = [ledger, details];
+  const router = new InteractionRouter(
+    {
+      client: fixture.client,
+      services: new Services().provide(applicationKey, app),
+      allowsGuild: () => true,
+      isStopping: () => false,
+      resolveActor: async (guildId, userId) => {
+        const actor = actors[Math.min(click++, actors.length - 1)] ?? MEMBER;
+        return { ...actor, guildId, userId };
+      },
+      report: () => {},
+    },
+    new Map(),
+    new Map(components.map((component) => [component.prefix, component])),
+  );
+  return { fixture, calls, router };
+}
+
+/** The pager and details controls of the page 1 view the fixtures render. */
+const FC_ID = LEDGER_FC.id;
+/** Everything a recorded request sent, for asserting what never appears. */
+const sentText = (requests: readonly RecordedRequest[]) => JSON.stringify(requests);
+
+test("Older re-reads the next page as the presser and updates the private page in place", async () => {
+  const { fixture, calls, router } = ledgerHarness([MEMBER], () => L.lastPage);
+  await router.handle(
+    fixture.button(`ledger:older:c:${FC_ID}:34`, "123456789", { ephemeral: true }),
+  );
+  expect(calls).toEqual([["ledgerRead", "member", FC_ID, "34", true, "current"]]);
+  expect(callbackType(fixture.requests[0])).toBe(InteractionResponseType.DeferredMessageUpdate);
+  expect(fixture.requests[1]).toMatchObject({
+    method: "patch",
+    body: {
+      content: "",
+      attachments: [],
+      embeds: [{ footer: { text: "Page 5 of 5 · end of history" } }],
+    },
+  });
+});
+
+test("Latest, and Newer without a cursor, open the newest page; historical scope reads any FC", async () => {
+  const { fixture, calls, router } = ledgerHarness([OFFICER], () => L.historicalPage);
+  for (const customId of [
+    `ledger:latest:c:${FC_ID}`,
+    `ledger:newer:c:${FC_ID}`,
+    `ledger:newer:h:${OLD_FC.id}:19`,
+  ])
+    await router.handle(fixture.button(customId, "123456789", { ephemeral: true }));
+  expect(calls).toEqual([
+    ["ledgerRead", "officer", FC_ID, null, true, "current"],
+    ["ledgerRead", "officer", FC_ID, null, true, "current"],
+    ["ledgerRead", "officer", OLD_FC.id, "19", true, "any"],
+  ]);
+});
+
+test("each click renders for its presser: officer detail, then the member layout", async () => {
+  const { fixture, router } = ledgerHarness([OFFICER, MEMBER], () =>
+    // The service filters nothing by audience here; the presenter chooses the layout.
+    ({ ...L.history, before: 44n }),
+  );
+  await router.handle(
+    fixture.button(`ledger:older:c:${FC_ID}:44`, "123456789", { ephemeral: true }),
+  );
+  const officer = embedOf(fixture.requests[1]);
+  expect(officer.footer?.text).toContain("Account ");
+  expect(sentText(fixture.requests)).toContain(`details:history:c:${FC_ID}:44`);
+  const before = fixture.requests.length;
+  await router.handle(
+    fixture.button(`ledger:older:c:${FC_ID}:44`, "123456789", { ephemeral: true }),
+  );
+  const member = fixture.requests.slice(before);
+  expect(embedOf(member[1]).footer?.text).toBe("Page 1 of 5");
+  const text = sentText(member);
+  expect(text).not.toContain("details:");
+  expect(text).not.toContain(L.history.account.id);
+  expect(text).not.toContain(L.history.entries[0]?.id ?? "missing");
+});
+
+test("View history opens page 1 as a new reply and leaves the balance message alone", async () => {
+  const { fixture, calls, router } = ledgerHarness([MEMBER], () => L.history);
+  // Even on the presser's own private balance, the balance stays visible.
+  await router.handle(fixture.button(`ledger:open:c:${FC_ID}`, "123456789", { ephemeral: true }));
+  expect(calls).toEqual([["ledgerRead", "member", FC_ID, null, true, "current"]]);
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+  expect(fixture.requests.map(callbackType)).not.toContain(
+    InteractionResponseType.DeferredMessageUpdate,
+  );
+  // A deferred reply (type 5) created a new message, so completing it can't touch the balance.
+  expect(fixture.requests[1]?.method).toBe("patch");
+  expect(embedOf(fixture.requests[1]).title).toBe("Ledger history · Example Free Company");
+});
+
+test("a page whose FC was replaced follows up privately and leaves the page", async () => {
+  const { fixture, router } = ledgerHarness([MEMBER], () => {
+    throw new Failure(
+      "stale",
+      "The linked Free Company changed since this ledger view was shown. Run /ledger history again.",
+      0,
+      { kind: "stale", what: "control" },
+    );
+  });
+  const press = fixture.button(`ledger:older:c:${FC_ID}:34`, "123456789", { ephemeral: true });
+  await router.handle(press);
+  expect(callbackType(fixture.requests[0])).toBe(InteractionResponseType.DeferredMessageUpdate);
+  expect(fixture.requests.map((request) => request.method)).toEqual(["post", "post"]);
+  expect(fixture.requests[1]).toMatchObject({
+    route: expect.stringMatching(/^\/webhooks\//u),
+    body: { flags: MessageFlags.Ephemeral },
+  });
+  expect(embedOf(fixture.requests[1])).toMatchObject({
+    title: "This control is out of date",
+    footer: { text: `Code stale · Ref ${press.id}` },
+  });
+});
+
+test("the pager on someone else's public page replies instead of editing it", async () => {
+  const { fixture, router } = ledgerHarness([MEMBER], () => L.history);
+  await router.handle(
+    fixture.button(`ledger:older:c:${FC_ID}:34`, "123456789", { ownerId: "401" }),
+  );
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+});
+
+test("a malformed ledger control is out of date and never reaches the service", async () => {
+  const { fixture, calls, router } = ledgerHarness([MEMBER], () => L.history);
+  for (const customId of [
+    `ledger:older:x:${FC_ID}:34`,
+    `ledger:older:c:${FC_ID}:034`,
+    "ledger:open:c",
+    `ledger:history:c:${FC_ID}`,
+  ]) {
+    const before = fixture.requests.length;
+    await router.handle(fixture.button(customId, "123456789", { ephemeral: true }));
+    expect(embedOf(fixture.requests.slice(before)[1]).title).toBe("This control is out of date");
+  }
+  expect(calls).toEqual([]);
+});
+
+test("details:history and details:balance pass the scope, FC and cursor through", async () => {
+  const { fixture, calls, router } = ledgerHarness([OFFICER], (history) =>
+    history ? L.history : L.balance,
+  );
+  await router.handle(
+    fixture.button(`details:history:c:${FC_ID}:34`, "123456789", { ephemeral: true }),
+  );
+  await router.handle(
+    fixture.button(`details:balance:h:${OLD_FC.id}`, "123456789", { ephemeral: true }),
+  );
+  expect(calls).toEqual([
+    ["ledgerRead", "officer", FC_ID, "34", true, "current"],
+    ["ledgerRead", "officer", OLD_FC.id, null, false, "any"],
+  ]);
+  const files = fixture.requests.flatMap((request) => request.files ?? []);
+  expect(files).toEqual(["tarubot-ledger-history.json", "tarubot-ledger-balance.json"]);
+});
+
+test("a member pressing a ledger Full details is refused before it reads", async () => {
+  const { fixture, calls, router } = ledgerHarness([MEMBER], () => L.balance);
+  await router.handle(
+    fixture.button(`details:balance:c:${FC_ID}`, "123456789", { ephemeral: true }),
+  );
+  expect(calls).toEqual([]);
+  expect(embedOf(fixture.requests[1]).title).toBe("Officers only");
 });
