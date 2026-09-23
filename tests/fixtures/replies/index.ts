@@ -1,0 +1,61 @@
+/**
+ * The reply catalog: one case per reply state, rendered from typed sample results. Each group
+ * (characters, ledger, configuration, guests, sync and utilities, posts) exports its catalog as
+ * `satisfies ReplyCatalog<GroupReplyKind>` from a sibling module and adds it to CATALOGS, so a new
+ * reply kind cannot ship without a case, and reply-consistency.test compares concepts across
+ * groups. The timestamp flag of each case comes from its approved card.
+ */
+import { describe, test } from "bun:test";
+import type { Audience } from "../../../src/discord/presenters/audience.js";
+import type { Presented } from "../../../src/discord/presenters/reply.js";
+import type { Tone } from "../../../src/discord/presenters/style.js";
+import { expectHouseStyle } from "../replies.js";
+
+/** One catalogued reply state. */
+export interface ReplyCase {
+  /**
+   * The approved mockup card it reproduces (a selected-specs id such as 'characters#9') or the
+   * reply-specs state it implements; null for a gap state that has no drawn card.
+   */
+  readonly spec: string | null;
+  /** Who receives it: a viewer audience, anyone (failures before the actor is known), or a channel. */
+  readonly audience: Audience | "any" | "channel";
+  readonly tone: Tone;
+  readonly title: string;
+  /** Whether the embed carries a timestamp, as the approved card's `timestamp` records. */
+  readonly timestamp: boolean;
+  /** A documented exemption from the ten-field house limit (/config show allows 15). */
+  readonly maxFields?: number;
+  /** Render the state with its presenter. */
+  readonly render: () => Presented;
+}
+
+/** A group's catalog, keyed by its reply kinds. */
+export type ReplyCatalog<Kind extends string> = Readonly<Record<Kind, ReplyCase>>;
+
+/**
+ * Every group's catalog. Group workstreams import their catalog module here as they migrate from
+ * the JSON replies; the cross-group consistency pins read this map.
+ */
+export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {};
+
+/**
+ * Register one bun test per case: it renders within the house style, with its catalogued tone,
+ * title and timestamp flag.
+ */
+export function catalogTests<Kind extends string>(
+  group: string,
+  catalog: ReplyCatalog<Kind>,
+): void {
+  describe(`${group} replies`, () => {
+    for (const [kind, reply] of Object.entries<ReplyCase>(catalog))
+      test(`${kind} follows the house style`, () => {
+        expectHouseStyle(reply.render(), {
+          tone: reply.tone,
+          title: reply.title,
+          timestamp: reply.timestamp,
+          ...(reply.maxFields !== undefined && { maxFields: reply.maxFields }),
+        });
+      });
+  });
+}

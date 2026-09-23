@@ -15,6 +15,14 @@ Draft; completed as the release's reply presenters land.
 - `/apply` now counts as open only when both the review channel and the Guest role are set, in the pre-form check, at submission, in activation and in the preview tool, so a visitor is never shown a form that would be refused.
 - Commands parse application, entry and run IDs, member options, name and world lengths and history cursors into input failures that name the option, instead of raising a raw validation error. `/ledger balance|history fc_id:` also accepts a Lodestone link.
 - Application autocomplete lists the newest 25 pending applications as "display name · submitted date · short ID" and matches on the display name, user ID or application ID.
+- Add the building blocks the new replies use, in `src/discord/presenters/` (no reply changes yet). They cover:
+  - the house-style tones, status markers, health-check tokens and limits;
+  - formatting that escapes user text for where it renders, keeps gil exact, and cuts text on grapheme boundaries;
+  - a `Presented` message that only `reply()`, `post()` and `dataReply()` can build, and that enforces every Discord limit deterministically;
+  - audiences derived from the authorization policy;
+  - the approved job line (labels for members, raw kinds and diagnostics for officers, split across fields when long), the effects and roster-evidence fields, and provenance labels;
+  - the approved buttons.
+  One strict codec (`src/discord/custom-ids.ts`) builds and parses every button ID; the review buttons keep their format. Tests gain the reply catalog harness and a guard that ratchets the remaining JSON replies down to the officer details path.
 
 ## 2.13.0 — Launch policy and cutover tooling
 
