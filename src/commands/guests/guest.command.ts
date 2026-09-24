@@ -1,6 +1,7 @@
 /** Mixed-permission guest operations; each private operation reauthorizes its actor. */
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
+import { completeMember, focusedOption } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
 import {
   applicationChoice,
@@ -26,14 +27,21 @@ for (const name of ["grant", "revoke"])
     sub
       .setName(name)
       .setDescription(`${name} durable guest access`)
-      .addStringOption(string("member", "Discord user ID or mention", true))
+      .addStringOption(string("member", "Member: pick a suggestion or paste a user ID", true, true))
       .addStringOption(string("reason", "Audited reason", true)),
   );
 data.addSubcommand((sub) =>
   sub
     .setName("status")
     .setDescription("Inspect durable guest access and delivery status")
-    .addStringOption(string("member", "Discord user ID; officers may inspect another user")),
+    .addStringOption(
+      string(
+        "member",
+        "Officers: the member to inspect; pick a suggestion or paste a user ID",
+        false,
+        true,
+      ),
+    ),
 );
 
 export default defineCommand({
@@ -75,7 +83,14 @@ export default defineCommand({
       memberOption: memberOption !== null,
     });
   },
-  async autocomplete({ actor, interaction, services }) {
+  async autocomplete(context) {
+    const { actor, interaction, services } = context;
+    if (focusedOption(context) === "member") {
+      // Grant and revoke are officer-only; a member's /guest status covers only themselves.
+      const status = interaction.options.getSubcommand(true) === "status";
+      if (!status) authorize(actor, actor.guildId, "officer");
+      return completeMember(context, status && !actor.officer);
+    }
     // Mixed permission groups cannot rely on root command defaults to protect completion.
     authorize(actor, actor.guildId, "officer");
     const rows = await services.get(applicationKey).applicationChoices(actor);

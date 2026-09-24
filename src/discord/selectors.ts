@@ -21,16 +21,16 @@ const MAX_NAME = 100;
 const MAX_WORLD = 80;
 
 /**
- * User IDs remain usable after a member leaves the server; mentions are presentation sugar. The
- * option is free text, not autocomplete, so the failure asks for an ID or mention rather than a
- * suggestion.
+ * User IDs remain usable after a member leaves the server; mentions are presentation sugar. Every
+ * member option suggests server members (their user IDs) as the officer types, and a pasted ID or
+ * mention still works, so the failure names both.
  */
 export function userId(value: string, option = "member"): string {
   const candidate = /^<@!?([0-9]+)>$/.exec(value.trim())?.[1] ?? value.trim();
   if (!idSchema.safeParse(candidate).success)
     throw new Failure(
       "input",
-      "Paste a Discord user ID or @mention, for example 123456789012345678.",
+      "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
       0,
       { kind: "option", option },
     );

@@ -1,6 +1,7 @@
 /** Officer assignment uses the same identity resolution as claims and records its reason. */
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
+import { completeMember } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
 import { assignReply } from "../../discord/presenters/characters.js";
 import { resolveCharacter, userId } from "../../discord/selectors.js";
@@ -8,7 +9,7 @@ import { authorize } from "../../domain/policy.js";
 
 export default defineCommand({
   data: command("assign", "Assign a trusted character link to a member")
-    .addStringOption(string("member", "Discord user ID or mention", true))
+    .addStringOption(string("member", "Member: pick a suggestion or paste a user ID", true, true))
     .addStringOption(string("reason", "Assignment reason", true))
     .addStringOption(string("character", "Character ID or canonical Lodestone URL"))
     .addStringOption(string("forename", "Exact forename"))
@@ -31,5 +32,9 @@ export default defineCommand({
       ),
       viewer,
     );
+  },
+  autocomplete(context) {
+    authorize(context.actor, context.actor.guildId, "officer");
+    return completeMember(context);
   },
 });

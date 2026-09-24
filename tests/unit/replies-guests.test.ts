@@ -732,7 +732,10 @@ describe("application autocomplete (C12)", () => {
         resolveActor: async () => actor,
         actor,
         interaction: {
-          options: { getFocused: () => query },
+          // The application option is focused; member completion is tested separately.
+          options: {
+            getFocused: (full?: boolean) => (full ? { name: "application", value: query } : query),
+          },
           guild: { members: { cache: new Map([[GUEST_ID, { displayName: "Example Guest" }]]) } },
         } as unknown as AutocompleteInteraction,
       });

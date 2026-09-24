@@ -5,6 +5,7 @@
 import { PermissionFlagsBits } from "discord.js";
 import { roleAdministrationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
+import { completeMember } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
 import { officerOverrideReply } from "../../discord/presenters/configuration.js";
 import { userId } from "../../discord/selectors.js";
@@ -18,7 +19,7 @@ for (const name of ["grant", "revoke"])
     sub
       .setName(name)
       .setDescription(`${name} bot-only officer authority`)
-      .addStringOption(string("member", "Discord user ID or mention", true))
+      .addStringOption(string("member", "Member: pick a suggestion or paste a user ID", true, true))
       .addStringOption(string("reason", "Audited reason", true)),
   );
 export default defineCommand({
@@ -38,4 +39,6 @@ export default defineCommand({
       viewer,
     );
   },
+  // The router authorizes officer access first; the service still requires a server manager.
+  autocomplete: (context) => completeMember(context),
 });

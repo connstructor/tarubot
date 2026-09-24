@@ -96,6 +96,48 @@ test("command inventory exactly matches the declared public surface", async () =
   );
 });
 
+test("every member option suggests server members (owner decision, 2026-09-24)", async () => {
+  interface Option {
+    type: number;
+    name: string;
+    autocomplete?: boolean;
+    options?: readonly Option[] | undefined;
+  }
+  const members: { path: string; autocomplete: boolean }[] = [];
+  const visit = (path: string, options: readonly Option[]): void => {
+    for (const option of options) {
+      if (
+        option.type === ApplicationCommandOptionType.Subcommand ||
+        option.type === ApplicationCommandOptionType.SubcommandGroup
+      )
+        visit(`${path} ${option.name}`, option.options ?? []);
+      else if (option.name === "member")
+        members.push({ path, autocomplete: option.autocomplete === true });
+    }
+  };
+  const commands = await loadCommands();
+  for (const command of commands.values()) {
+    const data = command.toJSON();
+    visit(data.name, (data.options ?? []) as readonly Option[]);
+    // A command with an autocomplete option must have a handler for it.
+    if (JSON.stringify(data.options ?? []).includes('"autocomplete":true'))
+      expect(typeof command.autocomplete).toBe("function");
+  }
+  expect(members.map((row) => row.path).sort()).toEqual(
+    [
+      "assign",
+      "characters",
+      "guest grant",
+      "guest revoke",
+      "guest status",
+      "officer grant",
+      "officer revoke",
+      "unassign",
+    ].sort(),
+  );
+  expect(members.filter((row) => !row.autocomplete)).toEqual([]);
+});
+
 test("/config role_layout and /config roles officer adopt_holders reach the service as parsed", async () => {
   // A prototype-backed application records calls; the real option resolver parses raw payloads.
   const calls: unknown[][] = [];
@@ -244,7 +286,7 @@ test("option parsers refuse typed names, role mentions and malformed UUIDs as in
   for (const typed of ["Pazzberry", "@Pazzberry", "12 34", "<@&123456789012345678>", ""])
     expect(inputFailure(() => userId(typed, "member"))).toMatchObject({
       code: "input",
-      message: "Paste a Discord user ID or @mention, for example 123456789012345678.",
+      message: "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
       detail: { kind: "option", option: "member" },
     });
   const uuidCases = [
