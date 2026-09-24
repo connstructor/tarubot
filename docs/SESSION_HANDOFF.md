@@ -1,10 +1,10 @@
 # Session handoff — v2 release readiness
 
-**Snapshot: 2026-09-23. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and [ROADMAP.md](ROADMAP.md) records the owner's v2–v6 plan.
+**Snapshot: 2026-09-23, updated 2026-09-24. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and [ROADMAP.md](ROADMAP.md) records the owner's v2–v6 plan.
 
 ## 1. Where we stopped
 
-The core v2 functionality is implemented and tested. The next live milestone is **deploying and testing the unverified-visitor application form**, followed by the remaining operational features, acceptance checks, and production cutover.
+The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The next live milestone is **the owner's 2.14.0 reply session on DevBot**, followed by 2.15.0 (OPS-10/OPS-11), the remaining acceptance checks, and the production cutover.
 
 | Layer | State at handoff |
 | --- | --- |
@@ -19,9 +19,9 @@ The core v2 functionality is implemented and tested. The next live milestone is 
 | Schema required by 2.12.x | **`004_guest_application_form.sql`**, not yet applied to DevBot |
 | Production cutover | Not performed |
 
-The handoff's documentation version is not evidence of a deployed image. **2.12.0 is already available for the guest-form rollout**; a later version must finish its own checked PR/publication first. The current source's startup plan and App Platform template track 2.12.3 as required by repository versioning.
+The handoff's documentation version is not evidence of a deployed image; each version must finish its own checked PR and publication before it is deployed. The current source's App Platform template tracks 2.14.1 as required by repository versioning, and its startup plan is the 2.14 reply session for 2.14.0 or later.
 
-**Update later on 2026-09-23:** DevBot now runs the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
+**Update later on 2026-09-23:** DevBot then ran the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
 
 **Update, 2.13.0:**
 - **Branch.** `feat/launch-policy-2.13.0` started from `main` at `341c6ed` (2.12.3, PR #10). It implements the owner's launch decisions of 2026-09-23, recorded in [REQUIREMENTS.md](../REQUIREMENTS.md) under "Approved launch amendments", and adds migration `005_launch_access_policy.sql`.
@@ -29,21 +29,31 @@ The handoff's documentation version is not evidence of a deployed image. **2.12.
 - **Cutover.** The production cutover follows the rewritten [MIGRATION.md](MIGRATION.md) on App Platform with the managed PostgreSQL cluster, using a release at or above 2.15.0 (2.14.0 reply presentation, then 2.15.0 OPS-10/OPS-11).
 - **Owner action.** Done: the DevBot `.env` `DATABASE_URL` names `…/tarubot_dev`, which the DevBot tool profile requires (it refuses `…/tarubot`).
 
-**Update, 2.14.0 (current version):**
-- **Branch.** `feat/reply-presenters-2.14.0` starts from `main` at `2e3f27c` (2.13.0, PR #11). It replaces every JSON reply with the owner-approved embeds ([REPLIES.md](REPLIES.md)). No migration: the schema stays `005_launch_access_policy.sql`.
-- **Status.** Not yet merged, published, or deployed. Once published, deploy it to DevBot (no migration), re-register commands (the `/ledger history` `before` description and the `/config` channel options changed) and run the reply session in `test-plans/current.json`, including the pass with Discord changes paused.
+**Update, 2.14.0:**
+- **Branch.** `feat/reply-presenters-2.14.0` started from `main` at `2e3f27c` (2.13.0, PR #11). It replaces every JSON reply with the owner-approved embeds ([REPLIES.md](REPLIES.md)). No migration: the schema stays `005_launch_access_policy.sql`.
+- **Status.** Merged ([PR #12](https://github.com/connstructor/tarubot/pull/12), `0e60f21`) on 2026-09-24. Publish run 35948831624 first failed on the sidecar spacing test in the amd64 build; re-running the failed jobs published `ghcr.io/connstructor/tarubot:2.14.0` and `tarubot-nodestone:2.14.0` and promoted `latest`. Deployed to DevBot at 02:58:17 UTC with no migration, commands re-registered (19 roots / 41 paths, matching the image) and the startup plan posted as message `1552514500140335215` ([DEV_GUILD.md](DEV_GUILD.md#2140-rollout--2026-09-24)).
+- **Pending.** The owner's reply session in `test-plans/current.json` has not started. Its paused pass needs a restart with `ENABLE_EFFECTS=false`, with the owner's go-ahead.
 
-**Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock (historical: commits are now signed with the SSH key described below). This documentation branch has not been pushed or given a PR at this checkpoint.
+**Update, 2.14.1 (current version):**
+- **Branch.** `ci/claude-review-foreground-2.14.1` starts from `main` at `0e60f21` (2.14.0, PR #12). CI and tests only: no runtime source change, no migration, no command change, so DevBot stays on 2.14.0.
+- **Claude review.** Reviews had ended green in about 40 seconds with nothing posted: since Claude Code 2.1.198 a subagent starts in the background, and `claude-code-action` stops reading at the first result, which arrived while the plugin's gating agent still ran (run 35948050785). The review step now sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, prints the transcript only with debug logging, and fails in a new "Check that the review finished" step when the review was cut short. Its own PR gets no real review (the action skips a PR that changes its workflow); verify it on the next ready, same-repository PR to `main` as described in [OPEN_ITEMS.md](OPEN_ITEMS.md).
+- **Sidecar test.** The spacing contract test measures on the monotonic clock with a 10 ms tolerance, fixing the flake that failed the first 2.14.0 publish attempt.
+- **Status.** Not yet merged or published.
+- **Next.** The owner's 2.14.0 reply session, then 2.15.0 (OPS-10/OPS-11 officer alerts and telemetry, and a restyled `officer.notify`). The cutover requires a published release at or above 2.15.0.
+
+**Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
 ### Verified runtime observations
 
-A fresh read-only check confirmed all three local containers healthy. Bot readiness reported database/Discord connected, effects enabled, public development replies enabled, **zero pending/blocked work**, and zero degraded FCs. The guild-scoped database query also found no queued/running/blocked/failed/disabled jobs.
+These observations are from the original snapshot. A fresh read-only check confirmed all three local containers healthy. Bot readiness reported database/Discord connected, effects enabled, public development replies enabled, **zero pending/blocked work**, and zero degraded FCs. The guild-scoped database query also found no queued/running/blocked/failed/disabled jobs.
 
 - Guild revision **10**, active, effects enabled, onboarding enabled.
 - Two active character ownership links.
 - The development ledger account remains uninitialized: `balance = NULL`, `sequence = 0`.
 - The 2.11.1 setup access job `8df5614c-3c95-44bb-b3d9-e5c90df4b436` previously completed for 11 managed channels. The owner reported that the rest looked good; exhaustive human visibility/recovery acceptance is still outstanding.
 - Last posted running-image plan: [message 1552179968069472363 in #chat](https://discord.com/channels/1040379370159743139/1040379370931507252/1552179968069472363).
+
+Since then, revision 11 moved guest reviews to officer-chat and the 2.12.3 session initialized the ledger. The 2.14.0 rollout check on 2026-09-24 found readiness 200 (database, writer lease, Discord and effects true; nothing pending or blocked; no degraded FCs), one writer-lease holder and no warn or error log lines. The latest plan is [message 1552514500140335215](https://discord.com/channels/1040379370159743139/1040379370931507252/1552514500140335215).
 
 ## 2. Development identities and policy decisions
 
@@ -58,7 +68,7 @@ A fresh read-only check confirmed all three local containers healthy. Bot readin
 | FC Leader role | `1551979217087103137` |
 | Lobby | `1552181036492791818` |
 | Officer room | `1552149138148433930` — officer-chat |
-| Current guest-review destination | `1040379861153357995` — **dev**, still needs explicit rebinding |
+| Current guest-review destination | `1552149138148433930` — officer-chat, since revision 11 (previously `1040379861153357995`, dev) |
 | Startup-plan destination | `1040379370931507252` — chat |
 | Excluded community-updates channel | `1040379572358746144` — moderator-only |
 | Excluded parent category | `1040381910863593492` — Admin |
@@ -83,19 +93,11 @@ Keep these owner-approved decisions intact:
 
 ## 3. First actions next session
 
-1. Read [../AGENTS.md](../AGENTS.md), inspect `git status`/history and the signed handoff commit, and fetch remote state. Continue from this handoff branch or its subsequently merged commit; local `main` may lag `origin/main`.
-2. Confirm the selected rollout tag's publication. PR #6 and the 2.12.0 images are already complete; do not treat them as waiting on CI.
-3. With authorization for the DevBot update, stop the writer, take a new database backup, rehearse/apply migration 004, and start matching bot/sidecar images. Register the updated slash commands. Follow [OPERATIONS.md](OPERATIONS.md), [SETUP.md](SETUP.md), and [DEV_GUILD.md](DEV_GUILD.md).
-4. Before new applications, run:
-
-   ```text
-   /config guest_applications channel:#officer-chat
-   /config validate
-   ```
-
-   Setup preserves existing notification destinations. Merely selecting officer-chat as the officer room did **not** move guest review out of #dev. Existing applications retain their original review channel.
-5. Run the guest/access session from [../test-plans/current.json](../test-plans/current.json) using the plan matching the deployed release. Record application/job IDs, actual outcomes, and remaining issues in [DEV_GUILD.md](DEV_GUILD.md) and [OPEN_ITEMS.md](OPEN_ITEMS.md).
-6. Complete operational alerts/telemetry and the remaining acceptance/recovery work below before production cutover.
+1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history and the latest signed commit, and fetch remote state; local `main` may lag `origin/main`. Check whether 2.14.1 (`ci/claude-review-foreground-2.14.1`) was committed, merged, and published.
+2. With the owner, run the 2.14.0 reply session from [../test-plans/current.json](../test-plans/current.json) on DevBot, which runs 2.14.0 (2.14.1 changes no runtime code, so DevBot need not redeploy). The paused pass restarts the bot with `ENABLE_EFFECTS=false` and needs the owner's go-ahead. Record message IDs, Refs, Codes, and deviations in [DEV_GUILD.md](DEV_GUILD.md) and [OPEN_ITEMS.md](OPEN_ITEMS.md).
+3. Finish the earlier DevBot checks: the 2.13.0 plan (message `1552411775201316946`: the layout switch, the union through `/assign` with numeric IDs, the closed `/apply`, and Guest revoke and grant) and the 2.12.3 leftovers (`/ledger adjust` and non-officer denials).
+4. Deliver 2.15.0 (OPS-10/OPS-11 officer alerts and telemetry, and a restyled `officer.notify`). On the first ready, same-repository PR to `main` after 2.14.1 merges (probably 2.15.0's), confirm the Claude review fix: the "Check that the review finished" step shows `started_in_background` 0 and every spawned subagent completed, and `claude[bot]` posts inline comments or "No issues found" ([OPEN_ITEMS.md](OPEN_ITEMS.md) has the fallbacks).
+5. Then provision the managed database and follow [MIGRATION.md](MIGRATION.md) for the rehearsal and the cutover, using a published release at or above 2.15.0.
 
 Useful read-only starting checks from the repository:
 
@@ -103,8 +105,8 @@ Useful read-only starting checks from the repository:
 git status --short --branch
 git fetch origin
 git log --oneline -10
-gh pr view 6 --repo connstructor/tarubot
-gh run view 35823822742 --repo connstructor/tarubot
+gh pr list --repo connstructor/tarubot --state all --limit 5
+gh run view 35948831624 --repo connstructor/tarubot
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml ps
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubot bun -e 'const r = await fetch("http://127.0.0.1:3000/health/ready"); console.log(await r.json());'
 ```
@@ -115,12 +117,14 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubo
 
 - [x] Merge the guest-form feature and publish 2.12.0 images.
 - [x] Deploy migration 004 and a matching published release to DevBot (2.12.1); register commands and select officer-chat for new reviews.
+- [x] Merge and publish 2.13.0 (launch policy, migration 005) and 2.14.0 (reply embeds), and deploy both to DevBot.
 - [ ] **P1 — Officer operational alerts (OPS-11 / DB-07):** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
 - [ ] **P1 — Telemetry (OPS-10):** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
 - [ ] **P2 — Burst handling:** rehearse role-event coalescing and member-enumeration backoff at representative guild size; fix any remaining rate-limit/recovery problems.
 
 ### Live acceptance
 
+- [ ] **Replies (2.14.0):** the owner's reply session in `test-plans/current.json`, including the pass with Discord changes paused.
 - [ ] **Guest forms (on hold until after launch):** submit as an unverified visitor; inspect both answers; approve/deny as an officer; verify role/DM outcomes, duplicate submissions, denial cooldown, stale forms after rejoin, original buttons after restart, deleted-review repair, blocked DMs, and denial of visitor self-approval.
 - [ ] **Visibility/access:** ordinary accounts exercise newcomer, Member, Guest, Officer, and FC Leader visibility; verify automatic registered-visitor access, revocation/rejoin, private-area retention, excluded community resources, drift repair, and restart behavior.
 - [ ] **Ledger:** initialize the isolated test account; deposit/withdraw/adjust; check exact balances/history and officer/private-read authorization; retry blocked notifications without a second financial mutation; verify account history across FC unlink/relink.
@@ -142,7 +146,7 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml exec -T tarubo
 
 ## 5. Evidence and implementation pointers
 
-Latest complete behavioral run: **2.12.0 — 127 tests / 1,196 assertions** with both the supplied dump and synthetic CI fixture (70 unit, 16 contract, 41 PostgreSQL integration). Type checking, lint, formatting, build, SemVer validation, offline App Platform validation, and the merged PR's CI/security/container checks passed. This 2.12.1 handoff is documentation/release-metadata maintenance; it does not constitute live acceptance.
+Latest complete behavioral run of a released feature: **2.14.0 — 1,172 tests / 35,507 assertions** with both the supplied dump and synthetic CI fixture (1,069 unit, 18 contract, 85 PostgreSQL integration). Type checking, lint, formatting, build, SemVer validation, offline App Platform validation, and the merged PR's CI/security/container checks passed. [VERIFICATION.md](VERIFICATION.md) records the 2.14.1 run and the earlier ones; automated runs do not constitute live acceptance.
 
 The 2.12.1 maintenance change passed build, type checking, lint, formatting, SemVer checks, pinned offline App Platform validation, and the targeted startup-plan/App Platform/version tests (**7 tests / 55 assertions**).
 
@@ -163,6 +167,10 @@ Known pre-rollout backups, local and ignored:
 
 - `.cache/backups/tarubot_dev-before-2.10.1-0744cfb.dump`
 - `.cache/backups/tarubot_dev-before-2.11.1-1de878e.dump`
+- `.cache/backups/tarubot_dev-before-2.12.1-da7ed72.dump`
+- `.cache/backups/tarubot_dev-before-2.12.3-341c6ed.dump`
+- `.cache/backups/tarubot_dev-before-2.13.0-2e3f27c.dump`
+- `.cache/backups/tarubot_dev-before-2.14.0-0e60f21.dump`
 
 Take a fresh backup for the next migration. Keep `.env`, supplied dumps, backups, generated output, and coding-tool state out of Git.
 
@@ -185,4 +193,4 @@ Take a fresh backup for the next migration. Keep `.env`, supplied dumps, backups
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. Check the 2.14.0 branch or pull request, its publication, and the running DevBot state (2.13.0 on schema 005). Finish the remaining 2.13.0 DevBot checks (the layout switch, the multi-character union and the closed-applications refusal). After 2.14.0 is published, deploy it to DevBot (no migration), re-register commands, and run its reply session from test-plans/current.json, including the pass with Discord changes paused. Then deliver 2.15.0 (OPS-10/OPS-11), and follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover. Preserve automatic registered Guest access, excluded community resources, and the owner's launch decisions in REQUIREMENTS.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. Check the 2.14.1 branch or pull request, its publication, and the running DevBot state (2.14.0 on schema 005). With the owner, run the 2.14.0 reply session from test-plans/current.json, including the pass with Discord changes paused, and finish the remaining 2.13.0 DevBot checks (the layout switch, the multi-character union and the closed-applications refusal). Then deliver 2.15.0 (OPS-10/OPS-11). On the first ready, same-repository pull request to main after 2.14.1 merges (probably 2.15.0's), confirm that the Claude review finishes and posts. Follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover. Preserve automatic registered Guest access, excluded community resources, and the owner's launch decisions in REQUIREMENTS.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.

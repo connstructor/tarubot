@@ -4,7 +4,7 @@
 
 - Application/bot: **DevBot**, `943291473477128243`.
 - Test guild: **TaruBot Development**, `1040379370159743139`.
-- The other application in this guild is **TaruBot**, `965294750741692416`.
+- The production application **TaruBot**, `965294750741692416`, is no longer in this guild (404 in the 2.13.0 rollout).
 - DevBot's isolated PostgreSQL database is `tarubot_dev`.
 - `docker-compose.devbot.yml` supplies the development database and requires explicit test-guild scope.
 
@@ -133,7 +133,7 @@ At that point onboarding was still opted out. The separate room's creation and p
 - Startup logged no warn or error lines (2.12.1 logged six error-level `busy` waits for the same startup). All 12 startup jobs succeeded; the role-layout job was superseded once by its own echo and recorded the wait at debug. The launch-scope plan was posted as message `1552346750315143329`.
 - `/config validate`: all nine role/channel capabilities available, effects on globally and for the guild.
 - Ledger: `/ledger initialize` (10,000,000), deposit +10,000 and withdraw −5,000 recorded sequences 1–3 with exact balances (10,005,000 final); `/ledger history` listed them newest first, and all three ledger notifications posted (delivery jobs succeeded).
-- `/assign` with a typed name in `member` failed with a raw `SyntaxError` (operation `1552351740568015000`): the ID schema's range refinement ran after its regex failed (Zod 4) and called `BigInt()` on the name. 2.13.0 guards the refinement and adds regression tests; it has run on DevBot since 20:10 UTC.
+- `/assign` with a typed name in `member` failed with a raw `SyntaxError` (operation `1552351740568015000`): the ID schema's range refinement ran after its regex failed (Zod 4) and called `BigInt()` on the name. 2.13.0 guards the refinement and adds regression tests; it reached DevBot at 20:10 UTC.
 - The owner reviewed the replies (all raw JSON) and approved the embed mockups for 2.14.0; the remaining session steps are `/ledger adjust`, non-officer denials, `/assign`/`/unassign` with a numeric ID, role removals and drift repair, and `/guest revoke`/`/guest grant`.
 
 ### 2.13.0 rollout — 2026-09-23
@@ -150,13 +150,23 @@ At that point onboarding was still opted out. The separate room's creation and p
 - Remaining 2.13.0 checks: the layout switch, the multi-character union and the closed-applications refusal.
 - Follow-up: guard refusals print a Bun stack trace; operator tools should print only the Failure message.
 
+### 2.14.0 rollout — 2026-09-24
+
+- Published 2.14.0 bot/sidecar images (revision `0e60f2117001fe7bd8d56c4c172960f5f139d148`, the PR #12 merge) replaced 2.13.0 with no migration. The first attempt of publish run 35948831624 failed in the amd64 image build's contract stage: the sidecar spacing test measured 999 ms against at least 1,000 (fixed in 2.14.1). Re-running the failed jobs published both images and promoted `latest`.
+- The writer stopped at 02:57:53 UTC (exit 0; all 278 jobs succeeded; no open connections and no lease holders). The backup `.cache/backups/tarubot_dev-before-2.14.0-0e60f21.dump` (95,219 bytes, sha256 `02ed249e3cae895d…`) restored into `tarubot_dev_restore_test`, where the 2.14.0 build's `check-restore.js` matched every application row, sequence, trigger and constraint at `005_launch_access_policy.sql`. The restore copy was dropped.
+- 2.14.0 started at 02:58:17 UTC: readiness 200 (database, writer lease, Discord and effects true; nothing pending or blocked; no degraded FCs) with one holder of advisory lock 714882494, zero warn or error log lines, and all startup jobs succeeded (`reconcile.guild` 1, `reconcile.user` 6, `roles.layout` 1, `channels.access` 1). Nothing was parked, so the new startup requeue had nothing to resume.
+- Guild commands went from 19 roots / 41 paths (`/config` and `/ledger` differed) to 19 / 41 matching the image after `register.js --guild 1040379370159743139`; `commands.js list` for the guild reports clean.
+- The startup plan was posted at 02:58:21 UTC as message `1552514500140335215`: one embed, "Session: 2.14.0 embed replies instead of JSON", with fields of 982, 1,020 and 619 characters and no mentions.
+- The owner's 2.14.0 reply session (`test-plans/current.json`) has not started. Its paused pass needs a restart with `ENABLE_EFFECTS=false`, with the owner's go-ahead.
+- Still open from earlier sessions: the 2.13.0 checks from plan message `1552411775201316946` (the layout switch, the union through `/assign` with numeric IDs, the closed `/apply`, and Guest revoke and grant) and the 2.12.3 leftovers (`/ledger adjust` and non-officer denials).
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing.
 
-Before that rollout, a read-only handoff check confirmed the bot and sidecar ran **2.11.1**, revision `1de878ef6c314cd83ac26bf7513d5db64210bcad`, and PostgreSQL reported schema **003**. All three containers were healthy; readiness had database/Discord connected, effects/public development replies enabled, no pending/blocked work, and no degraded FCs. Guild revision 10 and its role/channel bindings remain intact, with two active links and an uninitialized ledger (`NULL`, sequence 0). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for the exact resume state. The source startup plan tracks 2.14.0; use the plan matching whichever checked release is deployed.
+Before that rollout, a read-only handoff check confirmed the bot and sidecar ran **2.11.1**, revision `1de878ef6c314cd83ac26bf7513d5db64210bcad`, and PostgreSQL reported schema **003**. All three containers were healthy; readiness had database/Discord connected, effects/public development replies enabled, no pending/blocked work, and no degraded FCs. Guild revision 10 and its role/channel bindings remained intact, with two active links and an uninitialized ledger (`NULL`, sequence 0). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for the exact resume state. The source startup plan is the 2.14 reply session, for 2.14.0 or later; use the plan matching whichever checked release is deployed.
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The owner put the remaining form checks on hold on 2026-09-23. The current plan, `test-plans/current.json`, is the 2.14.0 reply session: every reply compared with the approved mockups, Refs and Codes matched to the log, ledger posts and the review message read back, and a pass with Discord changes paused (`ENABLE_EFFECTS=false`). See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for remaining acceptance work.
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The owner put the remaining form checks on hold on 2026-09-23. The current plan, `test-plans/current.json`, is the 2.14 reply session (for 2.14.0 or later): every reply compared with the approved mockups, Refs and Codes matched to the log, ledger posts and the review message read back, and a pass with Discord changes paused (`ENABLE_EFFECTS=false`). See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for remaining acceptance work.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 

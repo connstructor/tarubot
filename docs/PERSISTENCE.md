@@ -36,7 +36,7 @@ For a future schema change:
 
 The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Migration `003_guild_access.sql` added opt-in channel policy bindings and first-observed recovery snapshots. `004_guest_application_form.sql`, introduced in **2.12.0**, added paired nullable introduction/interest fields that preserve existing applications, with a database constraint bounding supplied answers; new form answers, submission audit, and review work commit on the same client. The 2.12.1–2.12.3 releases add no schema change.
 
-The current **2.14.0** source adds no migration and requires `SCHEMA_VERSION=005_launch_access_policy.sql`, introduced in **2.13.0**. It is additive and needs no superuser privileges:
+The current **2.14.1** source adds no migration and requires `SCHEMA_VERSION=005_launch_access_policy.sql`, introduced in **2.13.0**. It is additive and needs no superuser privileges:
 
 - **Provenance.** It replaces `guest_grants_provenance_check` so provenance may also be `grandfathered`.
 - **Grandfathering marker.** It adds `guilds.guest_grandfather`, NULL, `pending`, or `completed`. The completion time `guilds.guest_grandfathered_at` is set exactly when the marker is `completed`.

@@ -6,6 +6,13 @@ import { responseSchema } from "../../src/infrastructure/nodestone/protocol.js";
 const workerURL = new URL("../../dist/sidecar/worker.js", import.meta.url).href;
 // Keep transport assertions intact while allowing emulated worker startup to complete.
 const workerTestTimeout = 30000;
+/**
+ * The sidecar reserves each start on the monotonic clock and then calls the transport, so the
+ * observed gap can trail the reserved 1,000 ms by the in-process hop between the two (larger on a
+ * cold first call). Wall-clock time is not used: it can be slewed against the monotonic clock and
+ * truncates to whole milliseconds, which once measured the enforced gap as 999 ms in a CI build.
+ */
+const startHopToleranceMs = 10;
 test(
   "simultaneous requests obey sidecar concurrency and actual transport start spacing",
   async () => {
@@ -14,7 +21,7 @@ test(
     const server = serve(0, {
       workerURL,
       async transport() {
-        starts.push(Date.now());
+        starts.push(performance.now());
         await Bun.sleep(50);
         return new Response("<div>Controlled invalid page</div>");
       },
@@ -31,7 +38,10 @@ test(
       );
       expect(responses.filter((response) => response.status === 429)).toHaveLength(6);
       expect(starts).toHaveLength(2);
-      expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(1000);
+      // Unspaced starts would land within a few milliseconds of each other.
+      expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(
+        1000 - startHopToleranceMs,
+      );
       for (const response of responses) await response.arrayBuffer();
     } finally {
       await server.stop(true);

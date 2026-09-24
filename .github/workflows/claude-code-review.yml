@@ -40,7 +40,18 @@ jobs:
           # The action configures git with its own App token.
           persist-credentials: false
       - name: Review with the code-review plugin
+        id: review
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        env:
+          # Run every subagent in the foreground. Since Claude Code 2.1.198 a subagent starts in the
+          # background unless Claude asks otherwise, and this action stops reading at the first
+          # result, which then arrives while the agents still run: reviews ended green after about
+          # 40 seconds with nothing posted (run 35948050785). With background tasks off, the only
+          # result comes after the review finishes. The action should pass this step's environment
+          # to Claude Code; if the check below still reports background subagents, set the variable
+          # through the action's `settings` input instead. Drop it once the action waits for
+          # background work (anthropics/claude-code-action#1499).
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
@@ -49,8 +60,32 @@ jobs:
           # The plugin grants its own `gh` commands; allowing the inline-comment tool is what makes
           # the action start that MCP server.
           claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # Temporary diagnostics: silent reviews on large PRs give no reason in the default log.
-          # This prints the full transcript, including tool results, into this public repository's
-          # Actions log; the reviewer only reads public PR content and GitHub masks registered
-          # secrets. Remove once the cause is known, and never enable it in claude.yml.
-          show_full_output: true
+          # The full transcript, tool results included, prints only when debug logging is on (a
+          # re-run with debug logging, or the ACTIONS_STEP_DEBUG secret or variable, which must
+          # never be set repository-wide), because this repository's Actions logs are public. The
+          # next step prints the counts that show whether the review finished. Never enable it in
+          # claude.yml.
+          show_full_output: ${{ runner.debug == '1' }}
+      - name: Check that the review finished
+        # Counts only, no transcript. A subagent started in the background, or one that never
+        # reported back, means the action stopped reading before the review ended, so the job fails
+        # instead of passing with nothing posted. Skipped when the action ran nothing, for example
+        # on a pull request that changes this workflow.
+        if: always() && steps.review.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
+        run: |
+          set -o pipefail
+          jq -r '
+            (map(select(.type == "result")) | last) as $r
+            | ($r.subagent_stats // {spawned: 0, started_in_background: 0, completed: 0, failed: 0}) as $s
+            | if $r == null then "::error::The review produced no result message."
+              else
+                "Turns \($r.num_turns), \((($r.duration_ms // 0) / 1000) | floor) s, $\($r.total_cost_usd).",
+                "Subagents: \($s | {spawned, requested, started_in_background, completed, failed} | tojson)",
+                "Permission denials: \([$r.permission_denials[]?.tool_name] | group_by(.) | map("\(.[0]) x\(length)") | join(", ") | if . == "" then "none" else . end)",
+                (if $s.started_in_background > 0 or ($s.completed + $s.failed) < $s.spawned
+                 then "::error::Subagents ran in the background or never reported back; the review was cut short."
+                 else empty end)
+              end' "$EXECUTION_FILE" | tee "$RUNNER_TEMP/review-summary.txt"
+          ! grep -q '^::error::' "$RUNNER_TEMP/review-summary.txt"
