@@ -277,12 +277,23 @@ describe("databases", () => {
   });
 
   test("(C6b) managed endpoints need the direct port and the tarubot application user", () => {
+    // Production runs on Linode managed PostgreSQL (direct port 27520) since 2026-09-24.
+    expect(
+      assertToolScope(
+        productionEnv({ DATABASE_URL: managedUrl("tarubot", MANAGED, "tarubot", 27520) }),
+        scope.migrate,
+        direct,
+      ).name,
+    ).toBe("production");
     for (const [url, fragment] of [
-      [managedUrl("tarubot", MANAGED, "tarubot", 25061), "direct port 25060"],
-      [`postgresql://tarubot:${PASSWORD}@${MANAGED}/tarubot`, "direct port 25060"],
-      [managedUrl("tarubot", MANAGED, "doadmin"), "not doadmin"],
+      [managedUrl("tarubot", MANAGED, "tarubot", 25061), "direct port (27520 or 25060)"],
+      [`postgresql://tarubot:${PASSWORD}@${MANAGED}/tarubot`, "direct port (27520 or 25060)"],
+      [managedUrl("tarubot", MANAGED, "doadmin"), "not an administrator"],
+      // Linode's administrator login and its connection-pool port are refused the same way.
+      [managedUrl("tarubot", MANAGED, "akmadmin"), "not an administrator"],
+      [managedUrl("tarubot", MANAGED, "tarubot", 27521), "direct port (27520 or 25060)"],
       [managedUrl("tarubot", MANAGED, "someone"), "tarubot user"],
-      [`postgresql://${MANAGED}:25060/tarubot`, "not doadmin"],
+      [`postgresql://${MANAGED}:25060/tarubot`, "not an administrator"],
     ] as const)
       refused(
         () => assertToolScope(productionEnv({ DATABASE_URL: url }), scope.migrate, direct),
@@ -309,7 +320,7 @@ describe("databases", () => {
           scope.migrate,
           direct,
         ),
-      "not doadmin",
+      "not an administrator",
     );
   });
 
@@ -439,7 +450,7 @@ describe("databases", () => {
       [managedUrl("tarubot"), "different database"],
       [managedUrl("tarubot_restore_test"), "tarubot_restore on the primary's host"],
       [managedUrl("tarubot_restore", FORK), "tarubot on a PITR fork"],
-      [managedUrl("tarubot", FORK, "doadmin"), "not doadmin"],
+      [managedUrl("tarubot", FORK, "doadmin"), "not an administrator"],
       [localUrl("tarubot_restore"), "is local"],
     ] as const)
       refused(() => assertToolScope(production(restore), scope.restore, direct), fragment);
@@ -624,8 +635,9 @@ describe("templates", () => {
     expect(env.DATABASE_URL).toContain("REPLACE_WITH_");
     expect(env.DATABASE_CA_CERT).toStartWith("-----BEGIN CERTIFICATE-----\nREPLACE_WITH_");
     expect(env.DATABASE_CA_CERT).toEndWith("\n-----END CERTIFICATE-----");
+    // Production's Linode cluster, on its direct port rather than the 27521 pool.
     expect(databaseIdentity(env.DATABASE_URL ?? "")).toMatchObject({
-      port: 25060,
+      port: 27520,
       name: "tarubot",
       user: "tarubot",
     });

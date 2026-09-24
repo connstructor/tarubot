@@ -1,5 +1,7 @@
 # Legacy import and production cutover (App Platform + Managed PostgreSQL)
 
+> **Done 2026-09-24.** The cutover ran as written below and went live on App Platform at 22:02 UTC. Production then moved the same evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. See [the record](#record-of-the-2026-09-24-cutover). Operate production with [HOSTING.md](HOSTING.md). This runbook remains the record of the procedure. Its App Platform and `doadmin` steps describe the original target.
+
 This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14**, the "Approved launch amendments (2026-09-23)", and the "Approved reply-session amendments (2026-09-24)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [OPERATIONS.md](OPERATIONS.md#single-database-writer).
 
 2.13.0 supplies the launch policy and the cutover tooling used below. **The cutover itself uses a published release at or above 2.16.0**: 2.14.0 replaces every JSON reply with the approved embeds, 2.15.0 ships the owner's reply-session decisions of 2026-09-24 (among them the guest-application switch this runbook relies on, the `unset_*` option names and `/officer reset` and `/guest reset`, with migration `006_guest_application_switch.sql`), and 2.16.0 adds the deployment safeguards: a migration guard that refuses pending migrations while a bot holds the writer lease, a schema re-check once a bot holds the lease, and the stale card for undeclared command shapes. Operational telemetry and officer alerts (OPS-10, OPS-11) follow in 2.17.0, after launch. `X.Y.Z` below is that release.
@@ -121,7 +123,7 @@ Do not use `docker-compose.tools.yml`: it would recreate DevBot's default-projec
    ```
 
    Every schema-changing or writing tool connects as `tarubot`; tables created by `doadmin` would be unusable by the app.
-4. **Trusted sources and CA.** Add the operator's IP as a trusted source before the app exists, then confirm the `app:` rule after creating it. Save the cluster CA as `work/ca-certificate.crt` and in both env files.
+4. **Trusted sources and CA.** Add the operator's IP as a trusted source before the app exists. Right after creating the app, add its `app:` rule, because App Platform does not add it by itself, then confirm the rule. Save the cluster CA as `work/ca-certificate.crt` and in both env files.
 5. **Foundation app.** Create the app from the worker-free `foundation` phase ([APP_PLATFORM.md](APP_PLATFORM.md#creating-the-app-without-a-writer)). Its pre-deploy job proves the binding, TLS, and grants. Expect `Schema ready.` in the job log, and check that `pg psql -d tarubot -At -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1" -c "SELECT count(*) FROM guilds"` prints the release's `SCHEMA_VERSION` and `0`.
 6. **Read-only production inspection** (authorized pre-window token use). Take a read-only dump of the live legacy database, `mysqldump --single-transaction --default-character-set=utf8mb4 LEGACY_DATABASE > work/legacy-rehearsal.sql`, and record its checksum. Then run these REST-only reads:
 
@@ -250,3 +252,40 @@ jq -n --slurpfile before work/discord-snapshot.json --slurpfile after work/role-
 Take the role IDs from `SELECT member_role_id, guest_role_id, officer_role_id, leader_role_id FROM guilds`. Officers resolve each difference explicitly through the commands above, never by hand-editing managed roles.
 
 Re-importing the legacy opening snapshot is never a post-activation recovery mechanism. Keep the dumps, snapshots, reports, and backups as immutable inputs. See [OPERATIONS.md](OPERATIONS.md) for backups, restore checks, and retries.
+
+## Record of the 2026-09-24 cutover
+
+The cutover ran with release 2.16.0 (merge `c812d4d`). The operator's evidence log and every artifact, with its checksum, are in `~/tarubot-cutover/work/`.
+
+- **Preparation (21:10–21:48 UTC).**
+  - The owner created cluster `tarubot-pg` (PostgreSQL 18.6, nyc3).
+  - The foundation app came up at 21:18, with migrations 001–006 applied under the migration guard's lease line.
+  - **App Platform did not add an `app:` trusted-source rule by itself.** The first pre-deploy migration timed out until the owner added the rule. E1 step 4 and [APP_PLATFORM.md](APP_PLATFORM.md) now say to add the rule explicitly.
+  - The E1 inspection found the bot in two other guilds and @Officers holding Manage Server and Manage Roles. The owner removed both before the rehearsal.
+  - The E2 rehearsal imported the rehearsal dump in 208 s, acquired 105 roster members twice, previewed 3 role changes and 2 planned grandfathered grants, and verified a restore at `006`.
+- **Window (21:50–22:02 UTC).**
+  - The legacy bot was already offline, with its token reset.
+  - W4 dumped the legacy database. The dump matched the direct counts: FC 40, characters 4,251, members 241, guild 1, links 161.
+  - W7 imported it in 206 s, with the launch defaults and the guest-application switch off on the legacy channel.
+  - W9 previewed plan `aaef7f2f…` with the same three role changes as the rehearsal: Bukidai Sagahl and Oydela Seoel from Member to Guest (grandfathered), and Arvin Daliseas from Guest to Member.
+  - W10 took `pre-activation.dump` and set `T_pre` to 21:59:59.
+  - W11 activated at 22:00:39, granting 2. Late joiners were unavailable because the member list was incomplete.
+  - W12 registered 19 roots and 43 paths globally, and the read-back was clean.
+  - W13's worker took the writer lease and was ready at 22:02.
+- **The move to Linode (22:38–22:40 UTC).**
+  - Every profile refresh failed. From App Platform the Lodestone answered **HTTP 403 in 4–41 ms**, an edge block of DigitalOcean's addresses, while other networks got 200.
+  - The owner chose a Linode Docker host with Linode managed PostgreSQL ([HOSTING.md](HOSTING.md)) over proxying.
+  - The move took four steps:
+    1. The App Platform maintenance phase stopped the worker; the DigitalOcean database showed no lease holder and no connections.
+    2. `pg_dump` took 4 s and `pg_restore` into Linode 6 s.
+    3. `check-restore.js` verified 26 tables at `006` across the two providers.
+    4. `docker compose -f docker-compose.production.yml up` became healthy at 22:39:56.
+  - Downtime was about 90 seconds. The first profile burst after the move hit Lodestone rate limits, and retries caught up.
+- **Left open:**
+  - W14 smoke checks and W15 officer configuration;
+  - the late-joiner check (`preview.js --late-joiners`);
+  - a retry of the profile jobs that failed on DigitalOcean;
+  - the DigitalOcean app, cluster and trusted-source cleanup;
+  - rotating the legacy MariaDB login.
+
+  [OPEN_ITEMS.md](OPEN_ITEMS.md) tracks them.

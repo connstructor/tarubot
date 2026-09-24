@@ -1,5 +1,7 @@
 # DigitalOcean App Platform
 
+> **Superseded 2026-09-24.** Production ran here only briefly. The Lodestone refuses DigitalOcean's addresses (HTTP 403), so Nodestone could not refresh profiles, and production moved the same evening to a Linode Docker host with Linode managed PostgreSQL. See [HOSTING.md](HOSTING.md). This page, `.do/app.yaml` and `scripts/app-spec.ts` stay as the record, and as a fallback if the block is lifted. Keeping them validated in CI costs nothing.
+
 [`.do/app.yaml`](../.do/app.yaml) is the production spec. It **attaches the owner-provisioned DigitalOcean Managed PostgreSQL cluster `tarubot-pg`** (PostgreSQL 18, database and user `tarubot`) with `production: true`. App Platform neither creates nor resizes that cluster, and the spec runs no PostgreSQL container.
 
 Never create the app from the file directly. [`scripts/app-spec.ts`](../scripts/app-spec.ts) derives the reviewed deployment phases below, so that no phase can start an unintended bot writer or detach the cluster. Provisioning the cluster, creating or updating the app, and changing trusted sources are separately authorized owner actions. Generating or validating a spec authorizes none of them.
@@ -13,7 +15,7 @@ Never create the app from the file directly. [`scripts/app-spec.ts`](../scripts/
 | `migrate` | Pre-deploy job, 512 MB | Applies numbered SQL migrations up to the image's `SCHEMA_VERSION`, using the same bot image |
 | `db` | Existing Managed PostgreSQL 18 cluster `tarubot-pg`, database and user `tarubot` | Persistent application state, attached rather than created |
 
-All application components use matching **2.16.0** GHCR images; wait for their checked merge and publication before deploying the template. The production cutover itself uses a published release at or above 2.16.0 ([MIGRATION.md](MIGRATION.md)). The images include the Linux AMD64 support App Platform requires. GHCR does not support App Platform image-push autodeploy, so update the image reference explicitly. Immutable digests may replace tags after publication; keep the bot and migration references identical.
+All application components use matching **2.16.1** GHCR images; wait for their checked merge and publication before deploying the template. The production cutover itself uses a published release at or above 2.16.0 ([MIGRATION.md](MIGRATION.md)). The images include the Linux AMD64 support App Platform requires. GHCR does not support App Platform image-push autodeploy, so update the image reference explicitly. Immutable digests may replace tags after publication; keep the bot and migration references identical.
 
 Nodestone has `internal_ports: [8080]`, no `http_port`, and no ingress route. The worker reaches it at `http://nodestone:8080`. Only the worker receives the Discord token; only the worker and migration job receive database connection variables. The worker's liveness probe uses port 3000 and `/health/live`; readiness remains available inside its console at `/health/ready`. Both processes have a 30-second termination grace period.
 
@@ -42,7 +44,7 @@ The worker commits these non-secret settings:
    ```
 
    `ALTER DATABASE tarubot OWNER TO tarubot` is an alternative where `doadmin` may run it. Every schema-changing or writing tool connects as `tarubot`: `doadmin` is not a superuser, so tables it created would be unusable by the app. The managed-privileges integration test proves that every migration runs with exactly these grants.
-4. **Trusted sources.** Add the operator's current IP first, with `doctl databases firewalls append CLUSTER_ID --rule ip_addr:IP`. That turns the restriction on, so App Platform adds the app automatically when it is created. After creating the app, `doctl databases firewalls list CLUSTER_ID` must show an `app:APP_ID` rule; without it the pre-deploy migration cannot connect. Remove the IP rule after each maintenance window unless the owner keeps a narrow rule for exports.
+4. **Trusted sources.** Add the operator's current IP first, with `doctl databases firewalls append CLUSTER_ID --rule ip_addr:IP`. That turns the restriction on. **App Platform does not add the app by itself** (seen at the 2026-09-24 cutover), so right after creating the app, add it with `doctl databases firewalls append CLUSTER_ID --rule app:APP_ID`, then confirm it with `doctl databases firewalls list CLUSTER_ID`. Without it, the pre-deploy migration times out connecting. Remove the IP rule after each maintenance window unless the owner keeps a narrow rule for exports.
 5. **CA certificate.** Download the CA from the control panel ("Download CA certificate"), or decode the base64 from `doctl databases get-ca CLUSTER_ID -o json`. Keep it outside Git. Local tools take it through `DATABASE_CA_CERT`.
 
 ## Database binding and TLS

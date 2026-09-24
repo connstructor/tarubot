@@ -1,20 +1,20 @@
 {
-  "title": "Session: 2.16.0 cutover safeguards",
-  "objective": "Validate 2.16.0 on DevBot before the production cutover (MIGRATION.md E1): the bot starts on schema 006, checks the schema again once it holds the writer lease, a migration run beside the running bot changes nothing, and everyday commands answer as before. No migration and no command change.",
+  "title": "Session: 2.16.1 Linode hosting",
+  "objective": "Bring the repository in line with where production runs since 2026-09-24: a Linode Docker host with Linode managed PostgreSQL. 2.16.1 changes no bot behavior. It adds the production Compose file and lets the production tools reach the Linode cluster, so the post-cutover retries and the late-joiner check can run. No migration and no command change.",
   "user": [
-    "Approve the rollout, then run `/version`: 2.16.0, linked to deconfined/tarubot.",
-    "Run `/config show`, `/characters`, `/ledger balance` and `/sync status` as usual; each answers as it did on 2.15.",
-    "If a card ever says \"This command is from a different version of TaruBot\", note the command and when."
+    "Approve the rollout, then run `/version`: 2.16.1, linked to deconfined/tarubot.",
+    "Run `/config show`, `/characters` and `/sync status` as usual; each answers as it did on 2.16.0.",
+    "In Woven Souls, finish W14 and W15 when convenient: the smoke checks, then `/config officer_rank`, then `/config roles officer … adopt_holders:false`."
   ],
   "assistant": [
-    "Roll out with the owner's go-ahead: stop, back up, check the restore at 006, then deploy 2.16.0 (no migration, no re-registration).",
-    "With DevBot running, run `migrate.js`: nothing is pending, so it prints `Schema ready.` without touching the writer lease.",
-    "Check readiness and `writerLease`, one lease holder, and no warn or error lines: the log shows the lease acquired, then `TaruBot ready`.",
-    "Record the rollout and the smoke test in docs/DEV_GUILD.md as E1's DevBot validation of 2.16.0."
+    "Roll DevBot out with the owner's go-ahead: stop, back up, check the restore at 006, deploy 2.16.1 (no migration, no re-registration).",
+    "On the production host: `git pull`, pin `TARUBOT_IMAGE_TAG=2.16.1`, then `up -d --wait`; check readiness and one lease holder.",
+    "From the operator clone, run `preview.js --late-joiners` and retry the failed profile jobs.",
+    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.16.0 on schema 006, and check the schema again after taking the writer lease.",
-    "Answer any subcommand or option this release doesn't declare with the stale card, and suggest nothing for it.",
+    "Run compiled 2.16.1 on schema 006, unchanged from 2.16.0.",
+    "Keep answering undeclared command shapes with the stale card.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)" and "Approved reply-session amendments (2026-09-24)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", and "Approved hosting amendment (2026-09-24)".
 
 ## Project map
 
@@ -76,7 +76,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 
 ## Production and cutover
 
-- Production is App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`). The app is created from the worker-free `foundation` phase (`scripts/app-spec.ts`); the worker arrives only at activation. See docs/APP_PLATFORM.md.
+- Production went live on 2026-09-24. Since that evening it runs on the Linode Docker host `tarubot@tarubot.deconfined.com` (`~/tarubot`, `docker-compose.production.yml`, a mode-600 `.env`), attached to Linode managed PostgreSQL `tarubot-pgsql` (database and user `tarubot`, direct port 27520, never the 27521 pool). See docs/HOSTING.md. App Platform (docs/APP_PLATFORM.md, `.do/app.yaml`) is superseded because the Lodestone returns 403 to DigitalOcean's addresses. It is kept validated as the record and as a fallback.
 - Production tools never run from this checkout or its `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file="$HOME/tarubot-cutover/production.env" dist/scripts/<tool>.js`, never `bun run`. The file is a copy of `production.env.example`. Before the window, token use is limited to read-only REST inspection and rehearsal logins against `tarubot_rehearsal`, under `TARUBOT_ENVIRONMENT=rehearsal`, which the guard keeps read-only on Discord. See docs/MIGRATION.md E0–E2.
 - The production application `965294750741692416` must not be installed in the dev guild; the owner removes it before cutover.
 - Production registers commands only with `register.js --global`; the guard refuses a production `--guild` registration, which would show every command twice.
@@ -87,7 +87,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover uses a published release ≥ 2.16.0 (2.14.0 adds the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). OPS-10/OPS-11 (telemetry and officer alerts) follow in 2.17.0, after launch.
+  - the cutover used release 2.16.0 (2.14.0 adds the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). OPS-10/OPS-11 (telemetry and officer alerts) follow in 2.17.0, after launch.
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas

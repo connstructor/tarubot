@@ -232,8 +232,16 @@ export function restoreCertificate(env: Environment): string | undefined {
     : env.DATABASE_CA_CERT;
 }
 
-/** The managed cluster's direct (session) port; the 25061 pool breaks session advisory locks. */
-export const MANAGED_DIRECT_PORT = 25060;
+/**
+ * Managed clusters' direct (session) ports. Their connection pools (27521, 25061) run in transaction
+ * mode, which breaks session advisory locks and the writer lease. Production has used Linode managed
+ * PostgreSQL (27520) since 2026-09-24, when the Lodestone was found to refuse DigitalOcean; 25060
+ * keeps the former DigitalOcean cluster usable as a fallback or restore source until it is deleted.
+ */
+export const MANAGED_DIRECT_PORTS: readonly number[] = [27520, 25060];
+
+/** The providers' administrator logins (Linode, DigitalOcean); tools connect as the application user. */
+export const MANAGED_ADMIN_USERS: readonly string[] = ["akmadmin", "doadmin"];
 
 /** A --env-file (or --no-env-file) flag means Bun did not auto-load the working directory's files. */
 const envFileFlag = (argument: string): boolean =>
@@ -362,10 +370,14 @@ function checkDatabase(
   /** Managed clusters: verified TLS, the direct port and an application user. */
   const managed = () => {
     if (!present(ca)) throw refuse(`${caSetting} must hold the managed cluster's CA certificate.`);
-    if (target.port !== MANAGED_DIRECT_PORT)
-      throw refuse(`${where} must use the direct port ${MANAGED_DIRECT_PORT}, not a pool.`);
-    if (!target.user || target.user === "doadmin")
-      throw refuse(`${where} must connect as the application user, not doadmin.`);
+    if (!MANAGED_DIRECT_PORTS.includes(target.port))
+      throw refuse(
+        `${where} must use a managed cluster's direct port (${MANAGED_DIRECT_PORTS.join(" or ")}), not a pool.`,
+      );
+    if (!target.user || MANAGED_ADMIN_USERS.includes(target.user))
+      throw refuse(
+        `${where} must connect as the application user, not an administrator (${MANAGED_ADMIN_USERS.join(", ")}).`,
+      );
   };
 
   // A restore check compares two databases, so the restore target is never the primary itself.

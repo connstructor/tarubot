@@ -21,6 +21,15 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.16.1** (production on the Linode Docker host) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.16.1 above 2.16.0). New cases:
+- the production tool profile accepts the Linode cluster's direct port 27520, and refuses its 27521 pool and the `akmadmin` login, as it refuses 25061 and `doadmin`;
+- `production.env.example` loads as a passing production env on port 27520;
+- `docker-compose.production.yml` runs only `nodestone` and `tarubot`, requires the release tag and never defaults to `latest`, requires the database, CA and token, fixes production scoping with effects on, bounds logs, restarts unless stopped, and carries every setting the registry `docker-compose.yml` passes.
+
+CI also validates the production file with placeholder values. `bun run test:unit` passed **1,108 tests** and `bun run test:contract` **18**. The full container run passed **1,217 tests / 36,808 assertions** with no failures (1,108 unit, 18 contract and 91 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+**Production evidence (2026-09-24).** The cutover and the move to Linode are recorded in [MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover): `check-restore.js` verified 26 tables at `006` between the DigitalOcean and Linode clusters, and readiness returned 200 on the Linode host.
+
 **2.16.0** (the deployment safeguards) passed strict type checking, lint, formatting and the build. New cases:
 - every discovered command path (43) fits its own declared shape, and shapes another release could send are refused;
 - the router never runs a handler for an undeclared subcommand, option or option type, answers with the stale card, and gives autocomplete no suggestions;
