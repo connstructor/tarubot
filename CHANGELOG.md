@@ -22,7 +22,7 @@ The production cutover ran on 2026-09-24 with 2.16.0 and went live on App Platfo
   - APP_PLATFORM.md is marked superseded, with its trusted-source step corrected: App Platform did not add the app's `app:` rule by itself, and the first pre-deploy migration timed out until it was added;
   - REQUIREMENTS.md: the owner's "Approved hosting amendment";
   - CLAUDE.md, README.md and OPERATIONS.md now point at the host;
-  - SESSION_HANDOFF.md, OPEN_ITEMS.md and DEV_GUILD.md record the 2.16.0 rollout, the cutover and the post-cutover backlog. That backlog includes the Lodestone retry storm found after the move, proposed for 2.17.0.
+  - SESSION_HANDOFF.md, OPEN_ITEMS.md and DEV_GUILD.md record the 2.16.0 rollout, the cutover and the post-cutover backlog. That backlog includes the Lodestone retry storm found after the move, which 2.17.0 is to fix. The owner approved the order, 2.17.0 hardening before the 2.18.0 issue reporter, and a two-404 rule before a deleted character is unlinked.
 
 ## 2.16.0 — Deployment safeguards for the cutover
 
