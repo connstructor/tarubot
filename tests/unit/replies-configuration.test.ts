@@ -329,7 +329,7 @@ describe("approved cards are reproduced exactly", () => {
       color: 0x57f287,
       title: "Officer access granted",
       description:
-        "<@423456789012345678> now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke.",
+        "<@423456789012345678> now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke or /officer reset.",
       fields: [
         { name: "Member", value: "<@423456789012345678>", inline: true },
         { name: "Discord role", value: "Assignment queued", inline: true },

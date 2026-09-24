@@ -193,9 +193,11 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   ],
   "guest grant": ["/guest grant member:123456789012345678 reason:Friend of the FC"],
   "guest revoke": ["/guest revoke member:123456789012345678 reason:Left the community"],
+  "guest reset": ["/guest reset member:123456789012345678 reason:Back to the automatic rules"],
   "guest status": ["/guest status member:123456789012345678"],
   "officer grant": ["/officer grant member:123456789012345678 reason:New FC officer"],
   "officer revoke": ["/officer revoke member:123456789012345678 reason:Stepped down"],
+  "officer reset": ["/officer reset member:123456789012345678 reason:Back to the in-game rank"],
   "config officer_rank": [
     "/config officer_rank rank:Officer",
     "/config officer_rank unset_rank:true",

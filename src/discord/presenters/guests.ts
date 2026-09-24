@@ -27,6 +27,7 @@ import type {
   DecisionResult,
   EffectsMode,
   GuestActionResult,
+  GuestResetResult,
   GuestStatusView,
   JobView,
 } from "../../application/results.js";
@@ -60,7 +61,7 @@ import {
   type Presented,
   type ReplySpec,
 } from "./reply.js";
-import { DISCORD_LIMITS, HOUSE_LIMITS, type Tone } from "./style.js";
+import { DISCORD_LIMITS, HOUSE_LIMITS, marker, type Tone } from "./style.js";
 
 /**
  * Every guest reply kind, with whether its embed carries a timestamp: the approved card's
@@ -87,6 +88,9 @@ const TIMESTAMP = {
   "grant.no_role": false,
   "revoke.revoked": false,
   "action.paused": false,
+  "reset.reset": false,
+  "reset.unchanged": false,
+  "reset.paused": false,
   "decision.approved": false,
   "decision.denied": false,
   "decision.cancelled": false,
@@ -794,7 +798,7 @@ function officerStatus(
         `${officerBasis(status, basis)}${attention}`,
       ],
       fields: fields.filter((field): field is FieldSpec => Boolean(field)),
-      footer: ["Officer view", "Grants last until /guest revoke"],
+      footer: ["Officer view", "Grants last until /guest revoke or /guest reset"],
       buttons: [detailsButton({ action: "guest", userId: owner })],
     },
     options,
@@ -918,6 +922,81 @@ export function guestActionReply(
       description,
       fields: [memberField, { name: "Role update", value: roleUpdate, inline: true }, reasonField],
       footer,
+    },
+    options,
+  );
+}
+
+/**
+ * /guest reset (owner decision, 2026-09-24): the revocation lifted and every grant ended, so FC
+ * membership and registered characters decide Guest again. Success like every committed removal;
+ * nothing to remove is the info '= NO CHANGE' card, and paused effects give the paused-save card.
+ * The Removed field names what went, by the same provenance labels /guest status uses.
+ */
+export function guestResetReply(
+  result: GuestResetResult,
+  viewer: Viewer,
+  options: GuestReplyOptions = {},
+): Presented {
+  const who = mentionUser(result.user);
+  const memberField: FieldSpec = {
+    name: "Member",
+    value: member(result.user, viewer, "stacked"),
+    inline: true,
+  };
+  const reasonField: FieldSpec = {
+    name: "Reason",
+    value: plain(result.reason, HOUSE_LIMITS.userText),
+  };
+  if (result.status === "unchanged")
+    return card(
+      "reset.unchanged",
+      {
+        tone: "info",
+        title: "No Guest overrides to remove",
+        description: `${marker("unchanged")} ${who} has no Guest revocation or grant, so FC membership and registered characters already decide.`,
+        fields: [memberField],
+      },
+      options,
+    );
+  const removed = [
+    result.revocationLifted && "Revocation lifted",
+    ...result.grantsEnded.map((provenance) => `Grant ended: ${grantProvenance(provenance)}`),
+  ].filter((line): line is string => Boolean(line));
+  const saved = `${who}'s Guest overrides are removed. FC membership and registered characters now decide their Guest access.`;
+  const removedField: FieldSpec = { name: "Removed", value: removed.join("\n") };
+  if (paused(result.effectsMode)) {
+    const held = pausedSave(result.effectsMode, viewer);
+    return card(
+      "reset.paused",
+      {
+        tone: held.tone,
+        title: held.title,
+        description: `${saved} ${held.sentence}`,
+        fields: [...held.fields, memberField, removedField, reasonField],
+        footer: held.footer,
+      },
+      options,
+    );
+  }
+  const roleUpdate = !result.present
+    ? "Applies if they rejoin"
+    : result.guestRoleConfigured
+      ? "Queued"
+      : "No Guest role is set";
+  return card(
+    "reset.reset",
+    {
+      tone: "success",
+      title: "Guest access reset",
+      description: saved,
+      fields: [
+        memberField,
+        { name: "Role update", value: roleUpdate, inline: true },
+        removedField,
+        reasonField,
+      ],
+      footer: ["Audited as guest.reset", "Ended grants stay in the history"],
     },
     options,
   );

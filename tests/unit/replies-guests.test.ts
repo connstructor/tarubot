@@ -129,7 +129,7 @@ describe("approved cards are reproduced exactly", () => {
           ].join("\n"),
         },
       ],
-      footer: { text: "Officer view · Grants last until /guest revoke" },
+      footer: { text: "Officer view · Grants last until /guest revoke or /guest reset" },
       timestamp: NOW.toISOString(),
     });
     expect(buttonsOf(presented)).toEqual([

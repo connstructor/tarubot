@@ -53,6 +53,7 @@ import {
   CONFIG_RESULTS as C,
   configChange,
   OVERRIDE_USER,
+  officerReset,
   override,
   ROLE,
 } from "../fixtures/replies/configuration.js";
@@ -61,6 +62,7 @@ import {
   APPLICATION_ID,
   decision,
   GUEST_RESULTS as G,
+  guestReset,
 } from "../fixtures/replies/guests.js";
 import { ENTRY_IDS, LEDGER_RESULTS as L } from "../fixtures/replies/ledger.js";
 import { refreshed, RUN_ID, SYNC_RESULTS as SR } from "../fixtures/replies/sync-utility.js";
@@ -116,6 +118,7 @@ function stubService(results: Readonly<Record<string, unknown>>) {
     "configureOfficerRank",
     "configureRoleLayout",
     "configureGuestApplications",
+    "guestReset",
   ] as const)
     Object.assign(app, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
@@ -579,6 +582,15 @@ const GUEST_SYNC_PATHS: readonly {
     call: ["guestAction", "400", GUEST_ID, true, "Disruptive", INTERACTION_ID],
   },
   {
+    // reset removes every override (owner decision, 2026-09-24).
+    command: guestCommand,
+    options: [subcommand("reset", [text("member", GUEST_ID), text("reason", "Settled")])],
+    actor: OFFICER,
+    results: { guestReset: guestReset() },
+    title: "Guest access reset",
+    call: ["guestReset", "400", GUEST_ID, "Settled"],
+  },
+  {
     command: guestCommand,
     options: [subcommand("approve", [text("application", APPLICATION_ID)])],
     actor: OFFICER,
@@ -712,7 +724,7 @@ function stubAdministration(
 ): RoleAdministration {
   const admin: unknown = Object.create(RoleAdministration.prototype);
   if (!(admin instanceof RoleAdministration)) throw new Error("Invalid administration fixture");
-  for (const method of ["setup", "officer"] as const)
+  for (const method of ["setup", "officer", "officerReset"] as const)
     Object.assign(admin, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
         calls.push([method, actor.userId, ...args]);
@@ -974,6 +986,16 @@ const CONFIG_PATHS: readonly {
     title: "Officer access revoked",
     call: ["officer", "400", OVERRIDE_USER, false, "Stepped down"],
   },
+  {
+    command: officerCommand,
+    options: [
+      subcommand("reset", [text("member", OVERRIDE_USER), text("reason", "Back to the rank")]),
+    ],
+    actor: MANAGER,
+    results: { officerReset: officerReset() },
+    title: "Officer override removed",
+    call: ["officerReset", "400", OVERRIDE_USER, "Back to the rank"],
+  },
 ];
 
 test("every configuration, setup and officer command returns its presenter's one embed", async () => {
@@ -1103,7 +1125,8 @@ test("the path tables return one embed for every registered command path", async
     ),
   );
   const paths = await registeredPaths();
-  expect(paths).toHaveLength(41);
+  // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24).
+  expect(paths).toHaveLength(43);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
   // and /version reads GitHub, which version.test stubs; every other path is exercised above.
   expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "version"]);

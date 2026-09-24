@@ -1723,10 +1723,87 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(false);
     const revoked = await rankAccess(db, configured, "90032", 21600);
     expect(desiredRankRole(revoked.officer, true, true)).toBe(false);
+    // /officer reset removes the revoke, so the in-game rank decides again; a second reset has
+    // nothing to remove (owner decision, 2026-09-24).
+    expect(await administration.officerReset(manager, "90032", "Rank decides")).toMatchObject({
+      status: "reset",
+      previous: "revoked",
+      rankConfigured: true,
+    });
+    expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(true);
+    expect(await administration.officerReset(manager, "90032", "Again")).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      previous: null,
+    });
+    await expect(
+      administration.officerReset({ ...manager, serverManager: false }, "90032", "Not allowed"),
+    ).rejects.toMatchObject({ code: "forbidden" });
     await service.configureOfficerRank(manager, null);
     expect((await rankAccess(db, await service.guild(manager), "90030", 21600)).manualOfficer).toBe(
       true,
     );
+  });
+
+  test("/guest reset lifts the revoke and ends every grant, keeping them as history (2026-09-24)", async () => {
+    const user = "90095";
+    await service.guestAction(actor, user, false, "Manual fixture", randomUUID());
+    await db.orm.insert(t.guestGrants).values({
+      guild_id: guild,
+      user_id: user,
+      provenance: "imported_guest",
+      source_key: `import:reset-fixture:${user}`,
+    });
+    await service.guestAction(actor, user, true, "Revoke fixture", randomUUID());
+    expect(await service.guestReset(actor, user, "Back to the automatic rules")).toMatchObject({
+      status: "reset",
+      effects: "queued",
+      revocationLifted: true,
+      grantsEnded: ["imported_guest", "manual"],
+    });
+    // Both grant rows remain as history, ended by this officer with the reason.
+    expect(
+      await db.query<{ provenance: string; ended: boolean; by: string | null; why: string | null }>(
+        "SELECT provenance, ended_at IS NOT NULL AS ended, ended_by AS by, ended_reason AS why FROM guest_grants WHERE guild_id=$1 AND user_id=$2 ORDER BY provenance",
+        [guild, user],
+      ),
+    ).toEqual([
+      {
+        provenance: "imported_guest",
+        ended: true,
+        by: actor.userId,
+        why: "Back to the automatic rules",
+      },
+      { provenance: "manual", ended: true, by: actor.userId, why: "Back to the automatic rules" },
+    ]);
+    // Status and access see no grant and no revocation; the audit records what was removed.
+    const status = await service.guestStatus(actor, user);
+    expect(status.grants).toEqual([]);
+    expect(status.revocation.some((row) => row.revoked)).toBe(false);
+    expect(
+      (
+        await db.orm
+          .select({ details: t.auditEvents.details })
+          .from(t.auditEvents)
+          .where(and(eq(t.auditEvents.guild_id, guild), eq(t.auditEvents.action, "guest.reset")))
+      ).map((row) => row.details),
+    ).toContainEqual({
+      reason: "Back to the automatic rules",
+      revocationLifted: true,
+      grantsEnded: ["imported_guest", "manual"],
+    });
+    // Nothing left to remove; a later grant is a fresh, active one.
+    expect(await service.guestReset(actor, user, "Again")).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      revocationLifted: false,
+      grantsEnded: [],
+    });
+    await service.guestAction(actor, user, false, "Welcome back", randomUUID());
+    expect((await service.guestStatus(actor, user)).grants).toHaveLength(1);
+    await expect(
+      service.guestReset({ ...actor, officer: false, serverManager: false }, user, "No"),
+    ).rejects.toMatchObject({ code: "forbidden" });
   });
 
   test("a lost roster lease is an ownership change, not Lodestone degradation", async () => {

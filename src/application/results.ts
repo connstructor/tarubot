@@ -461,6 +461,24 @@ export interface OfficerOverrideResult {
   readonly previous: "granted" | "revoked" | null;
 }
 
+/**
+ * /officer reset (owner decision, 2026-09-24): the override removed, so the in-game rank decides
+ * again. 'unchanged' when there was none.
+ */
+export interface OfficerResetResult {
+  readonly status: "reset" | "unchanged";
+  /** 'recorded' means no Officer role is bound yet, so nothing is applied until one is. */
+  readonly effects: "queued" | "recorded" | "unchanged";
+  readonly effectsMode: EffectsMode;
+  readonly user: string;
+  readonly reason: string;
+  readonly present: boolean;
+  /** The override removed, or null when there was none. */
+  readonly previous: "granted" | "revoked" | null;
+  /** An in-game officer rank is configured, so it decides now; otherwise nobody gets officer. */
+  readonly rankConfigured: boolean;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Guests
 
@@ -519,6 +537,24 @@ export interface GuestActionResult {
   readonly restored: boolean;
   /** Pending applications a revocation cancelled. */
   readonly cancelledApplications: number;
+  readonly present: boolean;
+  readonly guestRoleConfigured: boolean;
+}
+
+/**
+ * /guest reset (owner decision, 2026-09-24): the revocation lifted and every active grant ended, so
+ * FC membership and registered characters decide Guest again. 'unchanged' when there was neither.
+ */
+export interface GuestResetResult {
+  readonly status: "reset" | "unchanged";
+  readonly effects: "queued" | "unchanged";
+  readonly effectsMode: EffectsMode;
+  readonly user: string;
+  readonly reason: string;
+  /** A revocation was lifted. */
+  readonly revocationLifted: boolean;
+  /** The provenance of each grant ended ('approved', 'manual', 'imported_guest', 'grandfathered'). */
+  readonly grantsEnded: readonly string[];
   readonly present: boolean;
   readonly guestRoleConfigured: boolean;
 }

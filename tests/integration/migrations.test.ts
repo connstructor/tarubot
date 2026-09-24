@@ -158,21 +158,20 @@ describe.skipIf(!url)("migration 005 launch access policy", () => {
       expect(definitions.rows).toHaveLength(1);
       expect(definitions.rows[0]?.definition).toContain("'grandfathered'");
 
-      // Grandfathered grants are accepted; unknown provenances are still refused.
-      await store.insert(t.guestGrants).values({
-        guild_id: guild.pending,
-        user_id: user.visitor,
-        provenance: "grandfathered",
-        source_key: `grandfather:${guild.pending}:${user.visitor}`,
-      });
-      await checkViolation(client, () =>
-        store.insert(t.guestGrants).values({
-          guild_id: guild.pending,
-          user_id: user.visitor,
-          provenance: "bogus",
-          source_key: `bogus:${guild.pending}:${user.visitor}`,
-        }),
-      );
+      // Grandfathered grants are accepted; unknown provenances are still refused. Plain SQL:
+      // Drizzle's insert names every mapped column, including those 006 adds. The driver error
+      // becomes the cause, as Drizzle's wrapper would carry it.
+      const grant = (provenance: string, key: string) =>
+        client
+          .query(
+            "INSERT INTO guest_grants (guild_id, user_id, provenance, source_key) VALUES ($1, $2, $3, $4)",
+            [guild.pending, user.visitor, provenance, key],
+          )
+          .catch((error: unknown) => {
+            throw new Error("Insert refused", { cause: error });
+          });
+      await grant("grandfathered", `grandfather:${guild.pending}:${user.visitor}`);
+      await checkViolation(client, () => grant("bogus", `bogus:${guild.pending}:${user.visitor}`));
       // The marker admits only pending/completed, and the timestamp exists exactly when completed.
       const pending = eq(t.guilds.id, guild.pending);
       await checkViolation(client, () =>
@@ -334,6 +333,16 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
                 ($4, NULL, NULL, NULL, true, 4)`,
         [guild.devbot, guild.pending, guild.activated, guild.dormant],
       );
+      // A schema-005 grant: /guest reset's new columns must leave it active.
+      await client.query("INSERT INTO users (id) VALUES ($1)", [user.manual]);
+      await client.query("INSERT INTO guild_users (guild_id, user_id) VALUES ($1, $2)", [
+        guild.devbot,
+        user.manual,
+      ]);
+      await client.query(
+        "INSERT INTO guest_grants (guild_id, user_id, provenance, source_key) VALUES ($1, $2, 'manual', 'manual:1')",
+        [guild.devbot, user.manual],
+      );
       const results: QueryResult[] = [await client.query(await migration(SWITCH))].flat();
       expect(
         results.filter((result) => result.command === "UPDATE").map((result) => result.rowCount),
@@ -355,6 +364,15 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
         { id: guild.activated, enabled: true, channel: "800003", revision: 9n },
         { id: guild.dormant, enabled: false, channel: null, revision: 4n },
       ]);
+      expect(
+        await store
+          .select({
+            ended: t.guestGrants.ended_at,
+            by: t.guestGrants.ended_by,
+            why: t.guestGrants.ended_reason,
+          })
+          .from(t.guestGrants),
+      ).toEqual([{ ended: null, by: null, why: null }]);
       // A guild created later takes the default: applications off until /setup or /config.
       await store.insert(t.guilds).values({ id: guild.disabled, effects_enabled: true });
       expect(

@@ -13,9 +13,20 @@
 --     created later start off; /setup turns applications on, and the importer keeps them off while
 --     storing the legacy review channel.
 -- The UPDATE does not change guilds.revision, so a guild such as DevBot keeps its configuration revision.
+--
+-- /guest reset (owner decision of 2026-09-24: "a third option that removes any override and goes back
+-- to membership/rank logic") ends a member's durable Guest grants of every provenance. A grant row is
+-- kept as history and marked ended rather than deleted: guest status, audits and a repeated import's
+-- source keys still see it, and only grants with ended_at NULL confer Guest. Existing grants stay
+-- active (the new columns are NULL).
 
 ALTER TABLE guilds ADD COLUMN guest_applications_enabled boolean NOT NULL DEFAULT false;
 
 UPDATE guilds SET guest_applications_enabled = true
  WHERE guest_application_channel_id IS NOT NULL
    AND guest_grandfather IS DISTINCT FROM 'pending';
+
+ALTER TABLE guest_grants
+  ADD COLUMN ended_at timestamptz,
+  ADD COLUMN ended_by external_id,
+  ADD COLUMN ended_reason text;

@@ -15,6 +15,7 @@ import type {
   GuestApplicationsResult,
   OfficerOverrideResult,
   OfficerRankResult,
+  OfficerResetResult,
   RoleLayoutResult,
   SetupResult,
 } from "../../../src/application/results.js";
@@ -25,6 +26,7 @@ import {
   healthReply,
   officerOverrideReply,
   officerRankReply,
+  officerResetReply,
   roleLayoutReply,
   setupReply,
   showReply,
@@ -271,6 +273,19 @@ export const override = (
   reason: "Runs FC events while the officer rank is vacant.",
   present: true,
   previous: null,
+  ...overrides,
+});
+
+/** An /officer reset result: a grant removed with the rank configured, unless overridden. */
+export const officerReset = (overrides: Partial<OfficerResetResult> = {}): OfficerResetResult => ({
+  status: "reset",
+  effects: "queued",
+  effectsMode: "live",
+  user: OVERRIDE_USER,
+  reason: "Back to the in-game rank now the vacancy is filled.",
+  present: true,
+  previous: "granted",
+  rankConfigured: true,
   ...overrides,
 });
 
@@ -1019,6 +1034,40 @@ export const CONFIG_CASES = {
     timestamp: false,
     render: () =>
       officerOverrideReply(override({ effectsMode: "deployment_disabled" }), VIEWERS.manager, {
+        now,
+      }),
+  },
+  "officer.reset": {
+    spec: null,
+    audience: "manager",
+    tone: "success",
+    title: "Officer override removed",
+    timestamp: true,
+    render: () => officerResetReply(officerReset(), VIEWERS.manager, { now }),
+  },
+  "officer.reset_unchanged": {
+    spec: null,
+    audience: "manager",
+    noOp: true,
+    tone: "info",
+    title: "No officer override to remove",
+    timestamp: false,
+    render: () =>
+      officerResetReply(
+        officerReset({ status: "unchanged", effects: "unchanged", previous: null }),
+        VIEWERS.manager,
+        { now },
+      ),
+  },
+  "officer.reset_paused": {
+    spec: "errors-and-style#26",
+    audience: "manager",
+    concept: "paused_save",
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    timestamp: false,
+    render: () =>
+      officerResetReply(officerReset({ effectsMode: "deployment_disabled" }), VIEWERS.manager, {
         now,
       }),
   },

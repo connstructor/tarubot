@@ -7,6 +7,7 @@ import {
   applicationChoice,
   decisionReply,
   guestActionReply,
+  guestResetReply,
   guestStatusReply,
 } from "../../discord/presenters/guests.js";
 import { userId, uuid } from "../../discord/selectors.js";
@@ -22,11 +23,15 @@ for (const name of ["approve", "deny"])
     if (name === "deny") sub.addStringOption(string("reason", "Decision reason"));
     return sub;
   });
-for (const name of ["grant", "revoke"])
+for (const name of ["grant", "revoke", "reset"])
   data.addSubcommand((sub) =>
     sub
       .setName(name)
-      .setDescription(`${name} durable guest access`)
+      .setDescription(
+        name === "reset"
+          ? "Remove the revoke and every grant; membership and characters decide again"
+          : `${name} durable guest access`,
+      )
       .addStringOption(string("member", "Member: pick a suggestion or paste a user ID", true, true))
       .addStringOption(string("reason", "Audited reason", true)),
   );
@@ -65,6 +70,12 @@ export default defineCommand({
       );
     const memberOption = options.getString("member");
     const owner = userId(memberOption ?? actor.userId, "member");
+    // reset removes every override (owner decision, 2026-09-24).
+    if (sub === "reset")
+      return guestResetReply(
+        await app.guestReset(actor, owner, options.getString("reason", true)),
+        viewer,
+      );
     if (sub === "grant" || sub === "revoke")
       return guestActionReply(
         await app.guestAction(

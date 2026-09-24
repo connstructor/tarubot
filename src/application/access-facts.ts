@@ -1,5 +1,5 @@
 /** Shared persisted eligibility facts for command decisions and Discord role reconciliation. */
-import { and, eq, exists, gt, sql } from "drizzle-orm";
+import { and, eq, exists, gt, isNull, sql } from "drizzle-orm";
 import { type AccessFacts, membershipClass } from "../domain/policy.js";
 import type { Orm } from "../infrastructure/postgres/database.js";
 import * as t from "../infrastructure/postgres/schema.js";
@@ -67,7 +67,14 @@ export async function accessFacts(
         db
           .select({ id: t.guestGrants.id })
           .from(t.guestGrants)
-          .where(and(eq(t.guestGrants.guild_id, guild.id), eq(t.guestGrants.user_id, user))),
+          .where(
+            and(
+              eq(t.guestGrants.guild_id, guild.id),
+              eq(t.guestGrants.user_id, user),
+              // A grant /guest reset ended is history only.
+              isNull(t.guestGrants.ended_at),
+            ),
+          ),
       ).mapWith(Boolean),
       revoked: exists(
         db

@@ -30,6 +30,7 @@ import type {
   GuestApplicationsResult,
   OfficerOverrideResult,
   OfficerRankResult,
+  OfficerResetResult,
   RoleLayoutResult,
   SetupResult,
 } from "../../application/results.js";
@@ -117,6 +118,9 @@ const TIMESTAMP = {
   "officer.absent": true,
   "officer.recorded": true,
   "officer.paused": false,
+  "officer.reset": true,
+  "officer.reset_unchanged": false,
+  "officer.reset_paused": false,
 } as const satisfies Record<string, boolean>;
 
 /** A configuration reply state; tests catalogue one case per kind. */
@@ -1728,8 +1732,8 @@ export function officerOverrideReply(
   const footer = `Audited as officer.${grant ? "grant" : "revoke"}`;
   const work = grant ? "Assignment" : "Removal";
   const lead = grant
-    ? `${who} now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke.`
-    : `${who} no longer has bot officer access, and the Officer role will be removed. This revoke also overrides the in-game rank until a server manager runs /officer grant again.`;
+    ? `${who} now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke or /officer reset.`
+    : `${who} no longer has bot officer access, and the Officer role will be removed. This revoke also overrides the in-game rank until a server manager runs /officer grant or /officer reset.`;
   const discordRole = (value: string): FieldSpec => ({ name: "Discord role", value, inline: true });
   if (!recorded && result.present && !repeated && paused(mode))
     return heldCard("officer.paused", mode, viewer, lead, [memberField, reasonField], options);
@@ -1746,7 +1750,7 @@ export function officerOverrideReply(
     description = `${who} isn't in the server now, so this applies if they rejoin. ${
       grant
         ? "This grant doesn't depend on in-game rank."
-        : "This revoke also overrides the in-game rank until a server manager runs /officer grant again."
+        : "This revoke also overrides the in-game rank until a server manager runs /officer grant or /officer reset."
     }`;
     role = "Applies if they rejoin";
   } else if (repeated) {
@@ -1768,6 +1772,65 @@ export function officerOverrideReply(
       description,
       fields: [memberField, discordRole(role), reasonField],
       footer,
+    },
+    options,
+  );
+}
+
+/**
+ * /officer reset (owner decision, 2026-09-24): the grant or revoke override removed, so the
+ * in-game rank decides again, or nobody without an /officer grant when no rank is set. Success;
+ * nothing to remove is the info '= NO CHANGE' card. The Discord role line matches the grant and
+ * revoke receipts; paused, a queued change is the paused-save card.
+ */
+export function officerResetReply(
+  result: OfficerResetResult,
+  viewer: Viewer,
+  options: ConfigReplyOptions = {},
+): Presented {
+  const who = mentionUser(result.user);
+  const mode = result.effectsMode;
+  const memberField: FieldSpec = { name: "Member", value: who, inline: true };
+  const reasonField: FieldSpec = { name: "Reason", value: userText(result.reason) };
+  const decides = result.rankConfigured
+    ? "the in-game rank decides their officer access"
+    : "no officer rank is set, so only /officer grant confers officer access";
+  if (result.status === "unchanged")
+    return card(
+      "officer.reset_unchanged",
+      {
+        tone: "info",
+        title: "No officer override to remove",
+        description: `${marker("unchanged")} ${who} has no officer grant or revoke, so ${decides}.`,
+        fields: [memberField],
+      },
+      options,
+    );
+  const removed = result.previous === "granted" ? "officer grant" : "officer revoke";
+  const lead = `${who}'s ${removed} is removed, so ${decides} again.`;
+  const recorded = result.effects === "recorded";
+  if (!recorded && result.present && paused(mode))
+    return heldCard(
+      "officer.reset_paused",
+      mode,
+      viewer,
+      lead,
+      [memberField, reasonField],
+      options,
+    );
+  const role = recorded
+    ? "Applies once an Officer role is set"
+    : !result.present
+      ? "Applies if they rejoin"
+      : "Update queued";
+  return card(
+    "officer.reset",
+    {
+      tone: "success",
+      title: "Officer override removed",
+      description: lead,
+      fields: [memberField, { name: "Discord role", value: role, inline: true }, reasonField],
+      footer: "Audited as officer.reset",
     },
     options,
   );

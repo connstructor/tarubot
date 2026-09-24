@@ -77,6 +77,7 @@ import type {
   FcRef,
   FcUnlinkResult,
   GuestApplicationsResult,
+  GuestResetResult,
   GuestActionResult,
   GuestStatusView,
   LedgerBalanceView,
@@ -368,7 +369,14 @@ export class Service {
           reason: t.guestGrants.reason,
         })
         .from(t.guestGrants)
-        .where(and(eq(t.guestGrants.guild_id, actor.guildId), eq(t.guestGrants.user_id, owner)))
+        .where(
+          and(
+            eq(t.guestGrants.guild_id, actor.guildId),
+            eq(t.guestGrants.user_id, owner),
+            // A grant /guest reset ended no longer confers Guest; the audit keeps its history.
+            isNull(t.guestGrants.ended_at),
+          ),
+        )
         .orderBy(desc(t.guestGrants.created_at)),
       revocation: await this.db.orm
         .select({
@@ -2704,6 +2712,73 @@ export class Service {
         present: member !== null,
         guestRoleConfigured: guild.guest_role_id !== null,
       };
+    });
+  }
+  /**
+   * /guest reset (owner decision, 2026-09-24): lift the member's Guest revocation and end every
+   * active grant of any provenance (approved, manual, imported, grandfathered), so FC membership
+   * and registered characters decide Guest again. Ended grants stay as history and never confer
+   * Guest; grandfathering still counts them, so a reset before activation is not undone there.
+   * With nothing to remove it changes nothing and audits nothing.
+   */
+  async guestReset(actor: Actor, user: string, reason: string): Promise<GuestResetResult> {
+    authorizeGuestDecision(actor);
+    const guild = await this.guild(actor);
+    reason = note(reason, "reason");
+    const member = await this.discord.member(actor.guildId, user);
+    if (member?.bot)
+      throw new Failure("input", "Guest access is for human members, not bots.", 0, {
+        kind: "option",
+        option: "member",
+      });
+    return this.db.transaction(async (client) => {
+      await ensureUser(client, actor.guildId, user);
+      const db = orm(client);
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, user)))
+        .for("update");
+      const [state] = await db
+        .select({ revoked: t.guestState.revoked })
+        .from(t.guestState)
+        .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)))
+        .for("update");
+      const ended = await db
+        .update(t.guestGrants)
+        .set({ ended_at: sql`now()`, ended_by: actor.userId, ended_reason: reason })
+        .where(
+          and(
+            eq(t.guestGrants.guild_id, actor.guildId),
+            eq(t.guestGrants.user_id, user),
+            isNull(t.guestGrants.ended_at),
+          ),
+        )
+        .returning({ provenance: t.guestGrants.provenance });
+      const revocationLifted = state?.revoked === true;
+      const common = {
+        effectsMode: this.effectsMode(guild),
+        user,
+        reason,
+        revocationLifted,
+        grantsEnded: ended.map((row) => row.provenance).sort(),
+        present: member !== null,
+        guestRoleConfigured: guild.guest_role_id !== null,
+      } as const;
+      if (!revocationLifted && !ended.length)
+        return { ...common, status: "unchanged", effects: "unchanged" };
+      if (revocationLifted)
+        await db
+          .update(t.guestState)
+          .set({ revoked: false, actor_id: actor.userId, reason, changed_at: sql`now()` })
+          .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)));
+      await audit(client, actor.guildId, actor.userId, "guest.reset", user, {
+        reason,
+        revocationLifted,
+        grantsEnded: common.grantsEnded,
+      });
+      await reconcileUser(client, actor.guildId, user);
+      return { ...common, status: "reset", effects: "queued" };
     });
   }
 }
