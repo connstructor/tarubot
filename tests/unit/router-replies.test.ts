@@ -41,6 +41,13 @@ const failing = defineCommand({
   },
 });
 
+/** A slash command whose autocomplete suggests one choice. */
+const suggesting = defineCommand({
+  data: new SlashCommandBuilder().setName("suggest").setDescription("Autocomplete fixture"),
+  autocomplete: () => [{ name: "Example", value: "1" }],
+  execute: () => reply({ tone: "info", title: "Suggested" }),
+});
+
 /** A slash command that succeeds with a presenter reply. */
 const working = defineCommand({
   data: new SlashCommandBuilder().setName("fine").setDescription("Working fixture"),
@@ -113,6 +120,7 @@ function harness(overrides: Partial<BotContext> = {}, actor: Actor = MEMBER) {
       [failing.name, failing],
       [working.name, working],
       [legacy.name, legacy],
+      [suggesting.name, suggesting],
     ]),
     new Map(components.map((component) => [component.prefix, component])),
   );
@@ -308,6 +316,26 @@ test("an expired interaction is reported at warn and never answered twice", asyn
         error: expect.anything(),
         operation: interaction.id,
         options: { level: "warn", scope: "/fine" },
+      },
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an autocomplete that can no longer be answered is reported at warn, without a fallback", async () => {
+  // Autocomplete can't be deferred, so a late respond() hits Discord's Unknown Interaction.
+  const { fixture, reports, router } = harness();
+  try {
+    fixture.failNext("post", discordError(10062, 404));
+    const interaction = fixture.autocomplete("suggest");
+    await router.handle(interaction);
+    expect(fixture.requests).toHaveLength(0);
+    expect(reports).toEqual([
+      {
+        error: expect.anything(),
+        operation: interaction.id,
+        options: { level: "warn", scope: "autocomplete /suggest" },
       },
     ]);
   } finally {

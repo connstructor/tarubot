@@ -383,7 +383,8 @@ export function unlinkReply(
         title: held.title,
         description: `${unassigned} ${held.sentence}`,
         fields: [...held.fields, ...fields],
-        footer,
+        // The approved #26 footer: every paused-save card points to /sync status.
+        footer: held.footer,
       },
       options,
     );
@@ -776,7 +777,8 @@ export function assignReply(
         title: held.title,
         description: `${assigned} ${held.sentence}`,
         fields: [...held.fields, ...fields],
-        footer,
+        // The approved #26 footer: every paused-save card points to /sync status.
+        footer: held.footer,
       },
       options,
     );

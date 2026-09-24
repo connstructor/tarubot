@@ -68,6 +68,18 @@ function validate<T>(schema: z.ZodType<T>, value: unknown): T {
     throw new Failure("invalid_response", "Nodestone returned missing or invalid required fields.");
   return result.data;
 }
+/**
+ * A malformed ID in sidecar output is unexpected Lodestone data, never the user's input: id()'s own
+ * failure is the input card that advises the user, so parse sites reclassify it as an unreadable
+ * upstream response (warn level, 'Unexpected Lodestone page', a neutral job diagnostic).
+ */
+function upstreamId(value: unknown): string {
+  try {
+    return id(value);
+  } catch {
+    throw new Failure("invalid_response", "Nodestone returned an invalid Lodestone ID.");
+  }
+}
 /** Canonical public identity; fcId is a profile hint and never roster authority. */
 export interface CharacterIdentity {
   id: string;
@@ -142,7 +154,7 @@ export function count(value: unknown): number {
 /** Profiles can inherit the validated requested ID; any returned ID must agree losslessly. */
 export function character(raw: unknown, requested?: string): CharacterIdentity {
   const row = validate(object, raw);
-  const resolved = row.ID === undefined && requested ? requested : id(row.ID);
+  const resolved = row.ID === undefined && requested ? requested : upstreamId(row.ID);
   if (requested && requested !== resolved)
     throw new Failure("invalid_response", "Character ID mismatch.");
   if (requested && !Object.hasOwn(row, "FreeCompany"))
@@ -154,7 +166,7 @@ export function character(raw: unknown, requested?: string): CharacterIdentity {
     name: requiredText(row.Name),
     world: requiredText(row.World),
     dc: requiredText(row.DC),
-    fcId: fc?.ID == null ? null : id(fc.ID),
+    fcId: fc?.ID == null ? null : upstreamId(fc.ID),
   };
   if (typeof row.Bio === "string") result.biography = display(row.Bio);
   if (typeof row.FcRank === "string" && display(row.FcRank))
@@ -175,7 +187,7 @@ export function markRosterLeader(members: CharacterIdentity[]): void {
 /** Identity and advertised count are checked at both boundaries of a roster crawl. */
 export function company(raw: unknown, requested: string): CompanyIdentity {
   const row = validate(object, raw);
-  if (id(row.ID) !== requested) throw new Failure("invalid_response", "FC ID mismatch.");
+  if (upstreamId(row.ID) !== requested) throw new Failure("invalid_response", "FC ID mismatch.");
   return {
     id: requested,
     name: requiredText(row.Name),

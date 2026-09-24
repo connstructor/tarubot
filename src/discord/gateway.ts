@@ -40,17 +40,18 @@ export class DiscordGateway implements DiscordPort {
     allowedMentions: { parse: [] },
     rest: { timeout: 15000, retries: 3 },
   });
-  /** Copy mutable SDK state into the small snapshot consumed by application policy. */
+  /**
+   * Copy mutable SDK state into the small snapshot consumed by application policy. view() serves
+   * the actor, command targets and guild-wide reads alike, so a missing join time names the
+   * member it concerns (the text also reaches job diagnostics) instead of saying "your".
+   */
   private view(member: GuildMember): MemberView {
     if (!member.joinedAt)
       throw new Failure(
         "incomplete",
-        "Discord didn't include your join details. Try again in a moment.",
+        `Discord didn't include join details for <@${member.id}>. Try again in a moment.`,
         0,
-        {
-          kind: "discord",
-          what: "join_context",
-        },
+        { kind: "discord", what: "join_context", user: member.id },
       );
     return {
       id: member.id,
@@ -99,8 +100,18 @@ export class DiscordGateway implements DiscordPort {
     for (let attempt = 0; attempt < 3; attempt++) {
       const count = guild.memberCount;
       const members = await guild.members.fetch({ time: 60000 });
-      if (members.size === count && count === guild.memberCount)
+      if (members.size === count && count === guild.memberCount) {
+        // A member without a join time makes the whole list unusable for a guild-wide read, so
+        // it is reported as the member-list failure (keeping that card's adopt_holders tip).
+        if (members.some((member) => !member.joinedAt))
+          throw new Failure(
+            "incomplete",
+            "Discord didn't include join details for every member. Try again later.",
+            0,
+            { kind: "discord", what: "member_list" },
+          );
         return [...members.values()].map((member) => this.view(member));
+      }
     }
     throw new Failure(
       "incomplete",

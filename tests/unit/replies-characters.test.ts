@@ -644,12 +644,13 @@ describe("/assign", () => {
     expect(reason).toContain("\\*\\*bold\\*\\*");
   });
 
-  test("paused receipts keep the audit footer and branch the re-check wording", () => {
+  test("paused receipts carry the approved #26 footer and branch the re-check wording", () => {
     const paused = onlyEmbed(
       assignReply({ ...R.assigned, effectsMode: "deployment_disabled" }, VIEWERS.manager),
     );
     expect(paused.title).toBe("Saved, Discord changes paused");
-    expect(paused.footer?.text).toBe(`Link ${LINK_ID} · Recorded in the audit log`);
+    // Every paused-save card ends as errors-and-style#26 does, whichever command saved it.
+    expect(paused.footer?.text).toBe("Check progress any time with /sync status");
     expect(fieldOf(paused, "Discord changes")).toBe(
       "`‖ PAUSED` Discord changes are off for this deployment\nWhy: Disabled globally (ENABLE_EFFECTS)",
     );
@@ -705,10 +706,17 @@ describe("character failures", () => {
     });
     expect(fieldOf(embed, "Linked to")).toBe(`<@${GUEST_ID}> (\`${GUEST_ID}\`)`);
     expect(embed.description).toContain("Remove that link with `/unassign` first");
+    // Officers and managers on their own /claim, /verify or verify button get the member card
+    // too: the owner reveal and the /unassign next step belong to /assign only.
     for (const [viewer, scope] of [
       [VIEWERS.member, "/claim"],
       [VIEWERS.member, "/verify"],
       [VIEWERS.member, "button verify"],
+      [VIEWERS.officer, "/claim"],
+      [VIEWERS.officer, "/verify"],
+      [VIEWERS.officer, "button verify"],
+      [VIEWERS.manager, "/claim"],
+      [VIEWERS.manager, "button verify"],
       [undefined, "/assign"],
     ] as const) {
       const presented = failed("ownership_conflict", owned, viewer, scope);
@@ -718,8 +726,11 @@ describe("character failures", () => {
         tone: "error",
         title: "Linked to another member",
       });
-      // No other user's ID, as a mention or raw.
+      // No other user's ID, as a mention or raw, and no /assign-only next step.
+      const embed = onlyEmbed(presented);
       expect(visibleText(presented)).not.toContain(GUEST_ID);
+      expect(fieldOf(embed, "Linked to")).toBeUndefined();
+      expect(embed.description).not.toContain("/unassign");
     }
   });
 

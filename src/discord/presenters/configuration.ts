@@ -1468,7 +1468,9 @@ function prose(items: readonly string[]): string {
  * queued roster read, the officer rank, where applications and officer alerts go, the role
  * layout, channel access as approved ('[WAIT] Securing channels · job …'), and next steps (the
  * ledger step only without a ledger channel). Paused, it is the paused-save card, with the rooms
- * in one field so it stays within ten. Check sync status opens /sync status in a new reply.
+ * in one field and no Channel access line (its job is held, which the Discord changes field and
+ * the first next step say) so it stays within ten. Check sync status opens /sync status in a new
+ * reply.
  */
 export function setupReply(
   result: SetupResult,
@@ -1499,7 +1501,11 @@ export function setupReply(
   const lobby = `${mentionChannel(result.lobby.id)} · ${provenance(result.lobby.created)}`;
   const officerRoom = `${mentionChannel(result.officerChannel.id)} · ${provenance(result.officerChannel.created)}`;
   const steps = [
-    "Run /sync status until channel access shows as completed.",
+    // While paused the channel-access job is held, so the first step says when it runs instead of
+    // asking the manager to wait for a completion that can't come until then.
+    paused(mode)
+      ? `Channel access is secured ${whenApplied(mode)}; until then /sync status shows it as paused.`
+      : "Run /sync status until channel access shows as completed.",
     result.ledgerChannelId === null &&
       "If you use the gil ledger, set a channel with /config ledger.",
     "Run /config validate.",
@@ -1556,7 +1562,8 @@ export function setupReply(
           ...settings,
           nextSteps,
         ],
-        footer,
+        // The approved #26 footer; Check sync status stays as the button.
+        footer: held.footer,
         buttons,
       },
       options,

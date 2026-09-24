@@ -519,6 +519,29 @@ export const FAILURE_CASES = {
     ),
     "/verify",
   ),
+  // An officer's own /claim or /verify gets the member card: the owner shows only on /assign (O3).
+  "ownership · /claim · officer": card(
+    "ownership_conflict",
+    "officer",
+    LINKED,
+    failure(
+      "ownership_conflict",
+      "This character is already linked to a different member of this server.",
+      OWNED,
+    ),
+    "/claim",
+  ),
+  "ownership · /verify · officer": card(
+    "ownership_conflict",
+    "officer",
+    LINKED,
+    failure(
+      "ownership_conflict",
+      "This character is already linked to a different member of this server.",
+      OWNED,
+    ),
+    "/verify",
+  ),
   "fc_linked · /config fc link · officer": card(
     "fc_linked",
     "officer",
@@ -796,15 +819,28 @@ export const FAILURE_CASES = {
     ),
     "/config roles officer",
   ),
+  // The gateway names the member it lacked a join time for; "your" only when that is the viewer.
   "join context · form submit · member": card(
     "upstream.join_context",
     "member",
     { tone: "warning", title: "Couldn't read your join details" },
-    failure("incomplete", "Discord didn't include your join details. Try again in a moment.", {
-      kind: "discord",
-      what: "join_context",
-    }),
+    failure(
+      "incomplete",
+      `Discord didn't include join details for <@${MEMBER_ID}>. Try again in a moment.`,
+      { kind: "discord", what: "join_context", user: MEMBER_ID },
+    ),
     "modal guest-apply",
+  ),
+  "join context · /assign · officer": card(
+    "upstream.join_context",
+    "officer",
+    { tone: "warning", title: "Couldn't read that member's join details" },
+    failure(
+      "incomplete",
+      `Discord didn't include join details for <@${GUEST_ID}>. Try again in a moment.`,
+      { kind: "discord", what: "join_context", user: GUEST_ID },
+    ),
+    "/assign",
   ),
   "discord server error · /setup · manager": card(
     "upstream.discord",

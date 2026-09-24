@@ -447,6 +447,7 @@ export function receiptReply(result: LedgerReceipt, viewer: Viewer): Presented {
     : [noteField(entry.note)];
   if (paused(mode)) {
     // Owner decision O2: the approved paused-save card, never a success card with a PAUSED field.
+    // Its footer is the approved #26 one; the officer's Entry ID field still carries the entry.
     const save = pausedSave(mode, viewer);
     return card(
       "receipt.paused",
@@ -455,7 +456,7 @@ export function receiptReply(result: LedgerReceipt, viewer: Viewer): Presented {
         title: save.title,
         description: [lead, posted],
         fields: [...save.fields, ...facts, ...identity],
-        footer,
+        footer: save.footer,
       },
       entry.event_at,
     );

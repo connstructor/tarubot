@@ -14,7 +14,7 @@
     "Compare each reply with the approved mockups: title, tone color, fields, footer and buttons. Flag any JSON, raw UUID in a member view, ISO time or parsed mention.",
     "Match every error's Ref to the log `operation` and its Code to the logged `code`; confirm no stack, SQL or token text reached Discord.",
     "Read back the ledger channel posts and the officer-chat review message: one embed, no mentions, full entry ID present.",
-    "Paused pass: receipts are the pending \"Saved, Discord changes paused\" card with `‖ PAUSED`, never QUEUED or \"shortly\"; sync views show paused work; validate warns (an unactivated guild reads \"ready for activation\").",
+    "Paused pass: receipts are the pending \"Saved, Discord changes paused\" card with `‖ PAUSED`, never QUEUED or \"shortly\"; sync views show paused work; /config validate warns \"[WARN] Disabled for this deployment\" (ENABLE_EFFECTS=false is deployment_disabled; DevBot has no unactivated guild and no worker may use tarubot_rehearsal, so the \"ready for activation\" verdict of configuration#9 is covered by the unit catalog case configuration/validate.ready).",
     "Record deviations with command, audience and message ID in docs/DEV_GUILD.md, fix them, and re-run the affected step."
   ],
   "bot": [

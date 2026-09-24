@@ -144,7 +144,7 @@ Every button custom ID is built and parsed by one codec, `src/discord/custom-ids
 | --- | --- | --- |
 | Open Lodestone profile, Edit Character Profile (links) | `/claim` | — |
 | I've added it — verify now (`verify:claim`) | `/claim` | new reply, so the token message is never edited |
-| Check again (`verify:again`) | the pending-token card | updates its own card; refused within 15 seconds of its last render |
+| Check again (`verify:again`) | the pending-token card | updates its own card; refused within 15 seconds of that card's last render |
 | View history (`ledger:open`) | `/ledger balance` | new reply, so the balance stays visible |
 | Latest, Newer, Older (`ledger:latest`, `ledger:newer`, `ledger:older`) | `/ledger history` | updates the page in place; Newer and Latest are enabled whenever a newer entry exists (C1) |
 | Run health check, Re-check (`config:validate`) | `/config show`, `/config validate` | updates the view in place with the checklist |
@@ -169,7 +169,8 @@ C2 takes the sentence from each concept's approved copy:
 - "Nothing was changed." appears on refusals of change commands whose approved copy carries it, and on the read-only `/config validate` and Re-check cards on every verdict.
 - Ledger mutations say "Nothing was recorded." (ledger#7).
 - `/setup` says "Anything already created is reused when you run /setup again."
-- Read scopes, context refusals, the officer setup card, proofs, the closed-applications card and unexpected errors omit it, and no description repeats it when it already says nothing was saved or changed.
+- The sentence follows the concept, not whether the command reads or changes. A refusal on `/ledger balance`, `/ledger history`, `/sync status`, `/config show` or `/characters` carries it like any other (errors-and-style#1, #2 and #4). These omit it: context and test-instance refusals, "Only your own records", the officer setup card, the closed-applications card, the officer "Linked to another member" card, proofs and the biography card, "No application needed", unexpected errors, and a raw Discord error that may have hit partway through (outside `/setup`). No description repeats it when it already says nothing was saved or changed.
+- A retry-timed refusal (the "Please wait a moment" family and the Lodestone, member-list and join-details cards) puts its "Try again …" after the sentence, as errors-and-style#10 and #24 draw it. Other concepts keep their next step where their approved copy puts it.
 - No success reply says it.
 
 ### Failure catalog
@@ -213,13 +214,13 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | upstream.lodestone_page | `invalid_response` | upstream | Unexpected Lodestone page | Unexpected Lodestone page | warning | warn |
 | upstream.biography | `invalid_response` {biography} | upstream | Couldn't read the biography | Couldn't read the biography | warning | warn |
 | upstream.member_list | `incomplete` {member_list} | upstream | Couldn't read the member list | Couldn't read the member list | warning | warn |
-| upstream.join_context | `incomplete` {join_context} | upstream | Couldn't read your join details | Couldn't read your join details | warning | warn |
+| upstream.join_context | `incomplete` {join_context} | upstream | Couldn't read your join details | Couldn't read your join details; "Couldn't read that member's join details" when it names someone else (an `/assign` or `/officer` target, an applicant) | warning | warn |
 | upstream.discord | `unavailable` {api}; raw Discord 429 and 5xx | upstream | Discord isn't responding | Discord isn't responding | warning | warn |
 | blocked | `blocked`; raw Discord 50001, 50013, 10003, 10011 | blocked | Server setup issue | Discord permissions need attention, with Affected, How to fix and Then | warning | warn |
 | paused | `disabled` | paused | Discord changes paused | Discord changes paused | pending | warn |
 | unexpected | `unexpected` and the internal codes (`idempotency_conflict`, `invalid_job`, `lease_lost`, `ordered`, `dm_blocked`, `configuration`, `schema`, `test_plan`, `writer_lease`) | unexpected | Something went wrong | Something went wrong | error | error |
 
-Raw Discord Unknown Member and Unknown User errors (10007, 10013) in an interaction are `forbidden` {current_member}, "Not available here". Every other error that is not a `Failure`, including a `ZodError`, is `unexpected`, with its class in the log's `source` field. Internal codes keep their own code in the footer while showing the unexpected card.
+Raw Discord Unknown Member and Unknown User errors (10007, 10013) in an interaction are `forbidden` {current_member}, "Not available here". A malformed Lodestone ID in sidecar output is `invalid_response` ("Unexpected Lodestone page"), never input, and a member list with any member lacking a join time is the member-list card. Every other error that is not a `Failure`, including a `ZodError`, is `unexpected`, with its class in the log's `source` field. Internal codes keep their own code in the footer while showing the unexpected card.
 
 Every time-bound refusal (cooldowns, rate limits, busy, transient and stopping) has a Try again field with a relative time. The input card's Example field shows the command with the option the user got wrong. A free-text member option asks to "Paste a Discord user ID or @mention"; "Pick one from the suggestions" is only for autocomplete options. `note()` checks name their option: "Add a note of 1–1,000 characters.", "Add a reason …", "Add a rank …".
 
@@ -245,6 +246,7 @@ Every place a shipped reply differs from a drawn approved card, and the authorit
 | configuration#18 | Drawn as a success card whose Discord changes read "Queued · applies after activation". Live, it ships as drawn with `` `… QUEUED` Server-wide role check ``; paused, it is the pending "Saved, Discord changes paused" card. | The drawn card shows a paused save as success, which errors-and-style#26 contradicts. | Owner decision O2 |
 | characters#31 | The officer card on `/assign` adds a "Linked to" field with the owner's mention and raw ID. Members' cards are unchanged. | The owner asked officers to see the current owner. | Owner decision O3 (2026-09-23) |
 | guests#7, #43, #44 | Their job lines use the errors-and-style#28 component: markers, and for officers the raw job kind and short ID (`` `✓ DONE` reconcile.user `4d3c2b1a` ``), instead of the plain "Role update · Done" words drawn on those cards. Role removals use U+2212. | The drawn cards contradict #28; one job line serves every status view. | Owner decision O2 (officer lines show raw kinds as in #28) |
+| guests#43 | Paused-only member work ships as pending instead of the drawn warning. "Paused-only" means every outstanding job is `‖ PAUSED`, every run is completed or paused, and nothing is blocked or failed. Runs read "Paused: N of M done", and the footer is the in-progress "Details for one run: /sync status run_id:<id>" instead of "Ask an officer if this doesn't clear." Blocked or failed member work still ships as drawn (warning, "Ask an officer" footer). | The drawn state groups paused with blocked and failed. The C4 tone table makes a paused view pending unless something is also blocked or failed. | Amendment C4 |
 | characters#20, guests#7 | Add **Full details (JSON)**, which these drawn cards do not show. `/config show` and `validate` do not offer it, although the style guide's list names them, because their drawn button rows (#4, #7–#9) don't. | The drawn cards and the style guide's JSON list disagree. | Owner decision O2 (JSON only where the style guide lists it); please confirm the `/config` omission |
 | errors-and-style#1 | The note check reads "Add a note of 1–1,000 characters.", not "Add a **note** of 1–1,000 characters that explains the transaction." | One labelled `note()` wording serves notes, reasons and ranks. | Amendment C10 (the approved Rewrites text) |
 | errors-and-style#27 | The footer is `Code unexpected · Ref <id>`, and "Share the reference with an officer." moves into a member "What you can do" field; the Reference and Before retrying fields stay. | The house-style board and the Errors board say every error ends with its code and reference; the drawn #27 footer does not. | Needs owner sign-off |
@@ -275,7 +277,7 @@ A short record of how the 2.14.0 plan resolved design conflicts, with the amendm
 - **Channel posts.** The Discord port carries view data and the gateway renders it; jobs never import presenters. Ledger posts are embed-only with content `''`.
 - **officer.notify** stays plain text until 2.15.0 (OPS-11) — a deferral; the payload could gain optional fields.
 - **Guest application gate.** Open only when both the review channel and the Guest role are set, through one domain predicate shared by the pre-form check, `apply()`, activation and the preview tool (C9).
-- **Stale titles.** "This control is out of date" for any obsolete command or button; "Please reopen /apply" for a bad form or missing join context before the form; "Couldn't read your join details" when the gateway lacks a join time; "This review message is out of date".
+- **Stale titles.** "This control is out of date" for any obsolete command or button; "Please reopen /apply" for a bad form or missing join context before the form; "Couldn't read your join details" when the gateway lacks the viewer's join time ("Couldn't read that member's join details" for someone else's); "This review message is out of date".
 - **Ambiguity titles.** "Several characters match"; "Choose which role to use" or "Choose which channel to use".
 - **Setup family.** Members see info titles naming the missing piece; officers and managers see "Finish setup first" with the exact commands. The closed-applications case keeps its title and adds an officer next step.
 - **Claim and verify titles.** "Too many unfinished claims" and "Please wait a moment" (pending), "No active claim for this character", "Token expired during verification". The copy says claim and token, never challenge.
@@ -286,7 +288,7 @@ A short record of how the 2.14.0 plan resolved design conflicts, with the amendm
 - **Member `/refresh`** keeps the full run ID, as approved in guests#36, in the `/sync status run_id:` line and the "Run" footer.
 - **Application autocomplete** labels read "display name or ID · submitted YYYY-MM-DD · short ID", with the full UUID as the value, filtered in-process over the newest 25 pending applications (C12).
 - **LEDGER-08.** Member receipts show `#seq`; officer receipts, history and posts carry the full UUID.
-- **Check again** is throttled at 15 seconds from the source message's own timestamp, which needs no state.
+- **Check again** is throttled at 15 seconds from the source message's own timestamp, which needs no state. The throttle applies only when the click re-renders that card (it is private or the presser's own), the same predicate the router uses (`rendersSourceInPlace`); a click on someone else's public test-guild card replies with the presser's own check, as `/verify` does.
 - **Token state.** The pending-token card is characters#10 as drawn, with Check again; its deadline stays on `/claim`'s card (the plan's extra Token expires field was dropped under O2).
 
 The 27 inconsistencies the reply specs recorded are pinned one by one in `reply-consistency.test.ts` ("resolved inconsistencies"). The states the specs listed as missing are implemented by the presenters above and exercised through the catalog, the router and command tests.

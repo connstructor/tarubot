@@ -1,5 +1,5 @@
 /** Transport-only interaction dispatch: lookup, acknowledgement, actor checks, and replies. */
-import { DiscordAPIError, MessageFlags, PermissionFlagsBits } from "discord.js";
+import { DiscordAPIError, PermissionFlagsBits } from "discord.js";
 import type {
   AutocompleteInteraction,
   ChatInputCommandInteraction,
@@ -15,7 +15,7 @@ import { classifyFailure } from "../domain/failures.js";
 import { authorize, type Actor } from "../domain/policy.js";
 import { Failure } from "../domain/values.js";
 import type { Command } from "./command.js";
-import type { AcknowledgeMode, Component } from "./component.js";
+import { rendersSourceInPlace, type AcknowledgeMode, type Component } from "./component.js";
 import type { BotContext } from "./context.js";
 import { ServiceKey } from "./services.js";
 import { replyAcknowledgement } from "./reply-visibility.js";
@@ -253,12 +253,7 @@ export class InteractionRouter {
     } catch {
       return false;
     }
-    if (mode !== "update") return false;
-    const source = interaction.message;
-    return (
-      source.flags.has(MessageFlags.Ephemeral) ||
-      source.interactionMetadata?.user.id === interaction.user.id
-    );
+    return mode === "update" && rendersSourceInPlace(interaction);
   }
 
   /**
@@ -372,11 +367,15 @@ export class InteractionRouter {
         (await module.autocomplete({ ...this.context, actor, interaction })).slice(0, 25),
       );
     } catch (error) {
+      // Autocomplete has a hard three-second window and no defer, so a late respond() is its most
+      // common failure; like handle(), an interaction that can't be answered any more is a warn.
+      const gone = undeliverable(error);
       this.context.report(error, interaction.id, {
-        level: classifyFailure(error).level,
+        level: gone ? "warn" : classifyFailure(error).level,
         scope: `autocomplete /${interaction.commandName}`,
       });
-      await interaction.respond([]).catch(() => {});
+      // An expired or already-answered autocomplete cannot take a fallback response either.
+      if (!gone) await interaction.respond([]).catch(() => {});
     }
   }
 }

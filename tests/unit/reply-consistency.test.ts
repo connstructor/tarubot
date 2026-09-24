@@ -368,6 +368,17 @@ describe("status markers", () => {
     }
   });
 
+  test("every paused-save card carries the approved errors-and-style#26 footer", () => {
+    // One approved card, one footer, whichever command saved the change (O2).
+    const saves = CASES.filter((reply) => reply.concept === "paused_save");
+    expect(saves.length).toBeGreaterThan(10);
+    for (const reply of saves)
+      expect({ key: reply.key, footer: onlyEmbed(reply.render()).footer?.text }).toEqual({
+        key: reply.key,
+        footer: "Check progress any time with /sync status",
+      });
+  });
+
   test("a paused view is pending unless something is also blocked or failed (C4)", () => {
     for (const reply of CASES) {
       const text = textOf(reply.key);
@@ -464,9 +475,24 @@ describe("resolved inconsistencies", () => {
       expect(embed.title).toBe("Linked to another member");
       expect(reply.tone).toBe("error");
       expect(embed.footer?.text).toStartWith("Code ownership_conflict · ");
-      // Members (on /claim and /verify) never see who owns the character.
-      if (reply.audience === "member") expect(textOf(reply.key)).not.toContain(GUEST_ID);
+      // Only an officer on /assign sees who owns the character, the "Linked to" field and the
+      // /unassign next step; members, and officers on their own /claim or /verify, never do.
+      const assigning = reply.key === "failures/ownership · /assign · officer";
+      const text = textOf(reply.key);
+      expect({ key: reply.key, owner: text.includes(GUEST_ID) }).toEqual({
+        key: reply.key,
+        owner: assigning,
+      });
+      expect({ key: reply.key, unassign: text.includes("/unassign") }).toEqual({
+        key: reply.key,
+        unassign: assigning,
+      });
+      expect({ key: reply.key, linkedTo: fieldOf(embed, "Linked to") !== undefined }).toEqual({
+        key: reply.key,
+        linkedTo: assigning,
+      });
     }
+    expect(conflicts.map((reply) => reply.key)).toContain("failures/ownership · /claim · officer");
     const officer = embedOf("failures/ownership · /assign · officer");
     expect(fieldOf(officer, "Linked to")?.value).toBe(`<@${GUEST_ID}> (\`${GUEST_ID}\`)`);
     expect(officer.description).toContain("/unassign");

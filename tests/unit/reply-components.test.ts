@@ -196,6 +196,23 @@ test("Check again on someone else's public card replies instead of editing it", 
   );
 });
 
+test("Check again on someone else's freshly rendered card is not throttled by their check", async () => {
+  // The card's timestamps record its owner's last check, not the presser's, and this click
+  // replies instead of re-rendering it, so it runs the presser's own check like /verify does.
+  const { fixture, calls, router } = harness(MEMBER, () => R.verified);
+  await router.handle(
+    fixture.button("verify:again:12345678", "123456789", {
+      ownerId: "401",
+      editedAt: new Date().toISOString(),
+    }),
+  );
+  expect(callbackType(fixture.requests[0])).toBe(
+    InteractionResponseType.DeferredChannelMessageWithSource,
+  );
+  expect(calls).toEqual([["verify", "400", "12345678"]]);
+  expect(embedOf(fixture.requests[1]).title).not.toBe("Please wait a moment");
+});
+
 test("a malformed verify control is out of date and never reaches the service", async () => {
   const { fixture, calls, router } = harness(MEMBER, () => R.verified);
   for (const customId of ["verify:again:0123", "verify:later:12345678", "verify:claim"]) {

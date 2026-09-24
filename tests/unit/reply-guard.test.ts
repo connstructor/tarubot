@@ -2,7 +2,8 @@
  * Guard against JSON replies: the officer details path (presenters/reply.ts, where dataReply is
  * defined, and the details component that calls it) is the only place allowed to send a result as
  * JSON. The pre-2.14.0 JSON dump (src/discord/replies.ts) is deleted and every command, button and
- * form now returns a presenter reply, so any other reference fails here.
+ * form now returns a presenter reply, so any other reference, and any JSON.stringify or json()
+ * where replies are built, fails here.
  */
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
@@ -65,6 +66,20 @@ test("commands and components never serialize results with json()", async () => 
   for (const [path, text] of await sources())
     if (path.startsWith("src/commands/") || path.startsWith("src/components/"))
       expect({ path, json: valuesImports(text).includes("json") }).toEqual({ path, json: false });
+});
+
+test("handlers and presenters never serialize a result outside dataReply", async () => {
+  // JSON.stringify or json() anywhere a reply is built (commands, components, the bot runtime,
+  // presenters) could put a JSON dump in a description or field; only reply.ts, where dataReply
+  // attaches the officer file, may serialize.
+  for (const [path, text] of await sources()) {
+    if (path === "src/discord/presenters/reply.ts") continue;
+    if (!/^src\/(commands|components|bot|discord)\//u.test(path)) continue;
+    expect({
+      path,
+      serializes: /JSON\.stringify\s*\(|(?<![\w.])json\s*\(|\bvalues\.json\b/u.test(text),
+    }).toEqual({ path, serializes: false });
+  }
 });
 
 test("presenters import application data as types only and never reach persistence", async () => {

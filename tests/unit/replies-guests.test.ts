@@ -612,12 +612,22 @@ describe("/apply receipts", () => {
           VIEWERS.member,
           { now: NOW },
         );
+        // A new application saved while Discord changes are paused is the paused-save card
+        // (errors-and-style#26) with that card's footer; the others name the application.
+        const held = outcome !== "existing" && effectsMode !== "live";
         const embed = expectHouseStyle(presented, {
           tone: outcome === "existing" ? "info" : "pending",
-          title: outcome === "existing" ? "Application already sent" : "Application sent",
+          title:
+            outcome === "existing"
+              ? "Application already sent"
+              : held
+                ? "Saved, Discord changes paused"
+                : "Application sent",
         });
         expect(visibleText(presented)).not.toContain("SECRET");
-        expect(embed.footer?.text).toBe(`Application ${APPLICATION_ID}`);
+        expect(embed.footer?.text).toBe(
+          held ? "Check progress any time with /sync status" : `Application ${APPLICATION_ID}`,
+        );
       }
   });
 
@@ -628,6 +638,12 @@ describe("/apply receipts", () => {
     expect(embedOf("apply.held").description).toBe(
       "Your guest application is saved. Officers see it once this server is activated. Submitting again keeps your original application and answers.",
     );
+    // The paused-save card's own fields come first, then the receipt's next step.
+    expect(embedOf("apply.held").fields?.map((field) => field.name)).toEqual([
+      "Saved",
+      "Discord changes",
+      "What happens next",
+    ]);
     const deployment = applicationReceivedReply(
       applied({ effectsMode: "deployment_disabled", outcome: "existing" }),
       VIEWERS.member,

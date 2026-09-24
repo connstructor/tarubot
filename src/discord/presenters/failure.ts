@@ -34,6 +34,7 @@ import {
   member,
   mentionChannel,
   mentionRole,
+  mentionUser,
   plain,
   retryWhen,
   when,
@@ -246,6 +247,16 @@ const SETUP_REUSE = "Anything already created is reused when you run /setup agai
 /** A description that already says nothing happened, or that /setup reuses, needs no repeat. */
 const ALREADY_SAID =
   /nothing was (?:changed|saved|recorded|linked)|(?:was|were)n't changed|(?:was|were) not changed|reused/iu;
+
+/**
+ * Split a lead's trailing 'Try again …' sentence into the tail, so the retry follows the no-change
+ * sentence as approved errors-and-style#10 and #24 (and spec #25) draw it. Only retry-timed views
+ * use it: other concepts' approved copy puts their next step before the no-change sentence.
+ */
+function retryLast(lead: string): { lead: string; tail?: string } {
+  const match = /^(.*[.!?])\s+(Try again\b.*)$/su.exec(lead);
+  return match?.[1] && match[2] ? { lead: match[1], tail: match[2] } : { lead };
+}
 
 /** Decimal Discord and Lodestone IDs, the only values mentions, links and buttons accept. */
 const DECIMAL = /^[1-9][0-9]{0,19}$/u;
@@ -643,13 +654,14 @@ function ambiguousView(s: Situation): FailureView {
 
 /**
  * The character is linked to someone else. Members never learn who (approved characters#31 and
- * the style guide); officers see the current owner as a mention and raw ID (owner decision O3,
- * 2026-09-23) beside the approved /unassign next step.
+ * the style guide). Only officers on /assign see the current owner as a mention and raw ID (owner
+ * decision O3, 2026-09-23) beside the approved /unassign next step; an officer's own /claim,
+ * /verify or verify button gets the member card, whose next step fits a self-claim.
  */
 function ownershipView(s: Situation): FailureView {
   const detail = s.detail?.kind === "ownership" ? s.detail : undefined;
   const name = detail ? `**${characterName(detail.character)}**` : "This character";
-  if (s.officer && s.viewer)
+  if (s.officer && s.viewer && s.scope.root === "assign")
     return {
       concept: "ownership_conflict",
       tone: "error",
@@ -884,9 +896,10 @@ function waitView(s: Situation): FailureView {
     ...base,
     concept: "wait.retry",
     title: "Please wait a moment",
-    lead: catalog ?? s.message ?? "TaruBot is busy right now.",
-    // Catalog wording says when; a stored message already says to try again.
-    tail: catalog ? `You can try again ${retryPhrase(seconds, s.now)}.` : undefined,
+    // Catalog wording says when; a stored message's own 'Try again …' moves after the no-change.
+    ...(catalog
+      ? { lead: catalog, tail: `You can try again ${retryPhrase(seconds, s.now)}.` }
+      : retryLast(s.message ?? "TaruBot is busy right now.")),
     diagnostic: catalog !== undefined,
   };
 }
@@ -901,7 +914,9 @@ function upstreamView(s: Situation): FailureView {
       concept: "upstream.member_list",
       tone: "warning",
       title: "Couldn't read the member list",
-      lead: s.message ?? "Discord didn't return the complete member list. Try again in a minute.",
+      ...retryLast(
+        s.message ?? "Discord didn't return the complete member list. Try again in a minute.",
+      ),
       unchanged: "changed",
       fields: [
         s.scope.path === "config roles officer" && {
@@ -911,14 +926,26 @@ function upstreamView(s: Situation): FailureView {
         },
       ],
     };
-  if (discord === "join_context")
+  if (discord === "join_context") {
+    // The gateway names the member it lacked a join time for: "your" only when that is the
+    // viewer (or no member is named, or no viewer is known yet, when only the presser can have
+    // been read); an officer acting on someone else gets neutral wording.
+    const user =
+      s.detail?.kind === "discord" && s.detail.what === "join_context" ? s.detail.user : undefined;
+    const self = user === undefined || s.viewer === undefined || user === s.viewer.userId;
     return {
       concept: "upstream.join_context",
       tone: "warning",
-      title: "Couldn't read your join details",
-      lead: s.message ?? "Discord didn't include your join details. Try again in a moment.",
+      title: self ? "Couldn't read your join details" : "Couldn't read that member's join details",
+      ...retryLast(
+        self
+          ? "Discord didn't include your join details. Try again in a moment."
+          : (s.message ??
+              `Discord didn't include join details for ${decimal(user) ? mentionUser(user) : "that member"}. Try again in a moment.`),
+      ),
       unchanged: "changed",
     };
+  }
   if (discord === "api")
     return {
       concept: "upstream.discord",

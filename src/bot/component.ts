@@ -1,4 +1,5 @@
 /** Custom-ID namespaces let buttons, menus, and modals be extended without router edits. */
+import { MessageFlags } from "discord.js";
 import type { MessageComponentInteraction, ModalSubmitInteraction } from "discord.js";
 import type { Viewer } from "../discord/presenters/audience.js";
 import type { Presented } from "../discord/presenters/reply.js";
@@ -35,6 +36,20 @@ export interface ComponentOptions {
   readonly acknowledge?: AcknowledgeMode | ((customId: string) => AcknowledgeMode);
   /** Re-authorize the presser's payload and return a presenter reply, as a command does. */
   readonly execute: (context: ComponentContext) => Promise<Presented> | Presented;
+}
+
+/**
+ * Whether a click on this message may re-render it: the message is ephemeral (only the presser can
+ * see and click it) or was created for the presser. The router edits in place only then, and
+ * handlers that keep state on their own card (the Check again throttle) apply it only then, so the
+ * two can never disagree about whose card a click re-renders.
+ */
+export function rendersSourceInPlace(interaction: MessageComponentInteraction): boolean {
+  const source = interaction.message;
+  return (
+    source.flags.has(MessageFlags.Ephemeral) ||
+    source.interactionMetadata?.user.id === interaction.user.id
+  );
 }
 
 /** An async function would resolve after the acknowledgement it is meant to choose. */

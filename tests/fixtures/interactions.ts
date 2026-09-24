@@ -1,6 +1,8 @@
 /** Exercise real Discord.js acknowledgements and modal parsing with a local REST recorder. */
 import { spyOn } from "bun:test";
 import {
+  ApplicationCommandOptionType,
+  AutocompleteInteraction,
   ButtonInteraction,
   ChatInputCommandInteraction,
   Client,
@@ -174,6 +176,30 @@ export function interactionFixture() {
       ]);
       if (!(value instanceof ChatInputCommandInteraction)) throw new Error("Invalid slash fixture");
       return value;
+    },
+    /**
+     * An autocomplete request for `name`, typing `value` into its focused string option. Its
+     * respond() posts the interaction callback, so failNext("post", …) makes the answer fail.
+     */
+    autocomplete(name: string, option = "query", value = "") {
+      const interaction: unknown = Reflect.construct(AutocompleteInteraction, [
+        client,
+        {
+          ...payload(),
+          type: InteractionType.ApplicationCommandAutocomplete,
+          data: {
+            id: "700",
+            name,
+            type: 1,
+            options: [
+              { type: ApplicationCommandOptionType.String, name: option, value, focused: true },
+            ],
+          },
+        },
+      ]);
+      if (!(interaction instanceof AutocompleteInteraction))
+        throw new Error("Invalid autocomplete fixture");
+      return interaction;
     },
     submit(
       customId: string,

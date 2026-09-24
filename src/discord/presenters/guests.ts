@@ -183,12 +183,13 @@ export function applicationsClosedReply(options: { readonly officerHint: boolean
  * join) is pending 'Application sent' (guests#22); a repeated submission is the info no-op
  * 'Application already sent' (#23). The answers are never echoed, not even in the public test
  * guild; only the application ID appears, in the footer. While Discord changes are paused the
- * review message is held too, so the receipt says when officers will see it instead of promising
- * a review now (C5).
+ * review message is held too, so a new application is the paused-save card (O2,
+ * errors-and-style#26, with that card's footer) saying when officers will see it instead of
+ * promising a review now (C5).
  */
 export function applicationReceivedReply(
   result: ApplyResult,
-  _viewer: Viewer,
+  viewer: Viewer,
   options: GuestReplyOptions = {},
 ): Presented {
   const footer = `Application ${result.id}`;
@@ -210,24 +211,31 @@ export function applicationReceivedReply(
     result.outcome === "replaced"
       ? " Your earlier application from a previous join was closed."
       : "";
-  if (paused(mode))
+  if (paused(mode)) {
+    // A saved application whose review message is held is a paused save (O2, errors-and-style#26):
+    // the receipt keeps its own sentence, since officers seeing it is what the pause delays, and
+    // takes the card's Saved and Discord changes fields and its /sync status footer, where the
+    // held review job is listed as the applicant's own pending work.
+    const held = pausedSave(mode, viewer);
     return card(
       "apply.held",
       {
-        tone: "pending",
-        title: "Application sent",
+        tone: held.tone,
+        title: held.title,
         description: `Your guest application is saved. Officers see it ${whenApplied(mode)}. Submitting again keeps your original application and answers.${replaced}`,
         fields: [
+          ...held.fields,
           {
             name: "What happens next",
             value:
               "Check with /guest status. You get a DM with the decision, if your DMs are open.",
           },
         ],
-        footer,
+        footer: held.footer,
       },
       options,
     );
+  }
   return card(
     result.outcome === "replaced" ? "apply.replaced" : "apply.created",
     {
@@ -873,7 +881,8 @@ export function guestActionReply(
         title: held.title,
         description: `${saved} ${held.sentence}`,
         fields: [...held.fields, memberField, reasonField],
-        footer,
+        // The approved #26 footer: every paused-save card points to /sync status.
+        footer: held.footer,
       },
       options,
     );
@@ -1012,7 +1021,8 @@ export function decisionReply(
             : "The review message update waits until then too."
         }`,
         fields: [...held.fields, applicant, application, reason],
-        footer,
+        // The approved #26 footer: every paused-save card points to /sync status.
+        footer: held.footer,
       },
       options,
     );

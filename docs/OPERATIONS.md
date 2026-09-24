@@ -93,7 +93,7 @@ Each entry carries these fields; payloads, option values, tokens and SDK error t
 | `scope` | The interaction path, such as `/ledger withdraw`, `/config roles officer`, `button ledger` or `modal guest-apply`, never option values |
 | `diagnostic` | The approved `Failure` message only |
 
-Routine refusals log at info so a Ref stays findable at the default `LOG_LEVEL`. Autocomplete failures log with scope `autocomplete /<command>` and return an empty list.
+Routine refusals log at info so a Ref stays findable at the default `LOG_LEVEL`. Autocomplete failures log with scope `autocomplete /<command>` and return an empty list; one that can no longer be answered (Discord's three-second window passed, or it was already answered) logs at warn and sends nothing.
 
 ## Reply references and error codes
 
@@ -123,7 +123,7 @@ On App Platform, search the `tarubot` worker's runtime logs for the same string 
 | `pending_proof` | Token not on the Lodestone yet | The Lodestone has not published the biography token yet | None; wait and use Check again |
 | `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim and apply limits) | A limit, contention, a temporary Discord change or shutdown | None; the reply gives the retry time |
 | `eligible` | No application needed | The visitor already qualifies for access | None |
-| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable | Check sidecar health and Discord status; logged at warn |
+| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply's Affected and How to fix name, then `/config validate` |
 | `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`) | Activate the guild or re-enable effects |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |

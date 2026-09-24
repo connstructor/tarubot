@@ -498,11 +498,13 @@ export const GUEST_CASES = {
     render: () =>
       applicationReceivedReply(applied({ outcome: "existing" }), VIEWERS.member, { now }),
   },
+  // A saved application whose review message is held is a paused save (O2).
   "apply.held": {
-    spec: "guests-sync-utility#22",
+    spec: "errors-and-style#26",
+    concept: "paused_save",
     audience: "member",
     tone: "pending",
-    title: "Application sent",
+    title: "Saved, Discord changes paused",
     timestamp: false,
     render: () =>
       applicationReceivedReply(applied({ effectsMode: "awaiting_activation" }), VIEWERS.member, {

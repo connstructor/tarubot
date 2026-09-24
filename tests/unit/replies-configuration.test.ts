@@ -877,6 +877,17 @@ describe("effects modes (C5)", () => {
     expect(fieldOf(embed, "Discord changes")).toBe(
       "`‖ PAUSED` until activation\nWhy: Server activation pending",
     );
+    // Channel access is held with every other Discord change, so the first step says when it
+    // runs instead of asking the manager to wait for a completion that can't come yet.
+    for (const mode of PAUSED_MODES) {
+      const paused = onlyEmbed(setupReply(setupResult({ effectsMode: mode }), VIEWERS.manager));
+      expect(fieldOf(paused, "Next steps")).toStartWith(
+        mode === "awaiting_activation"
+          ? "1. Channel access is secured once this server is activated; until then /sync status shows it as paused."
+          : "1. Channel access is secured once Discord changes are turned back on; until then /sync status shows it as paused.",
+      );
+      expect(paused.footer?.text).toBe("Check progress any time with /sync status");
+    }
   });
 });
 

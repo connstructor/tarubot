@@ -215,10 +215,15 @@ export type FailureDetail =
   /** The profile token is not visible yet; the claim stays valid until `expiresAt`. */
   | { readonly kind: "proof"; readonly character: FailureCharacter; readonly expiresAt: Date }
   /**
-   * Discord data the bot could not read: the member list, the applicant's join context, or the
-   * API itself (a raw rate limit or server error with no narrower context).
+   * Discord data the bot could not read: the member list, or the API itself (a raw rate limit or
+   * server error with no narrower context).
    */
-  | { readonly kind: "discord"; readonly what: "member_list" | "join_context" | "api" }
+  | { readonly kind: "discord"; readonly what: "member_list" | "api" }
+  /**
+   * A member's join time was missing. `user` names that member, so the reply says "your" only to
+   * the member it is about; an officer acting on someone else reads neutral wording.
+   */
+  | { readonly kind: "discord"; readonly what: "join_context"; readonly user?: string }
   /** The command option the input failure concerns, which selects the reply's Example. */
   | { readonly kind: "option"; readonly option: string };
 

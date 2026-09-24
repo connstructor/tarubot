@@ -5,7 +5,7 @@
  * test-guild card can only check the clicker's own claim.
  */
 import { applicationKey } from "../application/keys.js";
-import { defineComponent } from "../bot/component.js";
+import { defineComponent, rendersSourceInPlace } from "../bot/component.js";
 import { parseControlFor } from "../discord/custom-ids.js";
 import { verifyReply } from "../discord/presenters/characters.js";
 import { Failure } from "../domain/values.js";
@@ -34,8 +34,11 @@ export default defineComponent({
   async execute({ actor, viewer, interaction, services }) {
     if (!interaction.isButton()) throw obsolete();
     const control = parseControlFor("verify", interaction.customId);
-    if (control.action === "again") {
-      // The card's own timestamps are the throttle's only state: edited on every re-render.
+    // The card's own timestamps are the throttle's only state: edited on every re-render. Only a
+    // card this click re-renders (private, or opened by the presser) records the presser's last
+    // check; a click on someone else's public test-guild card is answered with a new reply, like
+    // /verify and 'verify now', because throttling it would need stored per-user state.
+    if (control.action === "again" && rendersSourceInPlace(interaction)) {
       const source = interaction.message;
       const elapsed = Date.now() - (source.editedTimestamp ?? source.createdTimestamp);
       if (elapsed < CHECK_AGAIN_INTERVAL_MS)

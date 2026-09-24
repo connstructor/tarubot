@@ -197,6 +197,38 @@ describe("approved cards", () => {
     ).toContain("Your token is still valid.");
   });
 
+  test("retry-timed failures say 'Nothing was changed.' before their Try again (#10, #24, #25)", () => {
+    // A stored message's own trailing 'Try again …' moves after the no-change sentence.
+    expect(
+      onlyEmbed(FAILURE_CASES["global claim limit · /claim · member"].render()).description,
+    ).toBe("Verification is busy right now. Nothing was changed. Try again in a few minutes.");
+    expect(
+      onlyEmbed(FAILURE_CASES["member list · /config roles officer · manager"].render())
+        .description,
+    ).toBe(
+      "Discord didn't return the complete member list. Nothing was changed. Try again in a minute.",
+    );
+    expect(
+      onlyEmbed(FAILURE_CASES["join context · form submit · member"].render()).description,
+    ).toBe("Discord didn't include your join details. Nothing was changed. Try again in a moment.");
+  });
+
+  test("join details say 'your' only to the member they are about", () => {
+    const other = onlyEmbed(FAILURE_CASES["join context · /assign · officer"].render());
+    expect(other).toMatchObject({
+      title: "Couldn't read that member's join details",
+      description: `Discord didn't include join details for <@${GUEST_ID}>. Nothing was changed. Try again in a moment.`,
+    });
+    // A detail that names no member keeps the self wording.
+    const unnamed = new Failure("incomplete", "Missing join time.", 0, {
+      kind: "discord",
+      what: "join_context",
+    });
+    expect(onlyEmbed(render(unnamed, { viewer: VIEWERS.officer, scope: "/assign" })).title).toBe(
+      "Couldn't read your join details",
+    );
+  });
+
   test("errors-and-style#27: something went wrong, with the reference and a ledger warning", () => {
     expect(
       onlyEmbed(FAILURE_CASES["unexpected · /ledger deposit · member"].render()),
@@ -252,7 +284,13 @@ describe("approved cards", () => {
       fields: [{ name: "Linked to", value: `<@${GUEST_ID}> (\`${GUEST_ID}\`)`, inline: true }],
       footer: { text: `Code ownership_conflict · Ref ${REF}` },
     });
-    for (const key of ["ownership · /claim · member", "ownership · /verify · member"] as const) {
+    // Members, and officers on their own /claim or /verify, get the member card (O3).
+    for (const key of [
+      "ownership · /claim · member",
+      "ownership · /verify · member",
+      "ownership · /claim · officer",
+      "ownership · /verify · officer",
+    ] as const) {
       const presented = FAILURE_CASES[key].render();
       expect(visibleText(presented)).not.toContain(GUEST_ID);
       expect(onlyEmbed(presented)).toMatchObject({
@@ -267,13 +305,18 @@ describe("approved cards", () => {
         ],
       });
     }
-    // Before the actor is known the wording is member-safe as well.
-    const owned = new Failure("ownership_conflict", "Linked.", {
+    // Before the actor is known the wording is member-safe as well. The lead naming the
+    // character proves the ownership detail reached the presenter.
+    const owned = new Failure("ownership_conflict", "Linked.", 0, {
       kind: "ownership",
       character: CHARACTER,
       owner: GUEST_ID,
-    } as never);
-    expect(visibleText(render(owned, { scope: "/assign" }))).not.toContain(GUEST_ID);
+    });
+    const preActor = render(owned, { scope: "/assign" });
+    expect(visibleText(preActor)).not.toContain(GUEST_ID);
+    expect(onlyEmbed(preActor).description).toBe(
+      "**Example Character @ Diabolos** is already linked to another member of this server. Nothing was changed.",
+    );
   });
 
   test("ledger#7: not enough recorded gil, with the exact amounts", () => {

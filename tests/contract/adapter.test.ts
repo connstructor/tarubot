@@ -1,6 +1,12 @@
 /** Controlled HTTP fixtures test semantic validation and actual request cancellation. */
 import { expect, test } from "bun:test";
-import { character, count, Nodestone, page } from "../../src/infrastructure/nodestone/client.js";
+import {
+  character,
+  company as companyIdentity,
+  count,
+  Nodestone,
+  page,
+} from "../../src/infrastructure/nodestone/client.js";
 import { requestSchema } from "../../src/infrastructure/nodestone/protocol.js";
 
 const fcId = "9232097761132958152";
@@ -32,6 +38,21 @@ test("normalization preserves Unicode and distinguishes unknown, invalid and exp
   expect(() => page(empty, 1)).toThrow();
   expect(() => character({ ...identity("123"), ID: Number(fcId) })).toThrow();
   expect(() => character(identity("123"), "456")).toThrow();
+});
+test("a malformed ID from the sidecar is an unreadable Lodestone response, not user input", () => {
+  // id()'s input failure advises the user to pick a suggestion; sidecar data is never theirs, so
+  // it must present as 'Unexpected Lodestone page' (invalid_response, warn level) instead.
+  const { ID: _omitted, ...nameless } = identity("123");
+  const pager = { Page: 1, PageTotal: 1, PageNext: null, PagePrev: 0 };
+  expect(() => page({ List: [nameless], Pagination: pager }, 1)).toThrow(
+    expect.objectContaining({ code: "invalid_response" }),
+  );
+  expect(() => companyIdentity({ ...company, ID: null }, fcId)).toThrow(
+    expect.objectContaining({ code: "invalid_response" }),
+  );
+  expect(() => character({ ...identity("123"), FreeCompany: { ID: "12 34" } }, "123")).toThrow(
+    expect.objectContaining({ code: "invalid_response" }),
+  );
 });
 test("roster acquisition checks distinct IDs, page progression, and boundary counts", async () => {
   // Each mode changes a different completeness invariant while retaining valid HTTP envelopes.
