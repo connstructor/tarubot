@@ -42,12 +42,22 @@ docker compose -f docker-compose.production.yml up -d --wait
 
 Compose stops the old container first, which releases the writer lease within its 30-second grace. It then starts the new one, and `--wait` returns once the health check passes. The check allows a 60-second start period. The outage is a few seconds. If the release changes commands, register them from the operator machine: `prod dist/scripts/register.js --global`, then `prod dist/scripts/commands.js list`, which must exit 0.
 
-**A release with a migration.** Stop the bot first. `migrate.js` refuses a pending migration while a bot holds the writer lease.
+**A release with a migration.** The migration must run in the *new* image, and only after the bot has stopped: `migrate.js` refuses a pending migration while a bot holds the writer lease.
 
-1. `docker compose -f docker-compose.production.yml stop tarubot`.
-2. From the operator machine, run the writer-lease gate, then take an independent backup: `pg pg_dump -d tarubot -Fc -f /work/backups/before-X.Y.Z.dump`. Keep it off the provider, and record its checksum.
-3. On the host, after the pull, run `docker compose -f docker-compose.production.yml run --rm --no-deps tarubot bun dist/scripts/migrate.js`. It prints the restore-point line, then `Schema ready.`
-4. `docker compose -f docker-compose.production.yml up -d --wait`, then check readiness.
+1. On the host, fetch and pin the release first. Nothing restarts until step 5.
+
+   ```sh
+   cd ~/tarubot && git pull --ff-only
+   sed -i 's/^TARUBOT_IMAGE_TAG=.*/TARUBOT_IMAGE_TAG=X.Y.Z/' .env
+   docker compose -f docker-compose.production.yml pull
+   ```
+
+2. `docker compose -f docker-compose.production.yml stop tarubot`.
+3. From the operator machine, run the writer-lease gate. It must print nothing. Then take an independent backup: `pg pg_dump -d tarubot -Fc -f /work/backups/before-X.Y.Z.dump`. Keep it off the provider, and record its checksum.
+4. On the host, run `docker compose -f docker-compose.production.yml run --rm --no-deps tarubot bun dist/scripts/migrate.js`. Because of step 1, this runs in the new image. It prints the restore-point line with the files it applied, then `Schema ready.` If it applies nothing, the new image wasn't pinned: recheck step 1 before starting the bot.
+5. `docker compose -f docker-compose.production.yml up -d --wait`, then check readiness.
+
+The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MIGRATION.md#e0-conventions), with Linode's values: `PGHOST` is the cluster host, `PGPORT=27520`, `PGUSER=tarubot`, and `PGSSLROOTCERT=/work/linode-ca.crt` (the cluster CA, saved in `~/tarubot-cutover/work/`).
 
 **Rollback** means pinning the previous `TARUBOT_IMAGE_TAG` and running `up -d --wait` again. That only works when no migration lies between the two releases. After a migration, the way back is a fix release or a restore.
 
