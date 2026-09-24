@@ -5,7 +5,7 @@
  * audits, the once-only marker and the effects flip commit or roll back together. Rerunning it on a
  * live guild changes nothing unless a requeue is explicitly requested (amendment C11).
  */
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import {
   type GrandfatherPlan,
   grandfatherReport,
@@ -17,7 +17,7 @@ import { guestApplicationsOpen } from "../domain/guest-application.js";
 import { Failure } from "../domain/values.js";
 import { audit, type Database, type Orm, orm } from "../infrastructure/postgres/database.js";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue } from "../jobs/queue.js";
+import { enqueue, requeueParked } from "../jobs/queue.js";
 import { applyGrandfathering, planGrandfathering } from "./grandfathering.js";
 import type { GuildRecord, MemberView } from "./records.js";
 
@@ -246,11 +246,9 @@ export async function activateGuild(
       roleLayout: result.roleLayout,
       requeue: input.requeue === true,
     });
-    // Work parked while effects were off (or blocked on resources since validated) resumes.
-    await store
-      .update(t.jobs)
-      .set({ status: "queued", due_at: sql`now()`, attempts: 0 })
-      .where(and(eq(t.jobs.guild_id, guild.id), inArray(t.jobs.status, ["disabled", "blocked"])));
+    // Work parked while effects were off (or blocked on resources since validated) resumes, one
+    // row per dedupe key: a key enqueued again while parked would otherwise collide on requeue.
+    await requeueParked(client, [guild.id], ["disabled", "blocked"]);
     await enqueue(client, "reconcile.guild", `guild:${guild.id}`, {}, guild.id);
     return { status: "activated", requeued: alreadyActive(guild), ...result };
   });

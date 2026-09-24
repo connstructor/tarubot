@@ -3,6 +3,7 @@
  * subcommand answers with its configuration presenter; failures reach the router's failure
  * presenter unchanged.
  */
+import { ChannelType } from "discord.js";
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
@@ -90,7 +91,13 @@ for (const name of ["ledger", "officer_notifications", "guest_applications"])
     sub
       .setName(name)
       .setDescription(`Set or clear the ${name.replaceAll("_", " ")} channel`)
-      .addChannelOption((option) => option.setName("channel").setDescription("Guild text channel"))
+      // Discord offers only text channels, as /setup's rooms do; the gateway still refuses others.
+      .addChannelOption((option) =>
+        option
+          .setName("channel")
+          .setDescription("Guild text channel")
+          .addChannelTypes(ChannelType.GuildText),
+      )
       .addBooleanOption((option) =>
         option.setName("clear").setDescription("Clear this channel configuration"),
       ),

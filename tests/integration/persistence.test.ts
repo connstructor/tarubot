@@ -4911,7 +4911,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       fc: company,
       channelId: "98201",
       correction: null,
-      post: { status: "queued", message_id: null, last_error: null },
+      // A post not sent yet has no recorded channel.
+      post: { status: "queued", message_id: null, last_error: null, channel_id: null },
     });
     expect(
       await service.ledger(officer, "adjust", "40", "Same balance", randomUUID()),
@@ -5060,16 +5061,47 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.query("UPDATE jobs SET status='blocked' WHERE dedupe_key=$1", [
       `user:${guildId}:98020`,
     ]);
+    // Rows parked while paused can share a key with each other (a repeated refresh) or with the
+    // repair pass the change queues; the change requeues one row per key instead of violating
+    // the active-job index, and closes the rest as superseded.
+    const [repair, older, newer] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, status, created_at) VALUES
+         ('reconcile.guild', $1, '{}'::jsonb, $2, 'disabled', now() - interval '3 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', now() - interval '2 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', now() - interval '1 minute')
+       RETURNING id::text`,
+      [`guild:${guildId}`, guildId, `user:${guildId}:98021`],
+    );
     expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
       status: "saved",
       field: "ledger_channel_id",
       value: "98205",
       previous: "98201",
       rebound: false,
-      requeued: 1,
+      // The blocked row and the newest parked row of the shared key.
+      requeued: 2,
       company: null,
       guild: { id: guildId, ledger_channel_id: "98205" },
     });
+    const states = new Map(
+      (
+        await db.query<{ id: string; status: string; result: unknown }>(
+          "SELECT id::text, status, result FROM jobs WHERE id = ANY($1::uuid[])",
+          [[repair?.id, older?.id, newer?.id]],
+        )
+      ).map((row) => [row.id, row]),
+    );
+    expect(states.get(newer?.id ?? "")?.status).toBe("queued");
+    for (const closed of [repair, older])
+      expect(states.get(closed?.id ?? "")).toMatchObject({
+        status: "succeeded",
+        result: { skipped: "superseded" },
+      });
+    expect(
+      await db.query("SELECT status FROM jobs WHERE dedupe_key=$1 AND status='queued'", [
+        `guild:${guildId}`,
+      ]),
+    ).toEqual([{ status: "queued" }]);
     expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
       rebound: true,
       requeued: 0,

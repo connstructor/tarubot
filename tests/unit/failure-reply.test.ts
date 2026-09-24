@@ -401,6 +401,21 @@ describe("audience rules", () => {
     );
     expect(channel.fields?.map((item) => item.name)).toEqual(["Affected", "How to fix", "Then"]);
     expect(channel.fields?.[1]?.value).toContain("give the TaruBot role the permissions");
+    // A deleted or non-text channel (the gateway's refusal without a fix) gets no permissions
+    // remedy: changing permissions can't bring it back.
+    const unavailable = onlyEmbed(
+      render(
+        new Failure(
+          "blocked",
+          "<#323456789012345601> is unavailable: it no longer exists or isn't a text channel in this server. Choose another with /config.",
+          0,
+          { kind: "resource", resource: "channel", id: "323456789012345601" },
+        ),
+        { viewer: VIEWERS.officer, scope: "/config ledger" },
+      ),
+    );
+    expect(unavailable.fields?.map((item) => item.name)).toEqual(["Affected", "Then"]);
+    expect(unavailable.description).toContain("is unavailable");
   });
 
   test("error text never reaches Discord: a raw Error and a ZodError are 'Something went wrong'", () => {

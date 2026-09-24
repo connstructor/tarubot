@@ -125,7 +125,7 @@ On App Platform, search the `tarubot` worker's runtime logs for the same string 
 | `eligible` | No application needed | The visitor already qualifies for access | None |
 | `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
-| `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`) | Activate the guild or re-enable effects |
+| `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` are the fallbacks |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
 
 **Renamed codes.** Queries that span releases before 2.14.0 must match both names:

@@ -108,11 +108,17 @@ export interface JobLineOptions {
   readonly effectsMode?: EffectsMode;
 }
 
-/** Why a paused job waits, in member words, for the current effects mode. */
+/**
+ * Why a paused job waits, in member words, for the current effects mode. With effects live, a
+ * `disabled` row is left over from an earlier pause that nothing resumed, so it names no
+ * activation that isn't coming.
+ */
 const pausedReason = (mode: EffectsMode | undefined): string =>
   mode === "deployment_disabled"
     ? "Discord changes are off for this deployment"
-    : "waiting for activation";
+    : mode === "live"
+      ? "held from an earlier pause, so ask an officer"
+      : "waiting for activation";
 
 /** Member wording: marker, label and plain words; never IDs, attempts or diagnostics. */
 function memberLine(job: JobView, state: JobState, options: JobLineOptions): string {

@@ -55,6 +55,7 @@ import {
   OLD_FC,
   PAGE_ONE,
   postFor,
+  POSTED_MESSAGE,
   WAITING_POST,
 } from "../fixtures/replies/ledger.js";
 import { at, MEMBER_ID, OFFICER_ID, REF, VIEWERS } from "../fixtures/results.js";
@@ -338,7 +339,12 @@ describe("receipts", () => {
     const blocked = receiptReply(
       {
         ...R.alreadyRecorded,
-        post: { status: "blocked", message_id: null, last_error: BLOCKED_POST.last_error },
+        post: {
+          status: "blocked",
+          message_id: null,
+          last_error: BLOCKED_POST.last_error,
+          channel_id: null,
+        },
       },
       VIEWERS.officer,
     );
@@ -424,6 +430,20 @@ describe("balance", () => {
     expect(fieldOf(onlyEmbed(paused), "Channel posts (last 10 entries)")).toStartWith(
       "#43 · Paused: waiting for activation",
     );
+    // With effects live, a paused post is left from an earlier pause: no activation is promised,
+    // and the step names the /config change that re-queues it.
+    const leftover = onlyEmbed(
+      officerBalance([
+        postFor(E43, { status: "disabled", message_id: null }),
+        ...HEALTHY_POSTS.slice(1),
+      ]),
+    );
+    expect(fieldOf(leftover, "Channel posts (last 10 entries)")).toStartWith(
+      "#43 · Paused: held from an earlier pause",
+    );
+    expect(fieldOf(leftover, "What to do")).toStartWith(
+      "Paused posts are left from an earlier pause; saving any setting with `/config` re-queues them.",
+    );
     // Paused beside a block stays a warning (C4).
     expectHouseStyle(
       officerBalance([postFor(E43, { status: "disabled", message_id: null }), BLOCKED_POST]),
@@ -442,6 +462,32 @@ describe("balance", () => {
     // A run of two keeps both lines rather than collapsing a single entry.
     const two = onlyEmbed(officerBalance(HEALTHY_POSTS.slice(0, 2)));
     expect(fieldOf(two, "Channel posts (last 10 entries)")?.split("\n")).toHaveLength(2);
+  });
+
+  test("a Posted link uses the channel the post went to, not a since-rebound ledger channel", () => {
+    // #43 was posted before the ledger channel moved to REBOUND; #42 is a pre-2.14.0 post that
+    // stored no channel, so it falls back to the configured one.
+    const REBOUND = "345678901234567890";
+    const moved = [
+      postFor(E43, { channel_id: LEDGER_CHANNEL }),
+      postFor(E42, { status: "failed", message_id: null }),
+      postFor(E41, { message_id: POSTED_MESSAGE, channel_id: null }),
+    ];
+    const lines = fieldOf(
+      onlyEmbed(officerBalance(moved, { channelId: REBOUND })),
+      "Channel posts (last 10 entries)",
+    );
+    expect(lines).toContain(
+      `#43 · [Posted](https://discord.com/channels/123456789012345678/${LEDGER_CHANNEL}/567890123456700043)`,
+    );
+    expect(lines).toContain(
+      `#41 · [Posted](https://discord.com/channels/123456789012345678/${REBOUND}/${POSTED_MESSAGE})`,
+    );
+    // A replayed receipt's post links the same way.
+    const replay = receiptReply({ ...R.alreadyRecorded, channelId: REBOUND }, VIEWERS.officer);
+    expect(fieldOf(onlyEmbed(replay), "Channel post")).toBe(
+      `[Posted](https://discord.com/channels/123456789012345678/${LEDGER_CHANNEL}/${POSTED_MESSAGE})`,
+    );
   });
 
   test("every post state reads in words, and the member count covers everything unposted", () => {
@@ -493,6 +539,17 @@ describe("balance", () => {
       "#45 · **Blocked**: no ledger channel is set",
       "#41 · Completed, no message",
     ]);
+    // The gateway's refusal for a deleted or non-text ledger channel reads as unavailable, never
+    // as missing permissions.
+    const deleted = postFor(entry({ sequence: 46n }), {
+      status: "blocked",
+      message_id: null,
+      last_error:
+        "blocked: <#234567890123456789> is unavailable: it no longer exists or isn't a text channel in this server. Choose another with /config.",
+    });
+    expect(fieldOf(onlyEmbed(officerBalance([deleted])), "Channel posts (last 10 entries)")).toBe(
+      "#46 · **Blocked**: bot can't post in <#234567890123456789> (channel unavailable)",
+    );
     const member = onlyEmbed(balanceReply({ ...R.balance, delivery: rows }, VIEWERS.member));
     expect(fieldOf(member, "Ledger posts")).toStartWith("7 recent entries are still waiting");
     const one = onlyEmbed(

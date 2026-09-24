@@ -561,6 +561,12 @@ describe("resolved inconsistencies", () => {
       });
       expect(fieldOf(embed, "Try again")?.value).toMatch(retry);
     }
+    // Contention and shutdown throw without a deadline (retryAfter 0), so they say "shortly",
+    // as REPLIES.md documents, rather than inventing a time.
+    for (const code of ["busy", "stopping", "transient"] as const)
+      expect(
+        fieldOf(render(new Failure(code, "Please wait."), "member", "/claim"), "Try again")?.value,
+      ).toBe("shortly");
     for (const kind of [
       "claims limit · /claim · member",
       "apply cooldown · form submit · member",

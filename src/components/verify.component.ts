@@ -48,9 +48,11 @@ export default defineComponent({
           Math.ceil((CHECK_AGAIN_INTERVAL_MS - Math.max(0, elapsed)) / 1_000),
         );
     }
+    // The server owner is told Discord keeps their nickname, as /verify says it.
     return verifyReply(
       await services.get(applicationKey).verify(actor, control.characterId),
       viewer,
+      { guildOwner: interaction.guild?.ownerId === actor.userId },
     );
   },
 });

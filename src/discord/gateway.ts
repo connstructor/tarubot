@@ -326,10 +326,18 @@ export class DiscordGateway implements DiscordPort {
         throw error;
       });
     const bot = await guild.members.fetchMe({ force: true });
+    const affected = { kind: "resource", resource: "channel", id: channelId } as const;
+    // A deleted channel, a non-text channel or one in another server can't be fixed by changing
+    // permissions, so this refusal carries no permissions remedy. Its wording ('unavailable')
+    // is also what ledger post states read to say "channel unavailable".
+    if (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guildId)
+      throw new Failure(
+        "blocked",
+        `<#${channelId}> is unavailable: it no longer exists or isn't a text channel in this server. Choose another with /config.`,
+        0,
+        affected,
+      );
     if (
-      !channel ||
-      channel.type !== ChannelType.GuildText ||
-      channel.guildId !== guildId ||
       !channel
         .permissionsFor(bot)
         ?.has([
@@ -343,7 +351,7 @@ export class DiscordGateway implements DiscordPort {
         "blocked",
         `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
         0,
-        { kind: "resource", resource: "channel", id: channelId, fix: "channel_permissions" },
+        { ...affected, fix: "channel_permissions" },
       );
   }
   /** REST deltas touch only requested role IDs; retry observes any partially applied transition. */

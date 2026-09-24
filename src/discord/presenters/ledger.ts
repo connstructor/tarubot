@@ -171,6 +171,11 @@ interface PostRow {
   readonly status: string;
   readonly last_error: string | null;
   readonly message_id: string | null;
+  /**
+   * The channel the post was sent to, from its job result. Null (or absent) for a post made
+   * before 2.14.0 recorded it, whose link falls back to the currently configured channel.
+   */
+  readonly channel_id?: string | null;
   /** The entry the post announces, for 'posts after #n'. */
   readonly sequence: bigint;
   /** When a retry is due; a replayed receipt's post doesn't carry it. */
@@ -181,11 +186,15 @@ interface PostRow {
 const SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 
 /**
- * The posted message's jump link. Jobs don't store their channel and the dispatcher always posts
- * to the currently configured one, so the link uses that channel; without it there is no link.
+ * The posted message's jump link, in the channel the post actually went to: the dispatcher
+ * records it in the job result, so rebinding the ledger channel keeps earlier links working.
+ * Only a post made before 2.14.0, which stored no channel, falls back to the currently configured
+ * channel, where it was posted unless the channel has since been rebound. No channel, no link.
  */
-function jumpLink(context: PostContext, messageId: string | null): string | null {
-  const { guildId, channelId } = context;
+function jumpLink(context: PostContext, row: PostRow): string | null {
+  const { guildId } = context;
+  const channelId = row.channel_id ?? context.channelId;
+  const messageId = row.message_id;
   if (!messageId || !channelId) return null;
   if (![guildId, channelId, messageId].every((id) => SNOWFLAKE.test(id))) return null;
   return link("Posted", `https://discord.com/channels/${guildId}/${channelId}/${messageId}`);
@@ -203,11 +212,16 @@ function blockedReason(lastError: string | null, channelId: string | null): stri
   return "Discord refused the post";
 }
 
-/** A paused post's reason for the current effects mode. */
+/**
+ * A paused post's reason for the current effects mode; with effects live it is left over from an
+ * earlier pause rather than waiting for an activation that isn't coming.
+ */
 const pausedPost = (mode: EffectsMode): string =>
   mode === "deployment_disabled"
     ? "Discord changes are off for this deployment"
-    : "waiting for activation";
+    : mode === "live"
+      ? "held from an earlier pause"
+      : "waiting for activation";
 
 /**
  * One channel post's state in the approved ledger#17 wording. `line` is the balance view's
@@ -224,7 +238,7 @@ function postState(row: PostRow, context: PostContext, form: "line" | "post"): s
   switch (state.marker) {
     case "done":
     case "skipped":
-      return jumpLink(context, row.message_id) ?? "Completed, no message";
+      return jumpLink(context, row) ?? "Completed, no message";
     case "running":
       return "Posting now";
     case "queued":
@@ -304,7 +318,12 @@ function nextSteps(problems: PostProblems, mode: EffectsMode, form: "balance" | 
       (form === "balance"
         ? "Fix the channel with `/config ledger` (see `/config validate`). Saving any setting re-queues blocked posts."
         : "Fix the channel with `/config ledger`; saving any setting re-queues blocked posts."),
-    problems.paused > 0 && `Paused posts go out ${whenApplied(mode)}.`,
+    // With effects live nothing else resumes a post left from an earlier pause, but a /config
+    // change requeues parked work, as it does blocked posts.
+    problems.paused > 0 &&
+      (mode === "live"
+        ? "Paused posts are left from an earlier pause; saving any setting with `/config` re-queues them."
+        : `Paused posts go out ${whenApplied(mode)}.`),
     problems.failed > 0 &&
       "Failed posts won't retry on their own, so report them to the bot operator.",
   ].filter((step): step is string => Boolean(step));

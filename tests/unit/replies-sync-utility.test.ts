@@ -320,6 +320,30 @@ describe("/sync status, officer views (C4 and C7)", () => {
     );
   });
 
+  test("with effects live, work left paused by an earlier pause is never promised a resume", () => {
+    // A restart with effects on requeues held work, so a `disabled` row that is still there while
+    // live has nothing coming to resume it: officers see it under Needs attention with no
+    // "Nothing to fix" step, and members aren't told to wait for an activation.
+    const leftover = S.officerPaused.work.slice(0, 2);
+    const officer = overview({ runs: [], work: leftover, effectsMode: "live" }, "officer");
+    const embed = expectHouseStyle(officer, { tone: "pending" });
+    expect(fieldOf(embed, "Next step")).toBeUndefined();
+    expect(fieldOf(embed, "Needs attention")).toStartWith("`‖ PAUSED` reconcile.user");
+    expect(visibleText(officer)).not.toContain("Held work resumes");
+    const member = overview(
+      {
+        runs: [],
+        work: [work({ status: "disabled" })],
+        effectsMode: "live",
+      },
+      "member",
+    );
+    expect(fieldOf(onlyEmbed(member), "Your pending work")).toBe(
+      "`‖ PAUSED` Role update: held from an earlier pause, so ask an officer",
+    );
+    expect(visibleText(member)).not.toMatch(/activat/u);
+  });
+
   test("25 jobs with maximal diagnostics split Needs attention across fields within limits", () => {
     const view: SyncStatusView = {
       runs: Array.from({ length: 10 }, (_, index) =>

@@ -4,7 +4,22 @@ import { DiscordAPIError } from "discord.js";
 import { DISCORD_BLOCKED_CODES, WAITING_CODES } from "../domain/failures.js";
 import { Failure, json } from "../domain/values.js";
 import { orm, type Connection, type Database } from "../infrastructure/postgres/database.js";
-import { and, asc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  type Column,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import * as t from "../infrastructure/postgres/schema.js";
 
 /** Payload version describes its schema; generation describes superseding work for the same key. */
@@ -69,6 +84,81 @@ export const layoutGuildRoles = (client: Connection, guild: string): Promise<str
 /** Channel edits coalesce independently from member enumeration and role-layout effects. */
 export const secureGuildChannels = (client: Connection, guild: string): Promise<string> =>
   enqueue(client, "channels.access", `channel-access:${guild}`, {}, guild);
+
+/** The parked job states that activation, a /config change or a restart can put back in the queue. */
+export type ParkedStatus = "disabled" | "blocked";
+/** The states the active_job unique index covers: at most one such row per dedupe key. */
+const ACTIVE_STATES = ["queued", "running", "blocked"] as const;
+
+/**
+ * Return a guild's parked work to the queue, due now with a fresh attempt budget. Activation, a
+ * /config change and a restart with effects on (work parked `disabled` while ENABLE_EFFECTS was
+ * off) all resume work this way.
+ *
+ * enqueue() only coalesces into queued, running or blocked rows (the active_job index), so a key
+ * enqueued again while its row sat `disabled` gets a second row, and several parked rows can
+ * share one dedupe key. Requeueing them all would violate that unique index. So, per key, only
+ * the newest parked row is requeued, and only when no other active row already holds the key;
+ * the rest close as succeeded with {skipped: "superseded"}, because the surviving row runs the
+ * same work with the newest payload. Losers close first, since a parked `blocked` row is itself in
+ * the index. Returns the requeued job IDs.
+ */
+export async function requeueParked(
+  client: Connection,
+  guilds: readonly string[],
+  statuses: readonly ParkedStatus[],
+): Promise<string[]> {
+  if (!guilds.length || !statuses.length) return [];
+  const db = orm(client);
+  const other = alias(t.jobs, "other");
+  // The same filter on the updated row and on the aliased row it is compared with.
+  const parked = (table: { readonly guild_id: Column; readonly status: Column }) =>
+    and(inArray(table.guild_id, [...guilds]), inArray(table.status, [...statuses]));
+  // Active states this call doesn't requeue hold their key in any guild: the index is global.
+  const holding = ACTIVE_STATES.filter((state) => !(statuses as readonly string[]).includes(state));
+  await db
+    .update(t.jobs)
+    .set({
+      status: "succeeded",
+      completed_at: sql`now()`,
+      lease_until: null,
+      last_error: null,
+      result: { skipped: "superseded" },
+    })
+    .where(
+      and(
+        parked(t.jobs),
+        exists(
+          db
+            .select({ id: other.id })
+            .from(other)
+            .where(
+              and(
+                eq(other.dedupe_key, t.jobs.dedupe_key),
+                ne(other.id, t.jobs.id),
+                or(
+                  holding.length ? inArray(other.status, holding) : undefined,
+                  // A newer parked row for the key (ties broken by ID) survives instead.
+                  and(
+                    parked(other),
+                    or(
+                      gt(other.created_at, t.jobs.created_at),
+                      and(eq(other.created_at, t.jobs.created_at), gt(other.id, t.jobs.id)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ),
+      ),
+    );
+  const requeued = await db
+    .update(t.jobs)
+    .set({ status: "queued", due_at: sql`now()`, attempts: 0 })
+    .where(parked(t.jobs))
+    .returning({ id: t.jobs.id });
+  return requeued.map((row) => row.id);
+}
 
 /** Attempts at or beyond this count end an ordinary retry as a failed delivery. */
 const MAX_ATTEMPTS = 8;

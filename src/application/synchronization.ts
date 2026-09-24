@@ -7,6 +7,7 @@ import {
   type AccessFacts,
   type Actor,
 } from "../domain/policy.js";
+import { effectsPaused } from "../domain/failures.js";
 import { Failure, json, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
 import { ensureUser, orm } from "../infrastructure/postgres/database.js";
@@ -667,7 +668,7 @@ export class Synchronization {
         };
       }
       if (!guild.effects_enabled || !this.app.config.ENABLE_EFFECTS)
-        throw new Failure("disabled", "Effects are disabled pending activation.");
+        throw effectsPaused(this.app.config.ENABLE_EFFECTS);
       await guard();
       const [current] = await db
         .select({ revision: t.guilds.revision })

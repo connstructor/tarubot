@@ -308,6 +308,7 @@ function memberOverview(
   const attention =
     view.work.some(troubled) || states.some((state) => state === "blocked" || state === "failed");
   const heldOnly =
+    paused(mode) &&
     !attention &&
     view.work.length > 0 &&
     view.work.every((job) => job.status === "disabled") &&
@@ -402,7 +403,10 @@ function officerOverview(
   // A DM the recipient's settings refused is counted as failed but is no officer problem.
   const problems = view.work.filter(troubled).length;
   const focused = problems > 0 && !inProgress;
-  const heldOnly = counts.paused > 0 && problems === 0 && counts.queued === 0 && !inProgress;
+  // Only while changes are paused: live, leftover `disabled` work stays under Needs attention with
+  // no "Nothing to fix" step, since no activation or restart is coming to resume it.
+  const heldOnly =
+    paused(mode) && counts.paused > 0 && problems === 0 && counts.queued === 0 && !inProgress;
   const completed =
     view.work.length === 0 &&
     view.runs.length > 0 &&

@@ -58,6 +58,11 @@ export interface DeliveryRow {
   readonly status: string;
   readonly last_error: string | null;
   readonly message_id: string | null;
+  /**
+   * The channel the post was sent to, from the job result; null for posts made before 2.14.0
+   * recorded it, and for posts not sent yet.
+   */
+  readonly channel_id: string | null;
   readonly entry_id: string;
   readonly sequence: bigint;
   readonly attempts: number;
@@ -212,6 +217,8 @@ export type LedgerReceipt =
         readonly status: string;
         readonly message_id: string | null;
         readonly last_error: string | null;
+        /** The channel the post went to; null before it is sent or for pre-2.14.0 posts. */
+        readonly channel_id: string | null;
       } | null;
     })
   | (LedgerContext & { readonly status: "unchanged"; readonly balance: bigint });

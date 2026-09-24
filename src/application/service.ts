@@ -44,7 +44,13 @@ import type {
   CompanyIdentity,
   Nodestone,
 } from "../infrastructure/nodestone/client.js";
-import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
+import {
+  enqueue,
+  layoutGuildRoles,
+  reconcileUser,
+  requeueParked,
+  secureGuildChannels,
+} from "../jobs/queue.js";
 import { managedRoleOrder } from "../domain/role-layout.js";
 import type { DiscordPort, GuildRecord } from "./records.js";
 import type {
@@ -856,13 +862,9 @@ export class Service {
         });
       }
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
-      const requeued = await db
-        .update(t.jobs)
-        .set({ status: "queued", attempts: 0, due_at: sql`now()` })
-        .where(
-          and(eq(t.jobs.guild_id, actor.guildId), inArray(t.jobs.status, ["blocked", "disabled"])),
-        )
-        .returning({ id: t.jobs.id });
+      // Parked work retries against the new settings, one row per dedupe key: the repair pass
+      // just queued above replaces a parked reconcile.guild instead of colliding with it.
+      const requeued = await requeueParked(client, [actor.guildId], ["blocked", "disabled"]);
       const change = {
         status: "saved",
         effects: "queued",
@@ -1778,17 +1780,10 @@ export class Service {
           and(eq(t.ledgerAccounts.guild_id, actor.guildId), eq(t.ledgerAccounts.fc_id, linkedFc)),
         )
         .for("update");
-      // Linking an FC creates its account in the same transaction, so this is a broken invariant.
-      if (!account)
-        throw new Failure(
-          "setup",
-          "This FC's ledger account is missing. Run /config fc link again.",
-          0,
-          {
-            kind: "setup",
-            missing: "ledger",
-          },
-        );
+      // Linking an FC creates its account in the same transaction, so this is a broken invariant
+      // like "Missing guild": no command repairs it (re-linking the same FC is a no-op), so it is
+      // the unexpected card with its Ref, logged at error, rather than a setup step that can't work.
+      if (!account) throw new Error("Missing ledger account");
       const context = {
         effectsMode: this.effectsMode(current),
         fc: await this.company(db, linkedFc),
@@ -1807,6 +1802,8 @@ export class Service {
             status: t.jobs.status,
             message_id: t.jobs.message_id,
             last_error: t.jobs.last_error,
+            // The channel the post went to (null for posts made before 2.14.0 recorded it).
+            channel_id: sql<string | null>`${t.jobs.result}->>'channelId'`,
           })
           .from(t.jobs)
           .where(eq(t.jobs.dedupe_key, `ledger:${duplicate.id}`))
@@ -1998,6 +1995,8 @@ export class Service {
           status: t.jobs.status,
           last_error: t.jobs.last_error,
           message_id: t.jobs.message_id,
+          // The channel the post went to, so a rebound ledger channel keeps earlier jump links.
+          channel_id: sql<string | null>`${t.jobs.result}->>'channelId'`,
           entry_id: sql<string>`${t.jobs.payload}->>'entryId'`,
           sequence: t.ledgerEntries.sequence,
           attempts: t.jobs.attempts,

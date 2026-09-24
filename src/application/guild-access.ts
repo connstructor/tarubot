@@ -8,6 +8,7 @@ import {
   type AccessSnapshot,
   type ChannelAudience,
 } from "../domain/channel-access.js";
+import { effectsPaused } from "../domain/failures.js";
 import { Failure } from "../domain/values.js";
 import { audit, orm, type Connection } from "../infrastructure/postgres/database.js";
 import { and, eq } from "drizzle-orm";
@@ -104,7 +105,7 @@ export class GuildAccess {
         .where(and(eq(t.guilds.id, guildId), eq(t.guilds.active, true)));
       if (!guild?.access_policy_enabled) return { skipped: "onboarding policy inactive" };
       if (!this.app.config.ENABLE_EFFECTS || !guild.effects_enabled)
-        throw new Failure("disabled", "Discord effects are disabled pending activation.");
+        throw effectsPaused(this.app.config.ENABLE_EFFECTS);
       const lobby = guild.lobby_channel_id,
         officers = guild.officer_channel_id;
       if (!lobby || !officers || lobby === officers)

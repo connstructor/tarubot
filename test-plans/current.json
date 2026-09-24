@@ -14,14 +14,14 @@
     "Compare each reply with the approved mockups: title, tone color, fields, footer and buttons. Flag any JSON, raw UUID in a member view, ISO time or parsed mention.",
     "Match every error's Ref to the log `operation` and its Code to the logged `code`; confirm no stack, SQL or token text reached Discord.",
     "Read back the ledger channel posts and the officer-chat review message: one embed, no mentions, full entry ID present.",
-    "Paused pass: receipts are the pending \"Saved, Discord changes paused\" card with `‖ PAUSED`, never QUEUED or \"shortly\"; sync views show paused work; /config validate warns \"[WARN] Disabled for this deployment\" (ENABLE_EFFECTS=false is deployment_disabled; DevBot has no unactivated guild and no worker may use tarubot_rehearsal, so the \"ready for activation\" verdict of configuration#9 is covered by the unit catalog case configuration/validate.ready).",
+    "Paused pass: receipts are the pending \"Saved, Discord changes paused\" card with `‖ PAUSED`, never QUEUED or \"shortly\"; sync views show paused work (none once effects return); /config validate warns \"[WARN] Disabled for this deployment\" (ENABLE_EFFECTS=false is deployment_disabled; DevBot has no unactivated guild and no worker may use tarubot_rehearsal, so the \"ready for activation\" verdict of configuration#9 is covered by the unit case configuration/validate.ready).",
     "Record deviations with command, audience and message ID in docs/DEV_GUILD.md, fix them, and re-run the affected step."
   ],
   "bot": [
-    "Run compiled 2.14.0 on schema 005; presentation changes only, with the same decisions and writes as 2.13.0.",
+    "Run compiled 2.14.0 on schema 005 with the same decisions as 2.13.0; held work now resumes when the bot restarts with effects on.",
     "Answer each interaction with one house-style embed, public in this test guild and ephemeral elsewhere, with no parsed mentions.",
     "Post ledger entries and decision DMs as embeds and move review messages to one embed on their next update; officer notices stay plain text until 2.15.0.",
-    "Hold Discord changes during the paused pass, then reconcile the guild again when it restarts with effects on.",
+    "Hold Discord changes during the paused pass, then requeue the held work and reconcile the guild again when it restarts with effects on.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

@@ -63,12 +63,14 @@ export interface Probe {
 /**
  * The gateway reports itself connected and correctly identified, so readiness depends only on
  * the lease and startup. Timing defaults are short; the process exit is recorded, not performed.
- * `guilds` are the guild IDs the gateway's cache reports present, which start() reconciles.
+ * `guilds` are the guild IDs the gateway's cache reports present, which start() reconciles, and
+ * `overrides` replace configuration values (effects stay off unless a test turns them on).
  */
 export function lifecycleHarness(
   db: Database,
   options: Partial<LifecycleOptions> = {},
   guilds: readonly string[] = [],
+  overrides: Partial<Configuration> = {},
 ): LifecycleHarness {
   const logs: LogLine[] = [];
   const exits: number[] = [];
@@ -89,6 +91,7 @@ export function lifecycleHarness(
     GUEST_COOLDOWN_SECONDS: 86400,
     // Port 0 lets several lifecycles (and parallel test runs) listen side by side.
     HEALTH_PORT: 0,
+    ...overrides,
   };
   // A real SDK client that never logs in; only readiness and identity are replaced.
   const gateway = new DiscordGateway();

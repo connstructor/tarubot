@@ -273,7 +273,13 @@ describe("/guest status, member view", () => {
         "`✗ FAILED` Role update: stopped and won't retry, so ask an officer",
         "warning",
       ],
-      [{ status: "disabled" }, "`‖ PAUSED` Role update: waiting for activation", "pending"],
+      // With effects live, a paused row is left over from an earlier pause: no activation is
+      // promised (step 3 of the round-3 held-work fix).
+      [
+        { status: "disabled" },
+        "`‖ PAUSED` Role update: held from an earlier pause, so ask an officer",
+        "pending",
+      ],
     ];
     for (const [overrides, value, tone] of cases) {
       const status = guestStatus({
@@ -284,6 +290,14 @@ describe("/guest status, member view", () => {
       const embed = expectHouseStyle(self(status), { tone: tone as never });
       expect(fieldOf(embed, "Roles")).toBe(value);
     }
+    // A paused update awaiting activation says so.
+    const awaiting = guestStatus({
+      delivery: [job({ status: "disabled" })],
+      effectsMode: "awaiting_activation",
+    });
+    expect(fieldOf(onlyEmbed(self(awaiting)), "Roles")).toBe(
+      "`‖ PAUSED` Role update: waiting for activation",
+    );
     // A paused update while Discord changes are off for the deployment says so.
     const deployment = guestStatus({
       delivery: [job({ status: "disabled" })],

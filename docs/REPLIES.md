@@ -37,7 +37,7 @@ Nothing essential appears only in the footer, the timestamp or the color.
 
 Two documented exemptions:
 
-- **`/config show`** keeps the approved one-field-per-setting layout: 12 fields for a configured guild (13 with pending grandfathering). It is tested against its own maximum of 15 fields (critique fix C3). Unset roles or channels collapse into one field.
+- **`/config show`** keeps the approved one-field-per-setting layout: 12 fields for a configured guild (13 once the guild has a grandfathering marker: "Pending · runs once at activation" before activation, "Completed <t:…:R>" after it, per the reply spec; approved configuration#4 draws a guild with no marker). It is tested against its own maximum of 15 fields (critique fix C3). Unset roles or channels collapse into one field.
 - **Channel posts** may exceed the 1,000-character description, because a ledger post shows the entry's full escaped note (C10). Discord's 4,096-character limit still applies.
 
 ## Tones
@@ -65,7 +65,7 @@ These rules settle the cases where the approved cards and the swatches could be 
 | Any other view showing `‖ PAUSED` | pending, unless something is also blocked or failed |
 | Officer `/sync status` overview | pending while runs are active or anything is queued, even with a failed job (guests#44); warning only when the view is focused on blocked or failed work (#45) |
 | A no-op result ("already set", "= NO CHANGE") | info, except the approved neutral cards "No correction needed" and "Nickname sync already off" |
-| A time-bound refusal (cooldowns, rate limits, busy, shutdown, the Check again throttle) or a token not yet visible | pending; the time-bound ones add a relative Try again time |
+| A time-bound refusal (cooldowns, rate limits, busy, shutdown, the Check again throttle) or a token not yet visible | pending; the time-bound ones add a Try again field (a relative time when known, otherwise "shortly") |
 | A harmless refusal: a feature not set up yet (members), closed applications, no application needed | info |
 | A refusal the user or an officer can fix: input, not found, ambiguous, out of date, ledger state, FC membership, officer setup, blocked, upstream | warning |
 | A permission refusal, an ownership conflict or an unexpected error | error |
@@ -122,9 +122,13 @@ An immediate reply reports only what its transaction committed. Discord work it 
 | --- | --- | --- |
 | `live` | `` `… QUEUED` Role update `` | The group's success card; "shortly" is allowed |
 | `awaiting_activation` | `` `‖ PAUSED` until activation `` (officers add "Why: Server activation pending") | The pending paused-save card |
-| `deployment_disabled` | `` `‖ PAUSED` Discord changes are off for this deployment `` (officers add "Why: Disabled globally (ENABLE_EFFECTS)") | The pending paused-save card, saying they apply once changes are turned back on |
+| `deployment_disabled` | `` `‖ PAUSED` Discord changes are off for this deployment `` (officers add "Why: Disabled globally (ENABLE_EFFECTS)") | The pending paused-save card, saying they apply once changes are turned back on: a restart with `ENABLE_EFFECTS=true` requeues the held work of every activated guild |
 
 The **paused-save card** (errors-and-style#26) keeps the receipt's own sentence about what was saved and its own facts, and adds the `• SAVED` and `‖ PAUSED` fields and the footer "Check progress any time with /sync status". A paused view never says `… QUEUED` for Discord work or "shortly"; the Lodestone roster read, which still runs while Discord changes are paused, is the only work it may show as queued. Roles are never promised: a new link's Member role is the roster-evidence field on the success card (`↻ WAITING for the next roster check` when the roster is stale), never a separate notice or title.
+
+Held work resumes in three ways, and each keeps one row per dedupe key (`requeueParked` in `queue.ts`): activation, any `/config` change, and a restart with `ENABLE_EFFECTS=true`, which requeues `disabled` work of activated guilds. A `‖ PAUSED` row that is still there while effects are live has nothing coming to resume it, so it never promises an activation: members read "held from an earlier pause, so ask an officer", a ledger post "held from an earlier pause" with the `/config` step that re-queues it, and the officer `/sync status` overview lists it under Needs attention without the "Nothing to fix" step.
+
+A receipt reports only what was saved, never Discord work that can't happen: the server owner's first `/verify` link reads "Discord doesn't let bots change the server owner's nickname." in its Nickname field, as `/main` does.
 
 ### Audiences
 
@@ -168,7 +172,7 @@ Anatomy: the category's tone; the concept's title; the approved message (or memb
 C2 takes the sentence from each concept's approved copy:
 
 - "Nothing was changed." appears on refusals of change commands whose approved copy carries it, and on the read-only `/config validate` and Re-check cards on every verdict.
-- Ledger mutations say "Nothing was recorded." (ledger#7).
+- The insufficient-funds refusal says "Nothing was recorded." (ledger#7); other ledger refusals say "Nothing was changed." as their approved copy does (errors-and-style#1).
 - `/setup` says "Anything already created is reused when you run /setup again."
 - The sentence follows the concept, not whether the command reads or changes. A refusal on `/ledger balance`, `/ledger history`, `/sync status`, `/config show` or `/characters` carries it like any other (errors-and-style#1, #2 and #4). These omit it: context and test-instance refusals, "Only your own records", the officer setup card, the closed-applications card, the officer "Linked to another member" card, proofs and the biography card, "No application needed", unexpected errors, and a raw Discord error that may have hit partway through (outside `/setup`). No description repeats it when it already says nothing was saved or changed.
 - A retry-timed refusal (the "Please wait a moment" family and the Lodestone, member-list and join-details cards) puts its "Try again …" after the sentence, as errors-and-style#10 and #24 draw it. Other concepts keep their next step where their approved copy puts it.
@@ -223,7 +227,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 
 Raw Discord Unknown Member and Unknown User errors (10007, 10013) in an interaction are `forbidden` {current_member}, "Not available here". A malformed Lodestone ID in sidecar output is `invalid_response` ("Unexpected Lodestone page"), never input, and a member list with any member lacking a join time is the member-list card, as is a full member request Discord rate limits (gateway `RATE_LIMITED`) or stops answering (`GuildMembersTimeout`). Every other error that is not a `Failure`, including a `ZodError`, is `unexpected`, with its class in the log's `source` field. Internal codes keep their own code in the footer while showing the unexpected card.
 
-Every time-bound refusal (cooldowns, rate limits, busy, transient and stopping) has a Try again field with a relative time. The input card's Example field shows the command with the option the user got wrong. A free-text member option asks to "Paste a Discord user ID or @mention"; "Pick one from the suggestions" is only for autocomplete options. `note()` checks name their option: "Add a note of 1–1,000 characters.", "Add a reason …", "Add a rank …".
+Every time-bound refusal (cooldowns, rate limits, busy, transient and stopping) has a Try again field: a relative time (`<t:…:R>` with the absolute time) when the failure carries a retry deadline, "in a few seconds" when that deadline is under five seconds away, otherwise "shortly" (the `busy`, `stopping` and `transient` throws carry none). The input card's Example field shows the command with the option the user got wrong. A free-text member option asks to "Paste a Discord user ID or @mention"; "Pick one from the suggestions" is only for autocomplete options. `note()` checks name their option: "Add a note of 1–1,000 characters.", "Add a reason …", "Add a rank …".
 
 ## Posts and DMs
 
@@ -251,6 +255,7 @@ Every place a shipped reply differs from a drawn approved card, and the authorit
 | characters#20, guests#7 | Add **Full details (JSON)**, which these drawn cards do not show. `/config show` and `validate` do not offer it, although the style guide's list names them, because their drawn button rows (#4, #7–#9) don't. | The drawn cards and the style guide's JSON list disagree. | Owner decision O2 (JSON only where the style guide lists it); please confirm the `/config` omission |
 | errors-and-style#1 | The note check reads "Add a note of 1–1,000 characters.", not "Add a **note** of 1–1,000 characters that explains the transaction." | One labelled `note()` wording serves notes, reasons and ranks. | Amendment C10 (the approved Rewrites text) |
 | errors-and-style#27 | The footer is `Code unexpected · Ref <id>`, and "Share the reference with an officer." moves into a member "What you can do" field; the Reference and Before retrying fields stay. | The house-style board and the Errors board say every error ends with its code and reference; the drawn #27 footer does not. | Needs owner sign-off |
+| errors-and-style#26 | Drawn as a generic "(any change)" notice. Each change receipt saved while Discord changes are paused ships as this card, with its own sentence about what it saved in place of "Your change is saved." The drawn sentence follows it, and the receipt's own fact fields come after the drawn Saved and Discord changes fields. Officers and managers get "Why: Server activation pending", or "Why: Disabled globally (ENABLE_EFFECTS)", as a second line of the Discord changes value rather than a separate field. While the deployment has effects off, the sentence and the field say "Discord changes are off for this deployment" instead of "until activation". | One generic card can't say what each receipt saved, and the drawn card has no officer or deployment-off variant. | Owner decision O2 (paused saves use the pending #26 card); the reply-specs note on notice-effects-paused (officer Why); amendment C5 (all three effects modes) |
 
 ## Resolutions record
 

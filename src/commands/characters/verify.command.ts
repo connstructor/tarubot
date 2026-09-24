@@ -13,11 +13,13 @@ export default defineCommand({
   requires: [applicationKey],
   async execute({ actor, viewer, interaction, services }) {
     // A token not yet visible fails as pending_proof, which the router shows with Check again.
+    // The server owner is told Discord keeps their nickname, as /main and /nickname do.
     return verifyReply(
       await services
         .get(applicationKey)
         .verify(actor, id(interaction.options.getString("character", true), "character")),
       viewer,
+      { guildOwner: interaction.guild?.ownerId === actor.userId },
     );
   },
   autocomplete: (context) => completeCharacter(context, "verify"),

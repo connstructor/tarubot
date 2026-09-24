@@ -295,6 +295,24 @@ describe("/verify", () => {
     expect(fieldOf(embed, "Nickname")).toBeUndefined();
   });
 
+  test("the server owner's first link says Discord keeps their nickname, live and paused", () => {
+    // The gateway always refuses the owner's nickname, so no receipt may promise that change.
+    for (const effectsMode of ["live", "awaiting_activation", "deployment_disabled"] as const) {
+      const presented = verifyReply({ ...R.verified, primary: true, effectsMode }, VIEWERS.member, {
+        now: NOW,
+        guildOwner: true,
+      });
+      expect(fieldOf(onlyEmbed(presented), "Nickname")).toBe(
+        "Discord doesn't let bots change the server owner's nickname.",
+      );
+      expect(visibleText(presented)).not.toContain("Changes to");
+    }
+    // Everyone else is still told the nickname changes.
+    expect(
+      fieldOf(onlyEmbed(verifyReply({ ...R.verified, primary: true }, VIEWERS.member)), "Nickname"),
+    ).toStartWith("Changes to **Example Character**");
+  });
+
   test("stale roster evidence adds the ↻ WAITING Member role field to the success card", () => {
     const embed = expectHouseStyle(
       verifyReply(

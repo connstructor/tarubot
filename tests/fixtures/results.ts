@@ -104,6 +104,8 @@ export const delivery = (overrides: Partial<DeliveryRow> = {}): DeliveryRow => (
   status: "succeeded",
   last_error: null,
   message_id: "789012345678901234",
+  // As a post made before 2.14.0 stored it: its link uses the configured ledger channel.
+  channel_id: null,
   entry_id: "7c1d2e3f-8a9b-4c0d-8e1f-2a3b4c5d6e7f",
   sequence: 41n,
   attempts: 1,

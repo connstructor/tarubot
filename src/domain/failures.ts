@@ -113,6 +113,20 @@ export const FAILURE_LEVEL = {
 } as const satisfies Record<FailureCategory, ReportLevel>;
 
 /**
+ * The `disabled` failure that jobs and reconciliation throw while Discord effects are off. Its
+ * stored diagnostic names the switch that holds the work, so officer job lines agree with the view
+ * around them: the deployment-wide ENABLE_EFFECTS switch outranks a guild awaiting activation.
+ */
+export function effectsPaused(deploymentEnabled: boolean): Failure {
+  return new Failure(
+    "disabled",
+    deploymentEnabled
+      ? "Discord effects are disabled pending activation."
+      : "Discord changes are off for this deployment (ENABLE_EFFECTS=false).",
+  );
+}
+
+/**
  * Codes a queued job waits on instead of failing: ordering, locks, cooldowns, superseding inputs
  * or a lost lease. Shared by jobOutcome and the job-line presenter so both agree on "waiting".
  * Typed as strings because jobOutcome also tests its own non-Failure classifications against it.

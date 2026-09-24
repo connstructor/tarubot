@@ -31,7 +31,7 @@ The handoff's documentation version is not evidence of a deployed image. **2.12.
 
 **Update, 2.14.0 (current version):**
 - **Branch.** `feat/reply-presenters-2.14.0` starts from `main` at `2e3f27c` (2.13.0, PR #11). It replaces every JSON reply with the owner-approved embeds ([REPLIES.md](REPLIES.md)). No migration: the schema stays `005_launch_access_policy.sql`.
-- **Status.** Not yet merged, published, or deployed. Once published, deploy it to DevBot (no migration), re-register commands (the `/ledger history` `before` description changed) and run the reply session in `test-plans/current.json`, including the pass with Discord changes paused.
+- **Status.** Not yet merged, published, or deployed. Once published, deploy it to DevBot (no migration), re-register commands (the `/ledger history` `before` description and the `/config` channel options changed) and run the reply session in `test-plans/current.json`, including the pass with Discord changes paused.
 
 **Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock (historical: commits are now signed with the SSH key described below). This documentation branch has not been pushed or given a PR at this checkpoint.
 

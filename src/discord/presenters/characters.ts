@@ -122,6 +122,9 @@ function namedTitle(before: string, name: string, after = ""): string {
 /** The character in bold for a sentence: '**Example Character @ Diabolos**'. */
 const bold = (character: CharacterRef): string => `**${characterName(character)}**`;
 
+/** The Nickname field for the server owner, whose nickname Discord never lets a bot change. */
+const OWNER_NICKNAME = "Discord doesn't let bots change the server owner's nickname.";
+
 /** The projected server nickname (the name cut to 32 graphemes), bold for a sentence. */
 const nicknameText = (character: CharacterRef): string =>
   `**${plain(nickname(character.name), HOUSE_LIMITS.characterName)}**`;
@@ -223,16 +226,26 @@ function serverRoles(fcLinked: boolean, mode: EffectsMode): FieldSpec {
   return { name: "Server roles", value: `Updating ${whenApplied(mode)}${basis}` };
 }
 
+/** Options for /verify: whether the viewer owns the server, as /main and /nickname take it. */
+export interface VerifyReplyOptions extends CharacterReplyOptions {
+  /**
+   * The viewer owns the Discord server, whose nickname no bot may change. Read from the cached
+   * guild by the command and button; the Nickname field then states that instead of a change.
+   */
+  readonly guildOwner?: boolean;
+}
+
 /**
  * /verify and its buttons. Verified (approved characters#9, success): the Main character field
- * says whether this became the main; the Nickname field appears only then; stale roster evidence
- * adds the '↻ WAITING' Member role field. Paused effects give the paused-save card with the same
- * facts. An already consumed claim is the neutral-worded info card characters#14.
+ * says whether this became the main; the Nickname field appears only then (with /main's owner
+ * wording for the server owner, since Discord refuses that change); stale roster evidence adds the
+ * '↻ WAITING' Member role field. Paused effects give the paused-save card with the same facts. An
+ * already consumed claim is the neutral-worded info card characters#14.
  */
 export function verifyReply(
   result: VerifyResult,
   viewer: Viewer,
-  options: CharacterReplyOptions = {},
+  options: VerifyReplyOptions = {},
 ): Presented {
   if (result.status === "already_verified")
     return card(
@@ -259,7 +272,11 @@ export function verifyReply(
   if (result.primary)
     facts.push({
       name: "Nickname",
-      value: `Changes to ${nicknameText(character)} ${whenApplied(mode)}. Turn this off with \`/nickname enabled:false\`.`,
+      // A receipt never promises Discord work that can't happen: the gateway always refuses the
+      // server owner's nickname, so the owner reads mainNickname's caveat instead of a change.
+      value: options.guildOwner
+        ? OWNER_NICKNAME
+        : `Changes to ${nicknameText(character)} ${whenApplied(mode)}. Turn this off with \`/nickname enabled:false\`.`,
       inline: true,
     });
   const waiting = result.roster.fresh ? null : rosterEvidence(result.roster, mode);
@@ -613,7 +630,7 @@ function mainNickname(
   primary: CharacterRef,
   guildOwner: boolean,
 ): string {
-  if (guildOwner) return "Discord doesn't let bots change the server owner's nickname.";
+  if (guildOwner) return OWNER_NICKNAME;
   if (!result.nickname.enabled)
     return "Nickname sync is off. Turn it on with `/nickname enabled:true` to use this name.";
   if (result.nickname.suspended)

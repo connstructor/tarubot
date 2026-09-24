@@ -288,7 +288,12 @@ export const LEDGER_RESULTS = {
     status: "already_recorded",
     entry: E41,
     correction: null,
-    post: { status: "succeeded", message_id: POSTED_MESSAGE, last_error: null },
+    post: {
+      status: "succeeded",
+      message_id: POSTED_MESSAGE,
+      last_error: null,
+      channel_id: LEDGER_CHANNEL,
+    },
   },
   balance: {
     ...readView,
