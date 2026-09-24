@@ -635,7 +635,9 @@ export class Synchronization {
           .leftJoin(t.characters, eq(t.characters.id, t.guildUsers.primary_character_id))
           .where(and(eq(t.guildUsers.guild_id, guild.id), eq(t.guildUsers.user_id, member.id)));
         let target = member.nickname;
-        if (preferences) {
+        // The worker never writes or restores the server owner's nickname, so a preview never
+        // plans one either: the owner's desired nickname stays the current one.
+        if (preferences && !member.owner) {
           const ownPending =
             preferences.nickname_pending && member.nickname === preferences.nickname_expected;
           const expected = preferences.nickname_written
@@ -655,8 +657,7 @@ export class Synchronization {
             preferences.nickname_enabled &&
             !preferences.nickname_suspended &&
             preferences.name &&
-            !independent &&
-            !member.owner
+            !independent
           )
             target = nickname(preferences.name);
         }

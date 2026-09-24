@@ -1501,6 +1501,23 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         )
       )[0],
     ).toEqual({ nickname_restore: false, nickname_pending: false });
+    // A preview plans no nickname change for the owner either, even with a restore pending.
+    await db.query(
+      "UPDATE guild_users SET nickname_restore=true, nickname_baseline_set=true, nickname_written=true, nickname_before='Original' WHERE guild_id=$1 AND user_id=$2",
+      [guild, serverOwner],
+    );
+    const previewKey = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${guild}:${serverOwner}`,
+      {},
+      guild,
+      serverOwner,
+    );
+    expect(await sync.user(await leased(previewKey), async () => {}, true)).toMatchObject({
+      nickname: { current: before, desired: before },
+    });
+    await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [previewKey]);
   });
   test("replacement, tuple binding and expiry prevent invalid proof completion", async () => {
     const owner = { ...actor, userId: "90013", officer: false };
@@ -1652,6 +1669,37 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // /setup opens /apply: the switch goes on with the review channel.
     expect(configured.guest_applications_enabled).toBe(true);
     await administration.setup(manager, "DevBot", null, null);
+    // Switching applications on validates a kept review channel first (an import's legacy channel
+    // may be gone), as /config guest_applications enabled:true does (2.15.0 review).
+    await db.orm
+      .update(t.guilds)
+      .set({ guest_application_channel_id: "89999", guest_applications_enabled: false })
+      .where(eq(t.guilds.id, setupGuild));
+    const keptChannel = provisioner.validateChannel;
+    provisioner.validateChannel = async (guildId, channel) => {
+      if (channel === "89999")
+        throw new Failure("blocked", "<#89999> is unavailable.", 0, {
+          kind: "resource",
+          resource: "channel",
+          id: channel,
+        });
+      return keptChannel(guildId, channel);
+    };
+    try {
+      await expect(administration.setup(manager, "DevBot", null, null)).rejects.toMatchObject({
+        code: "blocked",
+      });
+    } finally {
+      provisioner.validateChannel = keptChannel;
+    }
+    expect((await service.guild(manager)).guest_applications_enabled).toBe(false);
+    await db.orm
+      .update(t.guilds)
+      .set({
+        guest_application_channel_id: configured.guest_application_channel_id,
+        guest_applications_enabled: true,
+      })
+      .where(eq(t.guilds.id, setupGuild));
     expect(created.size).toBe(4);
     expect((await service.guild(manager)).officer_role_id).toBe(configured.officer_role_id);
     const officerRole = configured.officer_role_id;
@@ -5018,6 +5066,20 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       effects: "unchanged",
       nickname: { enabled: false },
     });
+    // /main with sync off (just turned off above) keeps the restore that queued; with sync on it
+    // replaces it.
+    expect(await service.preferences(self, "77980001", null)).toMatchObject({ status: "saved" });
+    const restorePending = async () =>
+      (
+        await db.query<{ nickname_restore: boolean }>(
+          "SELECT nickname_restore FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guildId, self.userId],
+        )
+      )[0]?.nickname_restore;
+    expect(await restorePending()).toBe(true);
+    expect(await service.preferences(self, "77980002", null)).toMatchObject({ status: "saved" });
+    expect(await service.preferences(self, null, true)).toMatchObject({ status: "saved" });
+    expect(await restorePending()).toBe(false);
     // Resuming sync that a manual nickname suspended is a change, not a repeat.
     await db.query(
       "UPDATE guild_users SET nickname_enabled=true, nickname_suspended=true WHERE guild_id=$1 AND user_id=$2",
@@ -5418,6 +5480,23 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       discord.validateChannel = validateChannel;
     }
     expect(checked).toEqual(["98299"]);
+    // A change to the stored channel between validation and the save is a conflict, and nothing
+    // is saved: applications never open on a channel nobody validated.
+    await service.configureGuestApplications(officer, { enabled: false, channel: "98203" });
+    discord.validateChannel = async () => {
+      await db.orm
+        .update(t.guilds)
+        .set({ guest_application_channel_id: "98204" })
+        .where(eq(t.guilds.id, guildId));
+    };
+    try {
+      await expect(
+        service.configureGuestApplications(officer, { enabled: true }),
+      ).rejects.toMatchObject({ code: "conflict" });
+    } finally {
+      discord.validateChannel = validateChannel;
+    }
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
     // Only officers configure it, and configure() no longer takes the review channel.
     await expect(
       service.configureGuestApplications({ ...officer, officer: false }, { enabled: false }),

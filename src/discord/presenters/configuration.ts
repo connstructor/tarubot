@@ -1452,6 +1452,14 @@ export function officerRankReply(
 ): Presented {
   const rank = result.officerRank;
   const mode = result.effectsMode;
+  const headsUp = rank
+    ? [
+        !result.fcLinked && "No FC is linked, so this rank can't match anyone yet.",
+        !result.officerRoleId && "No Officer role is bound; bind one with /config roles officer.",
+      ].filter((line): line is string => Boolean(line))
+    : [];
+  // A repeat names the saved rank without claiming access it can't give yet: the same Heads-up as
+  // the saved path says what is still missing (no FC linked, no Officer role bound).
   if (result.status === "unchanged")
     return card(
       "rank.unchanged",
@@ -1459,17 +1467,14 @@ export function officerRankReply(
         tone: "info",
         title: rank ? "Officer rank already set" : "Officer rank already unset",
         description: rank
-          ? `${marker("unchanged")} The in-game rank ${rankText(rank)} already grants bot officer access.`
+          ? `${marker("unchanged")} ${rankText(rank)} is already the saved officer rank.${
+              headsUp.length ? "" : " Members who hold it already get bot officer access."
+            }`
           : `${marker("unchanged")} No officer rank was set, so officer access already comes only from manual grants.`,
+        fields: [headsUp.length ? { name: "Heads-up", value: headsUp.join("\n") } : null],
       },
       options,
     );
-  const headsUp = rank
-    ? [
-        !result.fcLinked && "No FC is linked, so this rank can't match anyone yet.",
-        !result.officerRoleId && "No Officer role is bound; bind one with /config roles officer.",
-      ].filter((line): line is string => Boolean(line))
-    : [];
   const saved = rank
     ? `Members whose linked character holds the in-game rank ${rankText(rank)} get bot officer access and the Officer role, alongside manual grants. /officer revoke still overrides the rank.`
     : "Officer access now comes only from manual grants (/officer grant). People who had the Officer role only through their in-game rank lose it at the next role check.";

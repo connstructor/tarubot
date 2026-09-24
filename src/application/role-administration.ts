@@ -69,6 +69,12 @@ export class RoleAdministration {
         .where(eq(t.guilds.id, actor.guildId));
       if (fcId && previous?.fc_id && previous.fc_id !== fcId) throw fcLinked(previous.fc_id);
       await this.access.discord.check(actor.guildId, actor.userId);
+      // /setup switches guest applications on. Like /config guest_applications enabled:true, it
+      // first validates a kept review channel it is about to open: an import stores the legacy
+      // channel unvalidated with the switch off. The revision check below catches a concurrent
+      // change to it.
+      if (previous?.guest_application_channel_id && !previous.guest_applications_enabled)
+        await this.discord.validateChannel(actor.guildId, previous.guest_application_channel_id);
       // Setup never changes the role-layout switch. An existing guild keeps its value (an imported
       // guild stays off); a guild first created here gets the column default, which is on. A
       // concurrent /config role_layout bumps the revision, so the check below turns it into a conflict.

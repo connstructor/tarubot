@@ -1776,7 +1776,12 @@ export class Service {
       if (mainChanges)
         await db
           .update(t.guildUsers)
-          .set({ primary_character_id: character, nickname_restore: false })
+          // With sync on, the new main's nickname replaces a pending restore; with sync off, a
+          // restore that /nickname enabled:false or an unlink queued still runs (as trust() does).
+          .set({
+            primary_character_id: character,
+            ...(current?.enabled ? { nickname_restore: false } : {}),
+          })
           .where(scope);
       if (syncChanges)
         await db
@@ -2751,7 +2756,8 @@ export class Service {
    * /guest reset (owner decision, 2026-09-24): lift the member's Guest revocation and end every
    * active grant of any provenance (approved, manual, imported, grandfathered), so FC membership
    * and registered characters decide Guest again. Ended grants stay as history and never confer
-   * Guest; grandfathering still counts them, so a reset before activation is not undone there.
+   * Guest; grandfathering still counts them, so grants a reset ended before activation are not
+   * replaced by a grandfathered grant.
    * With nothing to remove it changes nothing and audits nothing.
    */
   async guestReset(actor: Actor, user: string, reason: string): Promise<GuestResetResult> {

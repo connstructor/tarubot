@@ -1306,3 +1306,24 @@ describe("stored Lodestone tags (2.14.0 reply session, D1)", () => {
     }
   });
 });
+
+describe("officer rank repeats (2.15.0 review)", () => {
+  test("a repeat names the saved rank and what is still missing, never access it can't give", () => {
+    const repeat = rankResult({ status: "unchanged", effects: "unchanged", previous: "Officer" });
+    const ready = onlyEmbed(officerRankReply(repeat, VIEWERS.manager, { now: NOW }));
+    expect(ready.description).toContain("is already the saved officer rank.");
+    expect(ready.description).toEndWith("Members who hold it already get bot officer access.");
+    expect(fieldOf(ready, "Heads-up")).toBeUndefined();
+    const unbound = onlyEmbed(
+      officerRankReply({ ...repeat, officerRoleId: null }, VIEWERS.manager, { now: NOW }),
+    );
+    expect(unbound.description).not.toContain("get bot officer access");
+    expect(fieldOf(unbound, "Heads-up")).toBe(
+      "No Officer role is bound; bind one with /config roles officer.",
+    );
+    expectHouseStyle(officerRankReply({ ...repeat, officerRoleId: null }, VIEWERS.manager), {
+      tone: "info",
+      title: "Officer rank already set",
+    });
+  });
+});
