@@ -196,28 +196,34 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   "guest status": ["/guest status member:123456789012345678"],
   "officer grant": ["/officer grant member:123456789012345678 reason:New FC officer"],
   "officer revoke": ["/officer revoke member:123456789012345678 reason:Stepped down"],
-  "config officer_rank": ["/config officer_rank rank:Officer", "/config officer_rank clear:true"],
+  "config officer_rank": [
+    "/config officer_rank rank:Officer",
+    "/config officer_rank unset_rank:true",
+  ],
   "config fc link": ["/config fc link fc_id:9230000000000000001"],
   "config fc unlink": ["/config fc unlink fc_id:9230000000000000001"],
-  "config roles member": ["/config roles member role:@Member", "/config roles member clear:true"],
-  "config roles guest": ["/config roles guest role:@Guest", "/config roles guest clear:true"],
+  "config roles member": [
+    "/config roles member role:@Member",
+    "/config roles member unset_role:true",
+  ],
+  "config roles guest": ["/config roles guest role:@Guest", "/config roles guest unset_role:true"],
   "config roles officer": [
     "/config roles officer role:@Officer adopt_holders:false",
-    "/config roles officer clear:true",
+    "/config roles officer unset_role:true",
   ],
   "config roles leader": [
     "/config roles leader role:@FC Leader",
-    "/config roles leader clear:true",
+    "/config roles leader unset_role:true",
   ],
   "config role_layout": ["/config role_layout enabled:true"],
-  "config ledger": ["/config ledger channel:#fc-ledger", "/config ledger clear:true"],
+  "config ledger": ["/config ledger channel:#fc-ledger", "/config ledger unset_channel:true"],
   "config officer_notifications": [
     "/config officer_notifications channel:#officer-chat",
-    "/config officer_notifications clear:true",
+    "/config officer_notifications unset_channel:true",
   ],
   "config guest_applications": [
-    "/config guest_applications channel:#officer-chat",
-    "/config guest_applications clear:true",
+    "/config guest_applications enabled:true channel:#officer-chat",
+    "/config guest_applications unset_channel:true",
   ],
   setup: [
     "/setup fc_id:9230000000000000001",

@@ -181,6 +181,8 @@ export class RoleAdministration {
               current.officer_notifications_channel_id ?? prepared.officers.id,
             guest_application_channel_id:
               current.guest_application_channel_id ?? prepared.officers.id,
+            // /setup opens /apply (docs/SETUP.md): the switch goes on with the review channel.
+            guest_applications_enabled: true,
             revision: sql`${t.guilds.revision}+1`,
             active: true,
           })

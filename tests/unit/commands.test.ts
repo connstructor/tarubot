@@ -182,11 +182,21 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
       (sub.options ?? []).map((option) => option.name),
     ]),
   ).toEqual([
-    ["member", ["role", "clear"]],
-    ["guest", ["role", "clear"]],
-    ["officer", ["role", "clear", "adopt_holders"]],
-    ["leader", ["role", "clear"]],
+    ["member", ["role", "unset_role"]],
+    ["guest", ["role", "unset_role"]],
+    ["officer", ["role", "unset_role", "adopt_holders"]],
+    ["leader", ["role", "unset_role"]],
   ]);
+  // No /config option is named "clear" (owner decision, 2026-09-24: it sounds like erasing).
+  expect(JSON.stringify(declared)).not.toContain('"name":"clear"');
+  expect(declared.find((option) => option.name === "guest_applications")).toMatchObject({
+    type: S.Subcommand,
+    options: [
+      { type: S.Boolean, name: "enabled" },
+      { type: S.Channel, name: "channel" },
+      { type: S.Boolean, name: "unset_channel" },
+    ],
+  });
   expect(declared.find((option) => option.name === "role_layout")).toMatchObject({
     type: S.Subcommand,
     options: [{ type: S.Boolean, name: "enabled", required: true }],

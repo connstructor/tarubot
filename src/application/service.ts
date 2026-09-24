@@ -76,6 +76,7 @@ import type {
   EffectsMode,
   FcRef,
   FcUnlinkResult,
+  GuestApplicationsResult,
   GuestActionResult,
   GuestStatusView,
   LedgerBalanceView,
@@ -96,7 +97,7 @@ const SETTINGS_CHANGED =
 
 /** Approved wording shared by the role-binding and /setup input checks. */
 const ONBOARDING_ROLES =
-  "Onboarding is on, so all four roles are required. Choose a replacement role instead of clearing it, or run /setup again.";
+  "Onboarding is on, so all four roles are required. Choose a replacement role instead of unsetting it, or run /setup again.";
 const DISTINCT_ROLES = "Member, Guest, Officer and FC Leader must be four different roles.";
 
 /**
@@ -725,8 +726,8 @@ export class Service {
       "leader_role_id",
       "ledger_channel_id",
       "officer_notifications_channel_id",
-      "guest_application_channel_id",
     ] as const;
+    // The guest review channel has its own method, which changes it with the applications switch.
     const column = fields.find((candidate) => candidate === field);
     // Unreachable from /config, whose subcommands name only allowlisted fields.
     if (!column) throw new Failure("input", "Invalid configuration field.");
@@ -735,7 +736,7 @@ export class Service {
     if (options.adoptHolders !== undefined && !bindsOfficer)
       throw new Failure(
         "input",
-        "Use adopt_holders only when choosing an Officer role, not with clear:true.",
+        "Use adopt_holders only when choosing an Officer role, not with unset_role:true.",
         0,
         { kind: "option", option: "adopt_holders" },
       );
@@ -904,6 +905,80 @@ export class Service {
               sample: [],
               note: "Current holders were not granted officer access. Officers come from /config officer_rank and /officer grant; holders with neither can lose this role once effects apply.",
             },
+      };
+    });
+  }
+  /**
+   * /config guest_applications: the applications switch and the review channel (owner decision,
+   * 2026-09-24: "The channel setting should be separate from whether applications are enabled").
+   * One call may change either or both, in one revision; a request matching what is saved changes
+   * nothing. A new channel is validated first; a saved change is audited per setting and queues the
+   * repair pass like every /config change. Switching off keeps waiting applications reviewable, and
+   * switching on without a channel or Guest role saves but leaves /apply closed.
+   */
+  async configureGuestApplications(
+    actor: Actor,
+    change: { readonly channel?: string | null; readonly enabled?: boolean },
+  ): Promise<GuestApplicationsResult> {
+    authorize(actor, actor.guildId, "officer");
+    if (change.channel) await this.discord.validateChannel(actor.guildId, change.channel);
+    return this.db.transaction(async (client) => {
+      const db = orm(client);
+      // A guild first created here takes the column defaults, as configure() does.
+      await db
+        .insert(t.guilds)
+        .values({ id: actor.guildId, effects_enabled: true })
+        .onConflictDoNothing();
+      const [saved] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("update");
+      if (!saved) throw new Error("Missing guild");
+      const channel =
+        change.channel === undefined ? saved.guest_application_channel_id : change.channel;
+      const enabled = change.enabled ?? saved.guest_applications_enabled;
+      const channelChanged = channel !== saved.guest_application_channel_id;
+      const enabledChanged = enabled !== saved.guest_applications_enabled;
+      if (!channelChanged && !enabledChanged)
+        return {
+          status: "unchanged",
+          effectsMode: this.effectsMode(saved),
+          enabled,
+          channel,
+          guild: saved,
+        };
+      const [updated] = await db
+        .update(t.guilds)
+        .set({
+          guest_application_channel_id: channel,
+          guest_applications_enabled: enabled,
+          revision: sql`${t.guilds.revision}+1`,
+          active: true,
+        })
+        .where(eq(t.guilds.id, actor.guildId))
+        .returning();
+      if (!updated) throw new Error("Missing guild");
+      if (channelChanged)
+        await audit(client, actor.guildId, actor.userId, "config", "guest_application_channel_id", {
+          value: channel,
+        });
+      if (enabledChanged)
+        await audit(client, actor.guildId, actor.userId, "config", "guest_applications_enabled", {
+          value: enabled,
+        });
+      if (channelChanged && saved.access_policy_enabled)
+        await secureGuildChannels(client, actor.guildId);
+      await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
+      const requeued = await requeueParked(client, [actor.guildId], ["blocked", "disabled"]);
+      return {
+        status: "saved",
+        effects: "queued",
+        effectsMode: this.effectsMode(updated),
+        enabled: { previous: saved.guest_applications_enabled, value: enabled },
+        channel: { previous: saved.guest_application_channel_id, value: channel },
+        requeued: requeued.length,
+        guild: updated,
       };
     });
   }
@@ -2149,14 +2224,15 @@ export class Service {
   }
   /**
    * Whether /apply may open its form in this guild: one primary-key read, fast enough for the
-   * router's pre-modal check. A guild with no active row, no review channel (imports start that
-   * way) or no Guest role is closed, by the same rule apply() enforces at submission, so a visitor
-   * is never shown a form that would then be refused. It reveals nothing beyond that and grants
-   * nothing.
+   * router's pre-modal check. A guild with no active row, applications switched off (imports start
+   * that way), no review channel or no Guest role is closed, by the same rule apply() enforces at
+   * submission, so a visitor is never shown a form that would then be refused. It reveals nothing
+   * beyond that and grants nothing.
    */
   async guestApplicationsOpen(guildId: string): Promise<boolean> {
     const [row] = await this.db.orm
       .select({
+        guest_applications_enabled: t.guilds.guest_applications_enabled,
         guest_application_channel_id: t.guilds.guest_application_channel_id,
         guest_role_id: t.guilds.guest_role_id,
       })
@@ -2174,10 +2250,10 @@ export class Service {
     if (!submitted.success)
       throw new Failure("input", "Both answers need 10–300 characters. Run /apply again.");
     const guild = await this.guild(actor);
-    // Closed without a review channel (imports start closed; owner decision 2026-09-23) or without
-    // a Guest role. Either way the visitor gets the same message as the pre-modal refusal, never
-    // officer setup text; the detail tells an officer's reply which piece is missing.
-    if (!guild.guest_application_channel_id)
+    // Closed while switched off (imports start that way; owner decisions 2026-09-23 and -24), or
+    // without a review channel or a Guest role. The visitor always gets the pre-modal refusal's
+    // message, never officer setup text; the detail tells an officer's reply which piece is missing.
+    if (!guild.guest_applications_enabled || !guild.guest_application_channel_id)
       throw new Failure("setup", GUEST_APPLICATIONS_CLOSED, 0, {
         kind: "setup",
         missing: "guest_applications",

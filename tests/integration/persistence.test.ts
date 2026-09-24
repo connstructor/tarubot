@@ -11,7 +11,7 @@ import {
 } from "discord.js";
 import type { AccessChannel } from "../../src/domain/channel-access.js";
 import { channelAccessOverwrites } from "../../src/domain/channel-access.js";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import * as t from "../../src/infrastructure/postgres/schema.js";
 import { capabilityMetrics } from "../../src/application/metrics.js";
@@ -263,12 +263,12 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.migrate();
     await db.schema();
     await importLegacy(db, source, snapshot, mappings(source));
-    // Imports now leave guest applications closed (owner decision 2026-09-23), so the form
-    // scenarios below opt in to the legacy review channel explicitly. A dedicated test covers the
-    // closed state.
+    // Imports keep the legacy review channel with applications switched off (owner decisions
+    // 2026-09-23 and 2026-09-24), so the form scenarios below switch them on explicitly. A dedicated
+    // test covers the closed state.
     await db.orm
       .update(t.guilds)
-      .set({ guest_application_channel_id: legacyGuild.guest_application_channel_id })
+      .set({ guest_applications_enabled: true })
       .where(eq(t.guilds.id, guild));
     for (const member of snapshot.guilds[0]?.members ?? [])
       members.set(member.id, {
@@ -1104,10 +1104,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       status: "imported",
       report: { guildSettings: [{ guildId: closedGuild, guestApplications: closed }] },
     });
-    // Ledger and roster notices keep their legacy destinations; only the review channel is closed.
+    // Ledger, roster and review channels keep their legacy destinations; applications start off.
     const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closedGuild));
     expect(row).toMatchObject({
-      guest_application_channel_id: null,
+      guest_application_channel_id: first.guest_application_channel_id,
+      guest_applications_enabled: false,
       ledger_channel_id: first.ledger_channel_id,
       officer_notifications_channel_id: first.officer_notifications_channel_id,
       effects_enabled: false,
@@ -1173,11 +1174,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect(await applications()).toHaveLength(0);
       // An explicit, audited /config choice opens applications; the form then opens and a
       // submission queues its officer review.
-      await service.configure(
-        { ...actor, guildId: closedGuild },
-        "guest_application_channel_id",
-        "81003",
-      );
+      expect(
+        await service.configureGuestApplications(
+          { ...actor, guildId: closedGuild },
+          { enabled: true, channel: "81003" },
+        ),
+      ).toMatchObject({
+        status: "saved",
+        enabled: { previous: false, value: true },
+        channel: { previous: first.guest_application_channel_id, value: "81003" },
+      });
       await router.handle(interactions.slash());
       expect(interactions.requests.at(-1)?.body).toMatchObject({
         type: InteractionResponseType.Modal,
@@ -1628,6 +1634,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ).toHaveLength(1);
     expect(configured.officer_notifications_channel_id).toBe(configured.officer_channel_id);
     expect(configured.guest_application_channel_id).toBe(configured.officer_channel_id);
+    // /setup opens /apply: the switch goes on with the review channel.
+    expect(configured.guest_applications_enabled).toBe(true);
     await administration.setup(manager, "DevBot", null, null);
     expect(created.size).toBe(4);
     expect((await service.guild(manager)).officer_role_id).toBe(configured.officer_role_id);
@@ -2405,6 +2413,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           access_policy_enabled: onboarding,
           access_everyone_before: onboarding ? remote.everyonePermissions : null,
           guest_application_channel_id: "81002",
+          guest_applications_enabled: true,
         });
       if (onboarding)
         await policy.remember(client, guildId, structuredClone(remote), "81001", "81002", false);
@@ -3843,38 +3852,48 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         grandfatherPlan: checksum,
         guestApplications: choice,
       });
-    // A 2.12.x import still carries its review channel: activation needs an explicit choice.
+    const channelOf = async (id: string) =>
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, id)))[0];
+    // 2.15.0 imports keep the legacy review channel with the switch off: without a choice,
+    // activation keeps applications closed and the channel stored (owner decision, 2026-09-24).
     const kept = await setup("666666666666666703", "9232097761132950012");
-    await expect(activate(kept.row.id, kept.plan.checksum)).rejects.toMatchObject({
-      code: "conflict",
+    expect(await activate(kept.row.id, kept.plan.checksum)).toMatchObject({
+      status: "activated",
+      guestApplications: "closed",
     });
-    await expectNotActivated(kept.row.id);
-    expect(await activate(kept.row.id, kept.plan.checksum, "open")).toMatchObject({
+    expect(await channelOf(kept.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: false,
+    });
+    expect(await auditsOf(kept.row.id, "config")).toEqual([]);
+    // --guest-applications open switches them on, audited as activation's config change.
+    const opened = await setup("666666666666666704", "9232097761132950013");
+    expect(await activate(opened.row.id, opened.plan.checksum, "open")).toMatchObject({
       status: "activated",
       guestApplications: "open",
+      revision: opened.row.revision + 1n,
     });
-    expect(
-      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, kept.row.id)))[0]
-        ?.guest_application_channel_id,
-    ).toBe(legacyChannel);
-    expect(await auditsOf(kept.row.id, "config")).toEqual([]);
-    const closed = await setup("666666666666666704", "9232097761132950013");
+    expect(await channelOf(opened.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: true,
+    });
+    expect(await auditsOf(opened.row.id, "config")).toEqual([
+      {
+        target: "guest_applications_enabled",
+        details: { value: true, source: "activation" },
+      },
+    ]);
+    // --guest-applications closed is already the imported state: nothing changes or is audited.
+    const closed = await setup("666666666666666710", "9232097761132950020");
     expect(await activate(closed.row.id, closed.plan.checksum, "closed")).toMatchObject({
       status: "activated",
       guestApplications: "closed",
-      revision: closed.row.revision + 1n,
     });
-    expect(
-      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closed.row.id)))[0]
-        ?.guest_application_channel_id,
-    ).toBeNull();
-    expect(await auditsOf(closed.row.id, "config")).toEqual([
-      {
-        target: "guest_application_channel_id",
-        details: { value: null, source: "activation" },
-      },
-    ]);
-    // A guild imported closed (2.13.0) needs no flag; the first scenario above activates one.
+    expect(await channelOf(closed.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: false,
+    });
+    expect(await auditsOf(closed.row.id, "config")).toEqual([]);
   });
 
   test("pending departures block grandfathering until a confirming roster settles them", async () => {
@@ -4724,6 +4743,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       leader_role_id: "98104",
       ledger_channel_id: "98201",
       guest_application_channel_id: "98202",
+      guest_applications_enabled: true,
     });
     await db.orm.insert(t.ledgerAccounts).values({ guild_id: guildId, fc_id: fcId });
     return { ...actor, guildId, serverManager: true };
@@ -5145,6 +5165,63 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       code: "not_found",
       detail: { kind: "resource", resource: "entry", id: "#999" },
     });
+  });
+
+  test("the guest-application switch and review channel change together (2026-09-24)", async () => {
+    const guildId = "888888888888888811";
+    const officer = await displayGuild(guildId, "9230000000000098021");
+    const revisionOf = async () =>
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, guildId)))[0]?.revision;
+    const configAudits = async () =>
+      (
+        await db.orm
+          .select({ target: t.auditEvents.target, details: t.auditEvents.details })
+          .from(t.auditEvents)
+          .where(and(eq(t.auditEvents.guild_id, guildId), eq(t.auditEvents.action, "config")))
+          .orderBy(asc(t.auditEvents.id))
+      ).map((row) => [row.target, row.details]);
+    // Starting open with channel 98202: a repeat changes nothing, bumps no revision, audits nothing.
+    const start = await revisionOf();
+    expect(await service.configureGuestApplications(officer, { enabled: true })).toMatchObject({
+      status: "unchanged",
+      enabled: true,
+      channel: "98202",
+    });
+    expect(await revisionOf()).toBe(start);
+    // Switching off keeps the channel; the gate closes, and the audit names the switch.
+    expect(await service.configureGuestApplications(officer, { enabled: false })).toMatchObject({
+      status: "saved",
+      enabled: { previous: true, value: false },
+      channel: { previous: "98202", value: "98202" },
+    });
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    // Unsetting the channel and switching back on in one call is one revision.
+    const before = await revisionOf();
+    expect(
+      await service.configureGuestApplications(officer, { enabled: true, channel: null }),
+    ).toMatchObject({
+      status: "saved",
+      enabled: { previous: false, value: true },
+      channel: { previous: "98202", value: null },
+    });
+    expect(await revisionOf()).toBe((before ?? 0n) + 1n);
+    // On without a channel stays closed until one is set.
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    await service.configureGuestApplications(officer, { channel: "98203" });
+    expect(await service.guestApplicationsOpen(guildId)).toBe(true);
+    expect(await configAudits()).toEqual([
+      ["guest_applications_enabled", { value: false }],
+      ["guest_application_channel_id", { value: null }],
+      ["guest_applications_enabled", { value: true }],
+      ["guest_application_channel_id", { value: "98203" }],
+    ]);
+    // Only officers configure it, and configure() no longer takes the review channel.
+    await expect(
+      service.configureGuestApplications({ ...officer, officer: false }, { enabled: false }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      service.configure(officer, "guest_application_channel_id", "98202"),
+    ).rejects.toMatchObject({ code: "input" });
   });
 
   test("configuration results carry what changed, the FC identity and the role order", async () => {

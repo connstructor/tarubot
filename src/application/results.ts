@@ -348,6 +348,31 @@ export type ConfigChange =
       readonly officerHolders?: OfficerHolders;
     };
 
+/**
+ * /config guest_applications: the switch and the review channel, changed together in one revision
+ * (owner decision, 2026-09-24). 'unchanged' when the request matched what was saved; it bumped no
+ * revision and queued nothing.
+ */
+export type GuestApplicationsResult =
+  | {
+      readonly status: "unchanged";
+      readonly effectsMode: EffectsMode;
+      readonly enabled: boolean;
+      readonly channel: string | null;
+      readonly guild: GuildRecord;
+    }
+  | {
+      readonly status: "saved";
+      readonly effects: "queued";
+      readonly effectsMode: EffectsMode;
+      readonly enabled: { readonly previous: boolean; readonly value: boolean };
+      readonly channel: { readonly previous: string | null; readonly value: string | null };
+      /** Blocked or paused jobs queued again by this change. */
+      readonly requeued: number;
+      /** The configuration row after the change. */
+      readonly guild: GuildRecord;
+    };
+
 /** /config fc unlink. */
 export interface FcUnlinkResult {
   readonly status: "unlinked";

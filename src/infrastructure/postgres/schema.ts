@@ -60,6 +60,12 @@ export const guilds = pgTable("guilds", {
   ledger_channel_id: externalId("ledger_channel_id"),
   officer_notifications_channel_id: externalId("officer_notifications_channel_id"),
   guest_application_channel_id: externalId("guest_application_channel_id"),
+  /**
+   * Guest-application switch (migration 006, owner decision 2026-09-24), separate from the review
+   * channel: /apply opens only when it is on and a review channel and a Guest role are set. Guilds
+   * start off; /setup turns it on, and imports keep it off with their legacy channel stored.
+   */
+  guest_applications_enabled: boolean("guest_applications_enabled").notNull().default(false),
   lobby_channel_id: externalId("lobby_channel_id"),
   officer_channel_id: externalId("officer_channel_id"),
   access_policy_enabled: boolean("access_policy_enabled").notNull().default(false),

@@ -15,7 +15,7 @@ import {
   activateGuild,
   alreadyActive,
   assertFreshRoster,
-  closesGuestApplications,
+  guestApplicationsChoice,
   GrandfatherPlanMismatch,
 } from "../src/application/activation.js";
 import { pendingDepartureFailure, pendingDepartures } from "../src/application/grandfathering.js";
@@ -145,7 +145,7 @@ if (import.meta.main) {
       );
     } else {
       // Fail fast, before login and a long enumeration; activateGuild repeats these checks.
-      closesGuestApplications(guild, args.guestApplications);
+      guestApplicationsChoice(guild, args.guestApplications);
       await assertFreshRoster(db.orm, guild, config.ROSTER_INTERVAL_SECONDS);
       const pending = guild.guest_grandfather === "pending";
       if (pending) {
@@ -167,9 +167,12 @@ if (import.meta.main) {
         guild.leader_role_id,
       ])
         if (role) await gateway.validateRole(args.guildId, role);
-      // A review channel that stays closed, or is being closed now, is never validated.
-      const reviewChannel =
-        args.guestApplications === "closed" ? null : guild.guest_application_channel_id;
+      // Only a review channel that will take applications after activation is validated; a legacy
+      // channel imported with the switch off may no longer exist.
+      const opens =
+        args.guestApplications === "open" ||
+        (args.guestApplications === undefined && guild.guest_applications_enabled);
+      const reviewChannel = opens ? guild.guest_application_channel_id : null;
       for (const channel of [
         guild.ledger_channel_id,
         guild.officer_notifications_channel_id,

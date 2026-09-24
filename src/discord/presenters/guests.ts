@@ -139,15 +139,15 @@ const ALREADY_PLAY: FieldSpec = {
 };
 
 /**
- * What an officer runs to open applications: a review channel and a Guest role, both required
- * (the shared guestApplicationsOpen rule). Shown only to people who could run it.
+ * What an officer runs to open applications: the switch on, a review channel and a Guest role, all
+ * required (the shared guestApplicationsOpen rule). Shown only to people who could run it.
  */
 const OPEN_APPLICATIONS: FieldSpec = {
   name: "Open applications",
   value: [
-    `${cmd("config guest_applications", { channel: "#guest-reviews" })} sets the review channel.`,
+    `${cmd("config guest_applications", { enabled: true, channel: "#guest-reviews" })} turns them on with a review channel.`,
     `${cmd("config roles guest", { role: "@Guest" })} sets the Guest role.`,
-    "Applications open once both are set.",
+    "Applications open once all three are set.",
   ].join("\n"),
 };
 

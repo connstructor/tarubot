@@ -25,7 +25,7 @@ export function orm(connection: Connection): Orm {
   return instance;
 }
 /** The newest migration this build requires; startup and tools refuse any other applied head. */
-export const SCHEMA_VERSION = "005_launch_access_policy.sql";
+export const SCHEMA_VERSION = "006_guest_application_switch.sql";
 /** Numbered migration filenames, as stored in schema_migrations.version. */
 export const MIGRATION_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
 /** The pool is application-owned; remote Discord/Lodestone work stays outside transactions. */

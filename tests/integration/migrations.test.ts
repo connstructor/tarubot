@@ -1,6 +1,7 @@
 /**
- * Migration 005 rehearsals in private PostgreSQL schemas, isolated from persistence.test.ts's public
- * schema: import/activation backfill, the new CHECKs, an empty database, and the real migrate() runner.
+ * Migration 005 and 006 rehearsals in private PostgreSQL schemas, isolated from persistence.test.ts's
+ * public schema: import/activation backfill, the new CHECKs, the guest-application switch, an empty
+ * database, and the real migrate() runner.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
@@ -205,8 +206,11 @@ describe.skipIf(!url)("migration 005 launch access policy", () => {
         results.filter((result) => result.command === "UPDATE").map((result) => result.rowCount),
       ).toEqual([0, 0]);
       // A guild created later by /setup or /config takes the column defaults: layout on, no marker.
+      // Plain SQL: Drizzle's insert names every mapped column, including those later files add.
       const store = orm(client);
-      await store.insert(t.guilds).values({ id: guild.devbot, effects_enabled: true });
+      await client.query("INSERT INTO guilds (id, effects_enabled) VALUES ($1, true)", [
+        guild.devbot,
+      ]);
       expect(
         await store
           .select({
@@ -257,7 +261,7 @@ describe.skipIf(!url)("migration 005 launch access policy", () => {
         [guild.pending],
       );
 
-      // 001-004 match their recorded checksums and are skipped; only 005 runs.
+      // 001-004 match their recorded checksums and are skipped; 005 and 006 run.
       await runner.migrate(directory);
       await runner.schema();
       // Once migrated, the earlier head no longer matches.
@@ -289,5 +293,78 @@ describe.skipIf(!url)("migration 005 launch access policy", () => {
       await db.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       await rm(staged, { recursive: true, force: true });
     }
+  });
+});
+
+const SWITCH = "006_guest_application_switch.sql";
+
+describe.skipIf(!url)("migration 006 guest-application switch", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  /** One rolled-back transaction at schema 005, in a private schema, before 006 runs. */
+  async function rehearse(schema: string, body: (client: PoolClient) => Promise<void>) {
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET LOCAL search_path TO ${schema}`);
+      for (const file of (await migrationFiles()).filter((name) => name < SWITCH))
+        await client.query(await migration(file));
+      await body(client);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  }
+
+  test("the switch starts on only where a review channel was open, never for a pending import", async () => {
+    await rehearse("m006_rehearsal", async (client) => {
+      // Schema-005 rows: DevBot's shape (a channel, never imported), an import awaiting activation
+      // with its legacy channel (a 2.12.x import), an activated import with a channel, and a guild
+      // with no channel.
+      await client.query(
+        `INSERT INTO guilds (id, guest_application_channel_id, guest_grandfather, guest_grandfathered_at, effects_enabled, revision)
+         VALUES ($1, '800001', NULL, NULL, true, 13),
+                ($2, '800002', 'pending', NULL, false, 7),
+                ($3, '800003', 'completed', now(), true, 9),
+                ($4, NULL, NULL, NULL, true, 4)`,
+        [guild.devbot, guild.pending, guild.activated, guild.dormant],
+      );
+      const results: QueryResult[] = [await client.query(await migration(SWITCH))].flat();
+      expect(
+        results.filter((result) => result.command === "UPDATE").map((result) => result.rowCount),
+      ).toEqual([2]);
+      const store = orm(client);
+      expect(
+        await store
+          .select({
+            id: t.guilds.id,
+            enabled: t.guilds.guest_applications_enabled,
+            channel: t.guilds.guest_application_channel_id,
+            revision: t.guilds.revision,
+          })
+          .from(t.guilds)
+          .orderBy(asc(t.guilds.id)),
+      ).toEqual([
+        { id: guild.devbot, enabled: true, channel: "800001", revision: 13n },
+        { id: guild.pending, enabled: false, channel: "800002", revision: 7n },
+        { id: guild.activated, enabled: true, channel: "800003", revision: 9n },
+        { id: guild.dormant, enabled: false, channel: null, revision: 4n },
+      ]);
+      // A guild created later takes the default: applications off until /setup or /config.
+      await store.insert(t.guilds).values({ id: guild.disabled, effects_enabled: true });
+      expect(
+        (
+          await store
+            .select({ enabled: t.guilds.guest_applications_enabled })
+            .from(t.guilds)
+            .where(eq(t.guilds.id, guild.disabled))
+        )[0],
+      ).toEqual({ enabled: false });
+    });
   });
 });
