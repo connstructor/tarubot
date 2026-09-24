@@ -7,7 +7,7 @@
 
 ### Approved implementation amendments (2026-09-21)
 
-The owner requested `/version [commits]` for any guild user. It displays the installed SemVer and the latest requested number of GitHub commit IDs, links, and titles from `connstructor/tarubot`; show ✅ next to an ID only when GitHub confirms its signature is valid and verified. Default to five commits and bound requests to ten. Record versioned development milestones and retain local version output when GitHub is unavailable.
+The owner requested `/version [commits]` for any guild user. It displays the installed SemVer and the latest requested number of GitHub commit IDs, links, and titles from `deconfined/tarubot`; show ✅ next to an ID only when GitHub confirms its signature is valid and verified. Default to five commits and bound requests to ten. Record versioned development milestones and retain local version output when GitHub is unavailable.
 
 This implementation is a complete rewrite of TaruBot and uses major version **2**. `package.json` defines its current version, with development milestones recorded in `CHANGELOG.md`. Every coherent change set must increment SemVer appropriately: major for incompatible changes, minor for compatible features, and patch for compatible fixes or maintenance, including documentation and tests.
 

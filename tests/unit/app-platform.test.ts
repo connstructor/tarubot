@@ -189,3 +189,31 @@ test("one bot, its migration job, and the internal parser use the current releas
     expect(value.image.registry_type).toBe("GHCR");
   }
 });
+
+test("App Platform and Compose pull the images this repository publishes", async () => {
+  // publish.yml pushes ghcr.io/${GITHUB_REPOSITORY,,} and its -nodestone sibling. GHCR paths
+  // follow the GitHub account and never redirect after a rename (the account was renamed from
+  // connstructor on 2026-09-24), so both pull sites must agree with package.json's repository.
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\.git$/.exec(manifest.repository.url);
+  if (!match?.[1] || !match[2]) throw new Error("package.json repository.url is not a GitHub URL");
+  const [owner, name] = [match[1].toLowerCase(), match[2].toLowerCase()];
+  // Under GitHub Actions the running repository is authoritative: a rename or transfer leaves
+  // package.json, the spec and Compose stale together, which the agreement checks cannot see.
+  const running = process.env.GITHUB_REPOSITORY;
+  if (running) expect(`${owner}/${name}`).toBe(running.toLowerCase());
+  const bot = spec.workers[0],
+    parser = spec.services[0];
+  if (!bot || !parser) throw new Error("Missing deployment component");
+  expect(bot.image).toMatchObject({ registry: owner, repository: name });
+  expect(parser.image).toMatchObject({ registry: owner, repository: `${name}-nodestone` });
+  const service = z.object({ image: z.string() });
+  const compose = z
+    .object({ services: z.object({ tarubot: service, nodestone: service }) })
+    .parse(YAML.parse(await Bun.file(new URL("../../docker-compose.yml", import.meta.url)).text()));
+  expect(compose.services.tarubot.image).toBe(
+    `\${TARUBOT_IMAGE:-ghcr.io/${owner}/${name}:\${TARUBOT_IMAGE_TAG:-latest}}`,
+  );
+  expect(compose.services.nodestone.image).toBe(
+    `\${NODESTONE_IMAGE:-ghcr.io/${owner}/${name}-nodestone:\${TARUBOT_IMAGE_TAG:-latest}}`,
+  );
+});

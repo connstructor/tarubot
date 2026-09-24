@@ -140,7 +140,7 @@ describe("approved cards are reproduced exactly", () => {
       color: 0x5865f2,
       title: "TaruBot v2.13.0",
       description:
-        "Latest 5 commits on [connstructor/tarubot](https://github.com/connstructor/tarubot) · `main`\n\n[Source code](https://github.com/connstructor/tarubot) · [AGPL-3.0-only](https://github.com/connstructor/tarubot/blob/main/LICENSE)",
+        "Latest 5 commits on [deconfined/tarubot](https://github.com/deconfined/tarubot) · `main`\n\n[Source code](https://github.com/deconfined/tarubot) · [AGPL-3.0-only](https://github.com/deconfined/tarubot/blob/main/LICENSE)",
       footer: { text: "✓ verified = GitHub-verified signature · History cached up to 5 minutes" },
       timestamp: NOW.toISOString(),
     });
@@ -148,12 +148,12 @@ describe("approved cards are reproduced exactly", () => {
       {
         name: "Add launch access policy and cutover tooling",
         value:
-          "[a1b2c3d](https://github.com/connstructor/tarubot/commit/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678) · ✓ verified",
+          "[a1b2c3d](https://github.com/deconfined/tarubot/commit/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678) · ✓ verified",
       },
       {
         name: "Log queue outcomes by severity",
         value:
-          "[2dc82b5](https://github.com/connstructor/tarubot/commit/2dc82b5000000000000000000000000000000000) · ✓ verified",
+          "[2dc82b5](https://github.com/deconfined/tarubot/commit/2dc82b5000000000000000000000000000000000) · ✓ verified",
       },
     ]);
   });

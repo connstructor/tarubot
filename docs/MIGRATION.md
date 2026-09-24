@@ -50,7 +50,7 @@ Every supplied ownership record needs explicit destination guilds, and every sou
 
 ```sh
 mkdir -p ~/tarubot-cutover/work/{rehearsal,backups} && chmod -R go-rwx ~/tarubot-cutover
-git clone --recurse-submodules https://github.com/connstructor/tarubot.git ~/tarubot-cutover/src
+git clone --recurse-submodules https://github.com/deconfined/tarubot.git ~/tarubot-cutover/src
 cd ~/tarubot-cutover/src
 ln -s ../work work   # clone-relative work/ is ~/tarubot-cutover/work, which the pg container mounts at /work
 git checkout RELEASE_MERGE_SHA && git submodule update --init --recursive
@@ -96,7 +96,7 @@ pg psql -d tarubot -At -c "SELECT l.pid FROM pg_locks l WHERE l.locktype='adviso
 **Sidecar.** Run an isolated Nodestone on loopback port 18080, matching `NODESTONE_URL` in both files:
 
 ```sh
-docker run -d --rm --name tarubot-cutover-nodestone -p 127.0.0.1:18080:8080 ghcr.io/connstructor/tarubot-nodestone:X.Y.Z
+docker run -d --rm --name tarubot-cutover-nodestone -p 127.0.0.1:18080:8080 ghcr.io/deconfined/tarubot-nodestone:X.Y.Z
 ```
 
 Do not use `docker-compose.tools.yml`: it would recreate DevBot's default-project containers, and its PostgreSQL is not the production database.
