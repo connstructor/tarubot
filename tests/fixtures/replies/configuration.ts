@@ -878,6 +878,21 @@ export const CONFIG_CASES = {
         now,
       }),
   },
+  // The saved rank again is a no-op (owner decision, 2026-09-24: never imply a change).
+  "rank.unchanged": {
+    spec: null,
+    audience: "manager",
+    noOp: true,
+    tone: "info",
+    title: "Officer rank already set",
+    timestamp: false,
+    render: () =>
+      officerRankReply(
+        rankResult({ status: "unchanged", effects: "unchanged", previous: "Officer" }),
+        VIEWERS.manager,
+        { now },
+      ),
+  },
   "layout.on": {
     spec: "configuration#33",
     audience: "manager",

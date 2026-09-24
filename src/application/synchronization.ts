@@ -782,6 +782,17 @@ export class Synchronization {
         .set({ nickname_suspended: true, nickname_enabled: false, nickname_pending: false })
         .where(scope);
     };
+    // Discord lets no bot change the server owner's nickname, so the worker never writes or
+    // restores it, and drops any pending restore or write, instead of blocking a job no officer
+    // can fix (2.14.0 reply session: the owner's /nickname enabled:true).
+    if (current.owner) {
+      if (user.nickname_restore || user.nickname_pending)
+        await db
+          .update(t.guildUsers)
+          .set({ nickname_restore: false, nickname_pending: false })
+          .where(scope);
+      return;
+    }
     if (user.nickname_restore) {
       let restored = ownPending && current.nickname === user.nickname_before;
       let changed = independent;
@@ -822,9 +833,6 @@ export class Synchronization {
         .where(scope);
       return;
     }
-    // Discord lets no bot change the server owner's nickname, so the worker skips it instead of
-    // blocking a job no officer can fix (2.14.0 reply session: the owner's /nickname enabled:true).
-    if (current.owner) return;
     if (!user.nickname_enabled || user.nickname_suspended || !user.primary_character_id) return;
     if (independent) {
       await suspend();

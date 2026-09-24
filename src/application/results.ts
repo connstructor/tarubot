@@ -383,11 +383,12 @@ export interface FcUnlinkResult {
 
 /** /config officer_rank. */
 export interface OfficerRankResult {
-  readonly status: "saved";
+  /** 'unchanged' when the rank named (or unset) is already the saved one; nothing was saved. */
+  readonly status: "saved" | "unchanged";
   readonly officerRank: string | null;
   readonly previous: string | null;
   readonly mode: "rank_and_manual_overrides" | "manual_only";
-  readonly effects: "queued";
+  readonly effects: "queued" | "unchanged";
   readonly effectsMode: EffectsMode;
   readonly fcLinked: boolean;
   readonly officerRoleId: string | null;

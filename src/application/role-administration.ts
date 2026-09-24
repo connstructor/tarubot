@@ -355,6 +355,11 @@ export class RoleAdministration {
     authorizeRoleManager(actor);
     reason = note(reason, "reason");
     const guild = await this.app.guild(actor);
+    // Like grant and revoke: the bound role must still be one this manager and the bot may assign,
+    // since removing a revoke can give the Officer role and removing a grant can take it away.
+    // Channel access is checked as for a revoke; reconciliation revalidates any role it adds.
+    if (guild.officer_role_id)
+      await this.discord.validateRole(guild.id, guild.officer_role_id, actor.userId, false);
     const member = await this.discord.member(guild.id, user);
     if (member?.bot)
       throw new Failure(

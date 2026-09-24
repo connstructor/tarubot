@@ -929,7 +929,20 @@ export class Service {
     change: { readonly channel?: string | null; readonly enabled?: boolean },
   ): Promise<GuestApplicationsResult> {
     authorize(actor, actor.guildId, "officer");
-    if (change.channel) await this.discord.validateChannel(actor.guildId, change.channel);
+    // Validate the channel that will take applications once this saves: a newly named one, or the
+    // stored one when this call switches them on (imports keep the legacy channel unvalidated).
+    // Switching off or unsetting never validates, so a deleted channel can't block closing.
+    const [before] = await this.db.orm
+      .select({
+        channel: t.guilds.guest_application_channel_id,
+        enabled: t.guilds.guest_applications_enabled,
+      })
+      .from(t.guilds)
+      .where(eq(t.guilds.id, actor.guildId));
+    const target = change.channel === undefined ? (before?.channel ?? null) : change.channel;
+    const turnsOn = (change.enabled ?? before?.enabled ?? false) && !(before?.enabled ?? false);
+    const validated = change.channel ? change.channel : turnsOn ? target : null;
+    if (validated) await this.discord.validateChannel(actor.guildId, validated);
     return this.db.transaction(async (client) => {
       const db = orm(client);
       // A guild first created here takes the column defaults, as configure() does.
@@ -948,6 +961,15 @@ export class Service {
       const enabled = change.enabled ?? saved.guest_applications_enabled;
       const channelChanged = channel !== saved.guest_application_channel_id;
       const enabledChanged = enabled !== saved.guest_applications_enabled;
+      // Under the row lock: a change that leaves applications taking a channel must use the one
+      // validated above; a concurrent change in between means trying again.
+      if (
+        enabled &&
+        channel !== null &&
+        (enabledChanged || channelChanged) &&
+        channel !== validated
+      )
+        throw new Failure("conflict", SETTINGS_CHANGED);
       if (!channelChanged && !enabledChanged)
         return {
           status: "unchanged",
@@ -1007,6 +1029,21 @@ export class Service {
         .where(eq(t.guilds.id, actor.guildId))
         .for("update");
       if (!saved) throw new Error("Missing guild");
+      const common = {
+        officerRank: rank,
+        previous: saved.officer_rank_name,
+        mode: rank ? "rank_and_manual_overrides" : "manual_only",
+        effectsMode: this.effectsMode(saved),
+        fcLinked: saved.fc_id !== null,
+        officerRoleId: saved.officer_role_id,
+      } as const;
+      // The saved rank again (or unset_rank with none set) changes nothing: no revision bump, audit
+      // or repair pass, and the reply says so (owner decision, 2026-09-24).
+      if (
+        rank === saved.officer_rank_name &&
+        (rank ? normalized(rank) : null) === saved.officer_rank_key
+      )
+        return { ...common, status: "unchanged", effects: "unchanged" };
       await db
         .update(t.guilds)
         .set({
@@ -1019,16 +1056,7 @@ export class Service {
         rank,
       });
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
-      return {
-        status: "saved",
-        officerRank: rank,
-        previous: saved.officer_rank_name,
-        mode: rank ? "rank_and_manual_overrides" : "manual_only",
-        effects: "queued",
-        effectsMode: this.effectsMode(saved),
-        fcLinked: saved.fc_id !== null,
-        officerRoleId: saved.officer_role_id,
-      };
+      return { ...common, status: "saved", effects: "queued" };
     });
   }
   /**
@@ -1276,7 +1304,12 @@ export class Service {
         .set(
           firstLink
             ? { primary_character_id: character, nickname_enabled: true, nickname_suspended: false }
-            : { primary_character_id: character },
+            : // With sync on, the new main's nickname replaces the restore unlinking queued (as
+              // /main does); with sync off, a pending restore of the original nickname stands.
+              {
+                primary_character_id: character,
+                ...(state?.nicknameEnabled ? { nickname_restore: false } : {}),
+              },
         )
         .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)));
     await audit(client, actor.guildId, actor.userId, "character.link", link.id, {
@@ -1728,11 +1761,11 @@ export class Service {
           );
       }
       if (enabled === true && !current?.primary && !character)
+        // No option detail: enabled:true is a valid value, so an Example would only repeat the
+        // command that failed; the message names the /main step instead.
         throw new Failure(
           "input",
           "Choose a main character with /main before turning on nicknames.",
-          0,
-          { kind: "option", option: "enabled" },
         );
       // Resuming sync that a manual nickname suspended is a change; on-and-not-suspended is not.
       const mainChanges = character !== null && current?.primary !== character;

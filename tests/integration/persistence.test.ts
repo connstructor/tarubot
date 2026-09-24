@@ -1467,8 +1467,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const before = member.nickname;
     const queue = new Queue(db, dispatcher(service, sync, access), () => {});
     // Discord would refuse the write (modelled by nicknameBlocked); the worker never attempts it.
-    nicknameBlocked = true;
-    try {
+    const reconcileOwner = async () => {
       const key = await enqueue(
         db.pool,
         "reconcile.user",
@@ -1478,14 +1477,30 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         serverOwner,
       );
       await queue.perform(await leased(key));
-      expect(
-        (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]
-          ?.status,
-      ).toBe("succeeded");
+      return (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]
+        ?.status;
+    };
+    nicknameBlocked = true;
+    try {
+      expect(await reconcileOwner()).toBe("succeeded");
+      // Turning sync off queues a restore; for the owner it is dropped, never attempted.
+      await db.query(
+        "UPDATE guild_users SET nickname_restore=true, nickname_pending=true, nickname_baseline_set=true, nickname_written=true WHERE guild_id=$1 AND user_id=$2",
+        [guild, serverOwner],
+      );
+      expect(await reconcileOwner()).toBe("succeeded");
     } finally {
       nicknameBlocked = false;
     }
     expect(member.nickname).toBe(before);
+    expect(
+      (
+        await db.query<{ nickname_restore: boolean; nickname_pending: boolean }>(
+          "SELECT nickname_restore, nickname_pending FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guild, serverOwner],
+        )
+      )[0],
+    ).toEqual({ nickname_restore: false, nickname_pending: false });
   });
   test("replacement, tuple binding and expiry prevent invalid proof completion", async () => {
     const owner = { ...actor, userId: "90013", officer: false };
@@ -1723,6 +1738,25 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(false);
     const revoked = await rankAccess(db, configured, "90032", 21600);
     expect(desiredRankRole(revoked.officer, true, true)).toBe(false);
+    // Like grant and revoke, a manager below the Officer role is refused and the revoke stands.
+    const validateRole = provisioner.validateRole;
+    const refusals: unknown[][] = [];
+    provisioner.validateRole = async (...args) => {
+      refusals.push(args);
+      throw new Failure("forbidden", "Your highest Discord role must be above @Officer.", 0, {
+        kind: "scope",
+        scope: "hierarchy",
+      });
+    };
+    try {
+      await expect(
+        administration.officerReset(manager, "90032", "Below the role"),
+      ).rejects.toMatchObject({ code: "forbidden" });
+    } finally {
+      provisioner.validateRole = validateRole;
+    }
+    expect(refusals).toEqual([[configured.id, configured.officer_role_id, manager.userId, false]]);
+    expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(false);
     // /officer reset removes the revoke, so the in-game rank decides again; a second reset has
     // nothing to remove (owner decision, 2026-09-24).
     expect(await administration.officerReset(manager, "90032", "Rank decides")).toMatchObject({
@@ -3813,6 +3847,42 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(await lateJoiners(db.orm, guild)).toMatchObject({ state: "pending", count: 0 });
   });
 
+  test("a /guest reset before first activation is not undone by grandfathering (2.15.0)", async () => {
+    const id = "666666666666666711";
+    const fcId = "9232097761132950021";
+    const row = await importedGuild(id, fcId);
+    const [reset, untouched] = ["97111", "97112"];
+    await importedHuman(id, reset);
+    await importedHuman(id, untouched);
+    // The first member's imported grant was ended by /guest reset; the second has no grant.
+    await db.orm.insert(t.guestGrants).values({
+      guild_id: id,
+      user_id: reset,
+      provenance: "imported_guest",
+      source_key: `import:reset-before-activation:${reset}`,
+      ended_at: new Date(),
+      ended_by: "90001",
+      ended_reason: "Back to the automatic rules",
+    });
+    await publishRoster(fcId, []);
+    const plan = await planGrandfathering(
+      db.orm,
+      row,
+      [memberView(id, reset), memberView(id, untouched)],
+      21600,
+      new Date(),
+    );
+    const basisOf = (user: string) =>
+      plan.candidates.find((candidate) => candidate.userId === user)?.basis;
+    // An ended grant still counts as an existing grant here, but no longer as provenance.
+    expect(basisOf(reset)).toBe("existing_grant");
+    expect(
+      plan.candidates.find((candidate) => candidate.userId === reset)?.existingProvenance,
+    ).toEqual([]);
+    expect(basisOf(untouched)).toBe("grant");
+    expect(plan.grants).toEqual([untouched]);
+  });
+
   test("grandfathering fails closed and rolls activation back", async () => {
     const id = "666666666666666701";
     const fcId = "9232097761132950011";
@@ -4966,10 +5036,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       primary: null,
       nickname: { enabled: false, suspended: false },
     });
-    await expect(service.preferences(untracked, null, true)).rejects.toMatchObject({
+    // No option detail, so the card shows no Example repeating /nickname enabled:true.
+    const withoutMain = await service.preferences(untracked, null, true).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(withoutMain).toMatchObject({
       code: "input",
-      detail: { kind: "option", option: "enabled" },
+      message: "Choose a main character with /main before turning on nicknames.",
     });
+    expect(withoutMain instanceof Failure ? withoutMain.detail : "missing").toBeUndefined();
     // Unlinking the main character clears it; the owner keeps one active link.
     expect(await service.unclaim(self, self.userId, "77980002")).toMatchObject({
       status: "unlinked",
@@ -4988,20 +5064,40 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ["77980002", false],
     ]);
     for (const row of history.characters) expect(row.ended_at).toBeInstanceOf(Date);
-    // With no main and no active link left, a new link becomes the main again but keeps the
-    // member's sync setting (owner decision, 2026-09-24: a re-link used to leave no main).
-    expect(await service.preferences(self, null, false)).toMatchObject({ status: "saved" });
-    expect(
-      await service.assign(manager, self.userId, character("77980004", "Relinked"), "Came back"),
-    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: false });
-    expect(
+    // With no main and no active link left, a new link becomes the main again and keeps the
+    // member's sync setting (owner decision, 2026-09-24: a re-link used to leave no main). With
+    // sync on, it replaces the restore the last unlink queued, so the new nickname applies.
+    const userRow = async () =>
       (
-        await db.query<{ primary_character_id: string | null; nickname_enabled: boolean }>(
-          "SELECT primary_character_id,nickname_enabled FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+        await db.query<{
+          primary_character_id: string | null;
+          nickname_enabled: boolean;
+          nickname_restore: boolean;
+        }>(
+          "SELECT primary_character_id,nickname_enabled,nickname_restore FROM guild_users WHERE guild_id=$1 AND user_id=$2",
           [guildId, self.userId],
         )
-      )[0],
-    ).toEqual({ primary_character_id: "77980004", nickname_enabled: false });
+      )[0];
+    expect(await userRow()).toMatchObject({ primary_character_id: null, nickname_restore: true });
+    expect(
+      await service.assign(manager, self.userId, character("77980004", "Relinked"), "Came back"),
+    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: true });
+    expect(await userRow()).toEqual({
+      primary_character_id: "77980004",
+      nickname_enabled: true,
+      nickname_restore: false,
+    });
+    // With sync off, a re-link still becomes the main, but the pending restore stands.
+    await service.unclaim(manager, self.userId, "77980004", "Gone again");
+    expect(await service.preferences(self, null, false)).toMatchObject({ status: "saved" });
+    expect(
+      await service.assign(manager, self.userId, character("77980006", "Relinked Again"), "Back"),
+    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: false });
+    expect(await userRow()).toEqual({
+      primary_character_id: "77980006",
+      nickname_enabled: false,
+      nickname_restore: true,
+    });
     // A second link while the main is set leaves it alone.
     expect(
       await service.assign(manager, self.userId, character("77980005", "Second"), "Alt"),
@@ -5292,6 +5388,36 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ["guest_applications_enabled", { value: true }],
       ["guest_application_channel_id", { value: "98203" }],
     ]);
+    // Switching on validates the stored channel too: an imported legacy channel may be gone.
+    // Switching off never validates, so a deleted channel can't block closing applications.
+    await service.configureGuestApplications(officer, { enabled: false, channel: "98299" });
+    const validateChannel = discord.validateChannel;
+    const checked: string[] = [];
+    discord.validateChannel = async (_guild, channel) => {
+      checked.push(channel);
+      if (channel === "98299")
+        throw new Failure("blocked", "<#98299> is unavailable.", 0, {
+          kind: "resource",
+          resource: "channel",
+          id: channel,
+        });
+    };
+    try {
+      await expect(
+        service.configureGuestApplications(officer, { enabled: true }),
+      ).rejects.toMatchObject({ code: "blocked" });
+      expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+      expect(await service.configureGuestApplications(officer, { enabled: false })).toMatchObject({
+        status: "unchanged",
+      });
+      expect(await service.configureGuestApplications(officer, { channel: null })).toMatchObject({
+        status: "saved",
+        channel: { previous: "98299", value: null },
+      });
+    } finally {
+      discord.validateChannel = validateChannel;
+    }
+    expect(checked).toEqual(["98299"]);
     // Only officers configure it, and configure() no longer takes the review channel.
     await expect(
       service.configureGuestApplications({ ...officer, officer: false }, { enabled: false }),
@@ -5456,6 +5582,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       officerRoleId: "98103",
       effectsMode: "live",
     });
+    // The saved rank again changes nothing: no revision bump, audit or repair pass (2026-09-24).
+    const rankRevision = (await service.guild(manager)).revision;
+    const savedRank = (await service.guild(manager)).officer_rank_name;
+    expect(await service.configureOfficerRank(manager, savedRank)).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      officerRank: savedRank,
+    });
+    expect((await service.guild(manager)).revision).toBe(rankRevision);
     await expect(service.configureOfficerRank(manager, " ")).rejects.toMatchObject({
       code: "input",
       detail: { kind: "option", option: "rank" },

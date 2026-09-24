@@ -105,6 +105,7 @@ const TIMESTAMP = {
   "rank.heads_up": true,
   "rank.cleared": true,
   "rank.paused": false,
+  "rank.unchanged": false,
   "layout.on": true,
   "layout.off": true,
   "layout.unchanged": false,
@@ -1284,7 +1285,8 @@ export function guestApplicationsReply(
         tone: "info",
         title: "Guest applications already set",
         description: `${marker("unchanged")} Applications are already ${result.enabled ? "on" : "off"}, ${where}.`,
-        footer: revisionFooter(result.guild),
+        // Nothing was saved or audited, so the footer names the revision without "Audited".
+        footer: `Configuration revision ${result.guild.revision}`,
       },
       options,
     );
@@ -1450,6 +1452,18 @@ export function officerRankReply(
 ): Presented {
   const rank = result.officerRank;
   const mode = result.effectsMode;
+  if (result.status === "unchanged")
+    return card(
+      "rank.unchanged",
+      {
+        tone: "info",
+        title: rank ? "Officer rank already set" : "Officer rank already unset",
+        description: rank
+          ? `${marker("unchanged")} The in-game rank ${rankText(rank)} already grants bot officer access.`
+          : `${marker("unchanged")} No officer rank was set, so officer access already comes only from manual grants.`,
+      },
+      options,
+    );
   const headsUp = rank
     ? [
         !result.fcLinked && "No FC is linked, so this rank can't match anyone yet.",
@@ -1792,22 +1806,23 @@ export function officerResetReply(
   const mode = result.effectsMode;
   const memberField: FieldSpec = { name: "Member", value: who, inline: true };
   const reasonField: FieldSpec = { name: "Reason", value: userText(result.reason) };
+  // What decides now, as its own sentence: the rank, or (with none set) only /officer grant.
   const decides = result.rankConfigured
-    ? "the in-game rank decides their officer access"
-    : "no officer rank is set, so only /officer grant confers officer access";
+    ? "The in-game rank decides their officer access."
+    : "No officer rank is set, so only /officer grant confers officer access.";
   if (result.status === "unchanged")
     return card(
       "officer.reset_unchanged",
       {
         tone: "info",
         title: "No officer override to remove",
-        description: `${marker("unchanged")} ${who} has no officer grant or revoke, so ${decides}.`,
+        description: `${marker("unchanged")} ${who} has no officer grant or revoke. ${decides}`,
         fields: [memberField],
       },
       options,
     );
   const removed = result.previous === "granted" ? "officer grant" : "officer revoke";
-  const lead = `${who}'s ${removed} is removed, so ${decides} again.`;
+  const lead = `${who}'s ${removed} is removed. ${decides}`;
   const recorded = result.effects === "recorded";
   if (!recorded && result.present && paused(mode))
     return heldCard(

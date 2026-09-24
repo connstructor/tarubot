@@ -133,3 +133,72 @@ test("Discord's member search runs only when the cache has no match, within its 
   };
   expect(await completeMember(context("nobody", { search: failing }))).toEqual([]);
 });
+
+/**
+ * The commands' own autocomplete handlers: which option is focused decides the completer, and the
+ * audience decides what a member may see (members: themselves; grant/revoke/reset: officers).
+ */
+function commandContext(
+  typed: string,
+  focused: string,
+  subcommand: string | null,
+  officer: boolean,
+): AutocompleteContext {
+  const base = context(typed, { officer, userId: officer ? OWNER : PAZZ });
+  return {
+    ...base,
+    actor: { ...base.actor, officer, manageRoles: officer },
+    interaction: {
+      ...base.interaction,
+      options: {
+        getFocused: (full?: boolean) => (full ? { name: focused, value: typed } : typed),
+        getSubcommand: () => subcommand,
+      },
+    },
+  } as unknown as AutocompleteContext;
+}
+
+test("/characters and /guest status offer a member only themselves; officers see everyone", async () => {
+  const { default: characters } = await import(
+    "../../src/commands/characters/characters.command.js"
+  );
+  const { default: guest } = await import("../../src/commands/guests/guest.command.js");
+  const values = async (choices: unknown) =>
+    ((await choices) as { value: string }[]).map((choice) => choice.value);
+  expect(
+    await values(characters.autocomplete?.(commandContext("pig", "member", null, false))),
+  ).toEqual([PAZZ]);
+  expect(
+    await values(characters.autocomplete?.(commandContext("pig", "member", null, true))),
+  ).toEqual([PIGEON]);
+  expect(await values(guest.autocomplete?.(commandContext("", "member", "status", false)))).toEqual(
+    [PAZZ],
+  );
+  expect(
+    (await values(guest.autocomplete?.(commandContext("", "member", "status", true)))).length,
+  ).toBe(3);
+});
+
+test("grant, revoke and reset suggestions are officer-only before any lookup", async () => {
+  const { default: guest } = await import("../../src/commands/guests/guest.command.js");
+  const { default: unassign } = await import("../../src/commands/characters/unassign.command.js");
+  const { default: assign } = await import("../../src/commands/characters/assign.command.js");
+  for (const subcommand of ["grant", "revoke", "reset"])
+    await expect(
+      Promise.resolve().then(() =>
+        guest.autocomplete?.(commandContext("pig", "member", subcommand, false)),
+      ),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  for (const command of [unassign, assign])
+    await expect(
+      Promise.resolve().then(() =>
+        command.autocomplete?.(commandContext("pig", "member", null, false)),
+      ),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  // An officer's member focus on /unassign completes members, not the character query.
+  if (!unassign.autocomplete) throw new Error("/unassign has no autocomplete");
+  const choices = (await unassign.autocomplete(commandContext("pig", "member", null, true))) as {
+    value: string;
+  }[];
+  expect(choices.map((choice) => choice.value)).toEqual([PIGEON]);
+});

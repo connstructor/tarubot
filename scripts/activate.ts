@@ -6,9 +6,11 @@
  *
  * The first activation of an imported guild writes exactly the grandfathering plan preview
  * reported: pass its checksum with --grandfather-plan, and the plan file from preview --output to
- * see only the added and removed users if the plan has changed since. A 2.12.x import that still
- * has a review channel needs an explicit --guest-applications choice. Rerunning on a live guild
- * changes nothing and skips Discord login unless --requeue is given.
+ * see only the added and removed users if the plan has changed since. --guest-applications open
+ * switches applications on (the review channel must be set and is validated); closed switches them
+ * off and keeps the channel; without it the switch keeps its state, which is off for imports
+ * (2.15.0). Rerunning on a live guild changes nothing and skips Discord login unless --requeue is
+ * given.
  */
 import { Events } from "discord.js";
 import {

@@ -498,7 +498,7 @@ const SETUP_NEXT: Readonly<
 /** What an officer runs to open guest applications, by the piece still missing. */
 const GUEST_NEXT: Readonly<Record<"guest_applications" | "guest_role", string>> = {
   guest_applications:
-    "Choose a review channel with `/config guest_applications channel:#guest-reviews`.",
+    "Turn applications on with a review channel: `/config guest_applications enabled:true channel:#guest-reviews`.",
   guest_role: "Set the Guest role with `/config roles guest role:@Guest`.",
 };
 
