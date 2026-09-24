@@ -1,6 +1,17 @@
 # Version history
 
-The current application version is **2.15.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.15.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.15.1 — Follow the GitHub account rename
+
+A maintenance patch: no migration (the schema stays `006_guest_application_switch.sql`) and no command changes, so nothing needs re-registering. The only runtime change is the repository `/version` names and links. DevBot runs 2.15.0 and need not redeploy; the first Compose `up` from this checkout recreates its containers from the same digests, so do it with the next DevBot update.
+
+- The owner renamed the GitHub account `connstructor` to `deconfined` on 2026-09-24, so the repository is now `deconfined/tarubot`. Git, web and API URLs under the old name keep redirecting unless a new holder of the name creates a repository called `tarubot`. GHCR image paths moved with the account and don't redirect: `ghcr.io/connstructor/…` answers 403, while `ghcr.io/deconfined/tarubot:2.15.0` and `tarubot-nodestone:2.15.0` serve the same digests as before (`sha256:9d6d756d…` and `sha256:c17d4e0e…`).
+- Point Compose's default images and `.do/app.yaml`'s GHCR registry at `deconfined`. With the old defaults, a DevBot `pull` fails, and App Platform could not have pulled its images.
+- Name `deconfined/tarubot` in `package.json` `repository.url`, so `/version` shows and links the repository by its new name and reads its history without the redirect.
+- Update the private vulnerability reporting link in SECURITY.md, the image names in README.md and CI_CD.md, the `/version` requirement in REQUIREMENTS.md, MIGRATION.md's cutover clone URL and sidecar image, and the PR and run links in the handoff documents.
+- Add a unit test that the App Platform spec and Compose pull the images this repository publishes: they must name the owner and repository from `package.json`, and under GitHub Actions `package.json` must name the running repository (`GITHUB_REPOSITORY`), which `publish.yml` publishes under. A rename or transfer then fails CI instead of leaving the pull sites stale together.
+- Record the DevBot 2.15.0 rollout (stopped-writer backup, exact restore at 005, migration 006 rehearsed and applied, 19 roots / 43 paths registered, the startup plan) the owner's 2.15.0 session (D1, D2, D4, D7 and D9 confirmed live, the rest accepted by the owner; `/officer reset` removed PigeonMuffin's manual grant, correcting notes that called him revoked) and the rename in DEV_GUILD.md, OPEN_ITEMS.md, VERIFICATION.md and SESSION_HANDOFF.md, and keep the 2.15 session in `test-plans/current.json` for 2.15.0 or later, with version-neutral rollout steps.
 
 ## 2.15.0 — Reply session fixes, member autocomplete and the guest-application switch
 

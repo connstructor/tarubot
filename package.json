@@ -1,10 +1,10 @@
 {
   "name": "tarubot",
-  "version": "2.15.0",
+  "version": "2.15.1",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "https://github.com/connstructor/tarubot.git"
+    "url": "https://github.com/deconfined/tarubot.git"
   },
   "private": true,
   "type": "module",

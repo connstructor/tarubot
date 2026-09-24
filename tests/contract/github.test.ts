@@ -19,7 +19,7 @@ const fixture = (
 test("commit history marks only signed and GitHub-verified commits and constructs canonical links", async () => {
   const client = new GitHubHistory(async (url, init) => {
     expect(url).toBe(
-      "https://api.github.com/repos/connstructor/tarubot/commits?sha=main&per_page=10",
+      "https://api.github.com/repos/deconfined/tarubot/commits?sha=main&per_page=10",
     );
     expect(new Headers(init.headers).get("user-agent")).toBe(`TaruBot/${project.version}`);
     expect(init.signal).toBeInstanceOf(AbortSignal);

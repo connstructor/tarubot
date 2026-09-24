@@ -18,7 +18,7 @@ docker compose -f docker-compose.yml -f docker-compose.devbot.yml logs -f tarubo
 
 The Compose service is named `tarubot`; its actual Discord identity comes from the configured application/token and is checked on startup.
 
-These commands use published GHCR images. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
+These commands use published GHCR images, `ghcr.io/deconfined/tarubot` and `ghcr.io/deconfined/tarubot-nodestone`. The GitHub account was named `connstructor` until 2026-09-24, and image paths under that name no longer resolve. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
 
 ## Completed on 2026-09-22
 
@@ -173,7 +173,7 @@ The owner ran the 2.14.0 reply session from plan message `1552528212054249474`, 
 Testers:
 
 - The owner, kaanidog (`725369723964882976`), a server manager and officer.
-- PigeonMuffin (`289803961693765632`), an officer by rank through Wyra Riyuh (`38804790`), served as the non-officer. The owner removed his officer access with `/officer revoke` (`1552536049245364347`; its `reconcile.user` job succeeded, and read-back showed Member only), and it is still revoked. On 2.15.0, restore it with `/officer reset`: his rank is Officer, so the rank decides again. `/officer grant` would leave a manual grant instead.
+- PigeonMuffin (`289803961693765632`), an officer by rank through Wyra Riyuh (`38804790`), served as the non-officer. The owner removed his officer access with `/officer revoke` (`1552536049245364347`; its `reconcile.user` job succeeded, and read-back showed Member only), and at 05:06:23 UTC the owner restored it with `/officer grant` ("Pity."), a manual grant. The 2.15.0 session's `/officer reset` removed that grant, so the rank decides again ([the 2.15.0 session](#2150-session--2026-09-24)).
 - moonbun_art and poppymori each made a first link. The subject of the `/guest` checks was pazzberry (`1010097911566180445`), the 2.12.1 applicant.
 
 Steps covered:
@@ -233,13 +233,54 @@ Before the 2.15.0 PR, an adversarial review of the change set found gaps in the 
 
 Still open after this session: the 2.13.0 layout-switch check, and the multi-character union through `/assign` and `/unassign` with numeric IDs. The closed `/apply` card, Guest revoke and grant, `/ledger adjust` and the non-officer denials passed on 2.14.0. The live checks for 2.15.0, including the closed `/apply` on the new switch, are in `test-plans/current.json`.
 
+### 2.15.0 rollout — 2026-09-24
+
+- PR #14 merged as `974bd27` after every check passed. Its Claude review confirmed the 2.14.1 fix: 11 subagents, none started in the background, all 11 completed, and `claude[bot]` posted ("No issues found"). The review job (run 35999943080) recorded 55 Bash and 3 Write permission denials, a follow-up. Publish run 36002040486 published both 2.15.0 images (revision label `974bd27e52441ae097e2fe0edefca84b32d1187a`) and promoted `latest`.
+- The writer stopped at 13:00:47 UTC (exit 0; all 407 jobs succeeded; nothing pending or blocked; no open connections and no lease holders). The backup `.cache/backups/tarubot_dev-before-2.15.0-974bd27.dump` (110,533 bytes, sha256 `b2c81741959659860e75c842ef9d29b2d59fa68be5822739d60724837b135663`) restored into `tarubot_dev_restore_test`, where the 2.15.0 build's `check-restore.js --schema-version 005_launch_access_policy.sql` matched all 26 tables, and every sequence, trigger and constraint.
+- `migrate.js --restore-rehearsal` on the copy printed `Schema ready.` at `006_guest_application_switch.sql`: the dev guild's switch was backfilled on (a review channel was set and grandfathering is not pending), its revision stayed 13, and the three `guest_grants.ended_*` columns were added. The copy was dropped. With no lease holder or connection, `migrate.js` then brought `tarubot_dev` to 006 with the same result.
+- 2.15.0 started at 13:01:55 and was healthy at 13:02:12 UTC: readiness 200 (database, writer lease, Discord and effects true), the lease acquired on the first attempt, and no warn or error log lines.
+- `register.js --guild 1040379370159743139` registered 19 roots / 43 paths. `commands.js list` exited 0 and clean: 19 roots in the dev guild, and none global or in `905225566783963136`, the only other guild the bot has joined. That read-back compares paths and default permissions, so a read-only GET of the guild's commands checked the option names: the `unset_*` options, `/config guest_applications enabled|channel|unset_channel`, and `/officer reset` and `/guest reset` with `member` and `reason` are registered, and no option is named `clear`.
+- The startup plan was posted at 13:02:01 UTC as message `1552666419064479837`: "Session: 2.15.0 reply-session fixes and the guest-application switch", with fields of 1,019, 857 and 624 characters and no mentions. The owner's 2.15.0 session had not started at this point.
+- Later that day the owner renamed the GitHub account `connstructor` to `deconfined`. The images DevBot runs (pulled as `ghcr.io/connstructor/…:2.15.0`) have the same digests as `ghcr.io/deconfined/tarubot:2.15.0` and `tarubot-nodestone:2.15.0`. The old paths now answer 403, so pulls need the 2.15.1 Compose defaults. Compose's configuration hash includes the image name, so the first `up` from a 2.15.1 or later checkout recreates `tarubot` and `nodestone` from the same digests even with `TARUBOT_IMAGE_TAG=2.15.0`. That is a restart (the gateway reconnects and the startup plan is posted again), so it needs the owner's go-ahead and belongs with the next DevBot update; read-only checks (`ps`, `logs`, readiness) leave the containers running.
+
+### 2.15.0 session — 2026-09-24
+
+The owner ran the plan's first steps from 14:22 to 14:25 UTC, and at 18:00 UTC marked the remaining steps complete. The results (Discord message IDs in brackets):
+
+- **D1, D8.** `/config show` (`1552686731688415242`) and `/config validate` (`1552686785241288866`) show the FC tag once, as "Woven Souls «Souls»". Guest applications are Open in officer-chat, and all 13 checks passed at revision 13.
+- **D2.** `/main` (`1552686844242825227`) replied `= NO CHANGE` "Already your main character".
+- **D2, D7.** `/nickname enabled:true`, run twice (`1552686886735188028`, `1552686909418119229`):
+  - The first turned sync on, with the server-owner note; the second replied `= NO CHANGE`.
+  - The owner's `reconcile.user` job succeeded, with the nickname reported `applied` and no write: the owner skip.
+- **D2.** `/config officer_rank rank:Officer` (`1552686965705408664`) replied `= NO CHANGE`, with no Heads-up. That is correct, because an FC is linked and an Officer role is bound.
+- **D4.** Three `/ledger adjust` corrections of entry #5, with the balance going 4,903,868 → 10,000 → 20,000 → 30,000 gil (test values):
+  - receipts: `1552687049499480166`, `1552687107355582597`, `1552687173789024310`;
+  - posts in #dev: `1552687059909746699`, `1552687116843094148`, `1552687191090659472`.
+  - The receipt footers show the FC tag once.
+- **D9.** `/officer reset member:PigeonMuffin` (`1552687267439444039`) replied "Officer override removed", audited as `officer.reset` with `previous: granted`.
+  - It removed the manual grant from the 2.14.0 session (`officer.grant`, 05:06:23 UTC, "Pity."). Earlier notes said PigeonMuffin was still revoked; that was wrong, because the grant had restored him.
+  - He now has no override and is an officer by rank. Its `reconcile.user` and `channels.access` jobs succeeded.
+- **Routine roster read.** The 17:31 UTC roster read accepted 105 members with no departures and posted the plain-text roster notice (`1552734198656143421`). Officer notices stay plain text until 2.16.0.
+- **Logs.** From 13:02 to 18:00 UTC there were no warn or error log lines (595 info lines), and every job succeeded.
+- **Accepted without a live record.** The owner accepted these steps; no further command replies were captured after 14:24 UTC:
+  - `/nickname enabled:false`;
+  - the failure Examples (an unknown `/ledger adjust` entry, `/sync status run_id:nope`);
+  - member autocomplete;
+  - the non-officer `/characters member:`;
+  - the re-link main;
+  - the guest-application switch steps;
+  - the `/officer reset` repeat and the manager-below-role refusal;
+  - `/guest reset`.
+
+  The unit and PostgreSQL suites cover each of them ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
-The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/connstructor/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.
+The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.
 
-Before that rollout, a read-only handoff check confirmed the bot and sidecar ran **2.11.1**, revision `1de878ef6c314cd83ac26bf7513d5db64210bcad`, and PostgreSQL reported schema **003**. All three containers were healthy; readiness had database/Discord connected, effects/public development replies enabled, no pending/blocked work, and no degraded FCs. Guild revision 10 and its role/channel bindings remained intact, with two active links and an uninitialized ledger (`NULL`, sequence 0). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for the exact resume state. The source startup plan is the 2.15.0 session, for after 2.15.0 is deployed with migration 006; use the plan matching whichever checked release is deployed.
+Before that rollout, a read-only handoff check confirmed the bot and sidecar ran **2.11.1**, revision `1de878ef6c314cd83ac26bf7513d5db64210bcad`, and PostgreSQL reported schema **003**. All three containers were healthy; readiness had database/Discord connected, effects/public development replies enabled, no pending/blocked work, and no degraded FCs. Guild revision 10 and its role/channel bindings remained intact, with two active links and an uninitialized ledger (`NULL`, sequence 0). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for the exact resume state. The source startup plan is the 2.15 session (2.15.0 or later), which DevBot posted on 2.15.0 as message `1552666419064479837`; the owner completed it on 2026-09-24 ([the 2.15.0 session](#2150-session--2026-09-24)). Use the plan matching whichever checked release is deployed.
 
-Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The owner put the remaining form checks on hold on 2026-09-23, and they remain on hold. The 2.14.0 reply session passed on 2026-09-24 apart from D1–D9, which 2.15.0 resolves. It could not confirm live that a review message is converted to one embed, because that needs a new application. The current plan, `test-plans/current.json`, is the 2.15.0 session: it checks each D1–D9 fix live after the rollout with migration 006 and command re-registration, and restores PigeonMuffin's officer access with `/officer reset`. The 2.13.0 layout-switch and `/assign` union checks also remain. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for remaining acceptance work.
+Setup, original-role reuse, resource validation, complete reconciliation, and real profile-token verification have passed. Member and FC Leader delivery, consecutive role positions, preserved permissions, and hoist flags are confirmed by Discord readback. A fresh seven-job refresh passed after the owner's nickname opt-out. The owner put the remaining form checks on hold on 2026-09-23, and they remain on hold. The 2.14.0 reply session passed on 2026-09-24 apart from D1–D9, which 2.15.0 resolves. It could not confirm live that a review message is converted to one embed, because that needs a new application. The current plan, `test-plans/current.json`, is the 2.15 session (2.15.0 or later, posted on 2.15.0), completed on 2026-09-24: D1, D2, D4, D7 and D9 were confirmed live, and the owner accepted the remaining steps. The 2.13.0 layout-switch and `/assign` union checks also remain. See `test-plans/current.json`, the latest plan in `#chat`, and [OPEN_ITEMS.md](OPEN_ITEMS.md) for remaining acceptance work.
 
 The running development instance now has `ENABLE_EFFECTS=true`. Use dedicated DevBot test roles and destinations when configuring stateful workflows, then follow the live checklist in [VERIFICATION.md](VERIFICATION.md).
 

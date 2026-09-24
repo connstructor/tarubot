@@ -16,7 +16,7 @@ The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-pa
 
 For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) attaches the owner-provisioned **Managed PostgreSQL cluster** `tarubot-pg` (database/user `tarubot`) and defines a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. The app is created from a derived worker-free phase and the worker is added only at activation; a PostgreSQL writer lease keeps exactly one bot writer. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for provider prerequisites, deployment phases, and single-writer updates.
 
-Normal deployments pull **`ghcr.io/connstructor/tarubot:latest`** and **`ghcr.io/connstructor/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
+Normal deployments pull **`ghcr.io/deconfined/tarubot:latest`** and **`ghcr.io/deconfined/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
 The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
 

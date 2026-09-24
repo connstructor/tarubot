@@ -63,8 +63,8 @@ Distinct source commits have independent, non-cancelling publication and reusabl
 
 | Image | Purpose |
 | --- | --- |
-| `ghcr.io/connstructor/tarubot` | Discord bot and one-shot application tools |
-| `ghcr.io/connstructor/tarubot-nodestone` | Isolated Lodestone parser service |
+| `ghcr.io/deconfined/tarubot` | Discord bot and one-shot application tools |
+| `ghcr.io/deconfined/tarubot-nodestone` | Isolated Lodestone parser service |
 
 Both images support AMD64 and ARM64. Each successful publication supplies:
 

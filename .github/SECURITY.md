@@ -9,7 +9,7 @@ Only the most recent release published from `main` (the `latest` GHCR images) re
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately through
-[GitHub private vulnerability reporting](https://github.com/connstructor/tarubot/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/deconfined/tarubot/security/advisories/new).
 
 Do not open public issues, pull requests, or discussions for security problems. Include the affected
 version, reproduction steps, and impact. Reports are handled on a best-effort basis.
