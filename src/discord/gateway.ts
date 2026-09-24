@@ -314,19 +314,43 @@ export class DiscordGateway implements DiscordPort {
     }));
     return roleLayoutPlan(ascending, priority);
   }
-  /** Fetch the channel globally, then explicitly check guild ownership and current overwrites. */
+  /**
+   * Fetch the channel globally, then explicitly check guild ownership and current overwrites. A
+   * deleted, non-text or other-server channel is refused as unavailable, with no permissions
+   * remedy; a channel TaruBot can't use (or, 50001 Missing Access, can't even view) gets the
+   * permissions refusal with its channel-permissions fix.
+   */
   async validateChannel(guildId: string, channelId: string): Promise<void> {
     const guild = await this.client.guilds.fetch(guildId);
     await guild.roles.fetch();
+    const affected = { kind: "resource", resource: "channel", id: channelId } as const;
+    // Its wording ('View Channel') is also what ledger post states read as "missing channel
+    // permissions".
+    const permissionsRefusal = () =>
+      new Failure(
+        "blocked",
+        `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
+        0,
+        { ...affected, fix: "channel_permissions" },
+      );
     const channel = await this.client.channels
       .fetch(channelId, { force: true })
       .catch((error: unknown) => {
-        if (error instanceof DiscordAPIError && [10003, 50001].includes(Number(error.code)))
+        if (!(error instanceof DiscordAPIError)) throw error;
+        // 10003 Unknown Channel: the channel was deleted, so no permission change can fix it.
+        if (Number(error.code) === 10003) return null;
+        // 50001 Missing Access: Discord hides a channel TaruBot can't view. A text channel this
+        // server still lists (the guild's channel cache holds hidden channels too) is a
+        // permissions problem with a remedy; anything else, such as another server's channel, is
+        // unavailable.
+        if (Number(error.code) === 50001) {
+          if (guild.channels.cache.get(channelId)?.type === ChannelType.GuildText)
+            throw permissionsRefusal();
           return null;
+        }
         throw error;
       });
     const bot = await guild.members.fetchMe({ force: true });
-    const affected = { kind: "resource", resource: "channel", id: channelId } as const;
     // A deleted channel, a non-text channel or one in another server can't be fixed by changing
     // permissions, so this refusal carries no permissions remedy. Its wording ('unavailable')
     // is also what ledger post states read to say "channel unavailable".
@@ -347,12 +371,7 @@ export class DiscordGateway implements DiscordPort {
           PermissionFlagsBits.ReadMessageHistory,
         ])
     )
-      throw new Failure(
-        "blocked",
-        `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
-        0,
-        { ...affected, fix: "channel_permissions" },
-      );
+      throw permissionsRefusal();
   }
   /** REST deltas touch only requested role IDs; retry observes any partially applied transition. */
   async roles(guildId: string, userId: string, add: string[], remove: string[]): Promise<void> {

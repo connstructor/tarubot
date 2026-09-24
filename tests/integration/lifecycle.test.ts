@@ -250,6 +250,21 @@ describe.skipIf(!url)("database writer lease", () => {
     // Two parked rows share a key (a repeated /refresh while paused); the newer one survives.
     const older = await park(live, "reconcile.user", `user:${live}:1`, 30);
     const newer = await park(live, "reconcile.user", `user:${live}:1`, 10);
+    // The older pass had already applied roles before it was parked (for example, its nickname was
+    // blocked): that `applied` evidence is the only record of what Discord received.
+    const applied = [
+      {
+        generation: 1,
+        add: ["7310000000000000031"],
+        remove: [],
+        status: "applied",
+        at: "2026-09-20T00:00:00.000Z",
+      },
+    ];
+    await admin.query(`UPDATE ${SCHEMA}.jobs SET result = $2::jsonb WHERE id = $1`, [
+      older,
+      JSON.stringify({ applied }),
+    ]);
     const post = await park(live, "ledger.notify", `ledger:${live}:1`, 20);
     // Startup's own repair pass replaces a parked one instead of colliding with it.
     const repair = await park(live, "reconcile.guild", `guild:${live}`, 40);
@@ -259,8 +274,15 @@ describe.skipIf(!url)("database writer lease", () => {
     const state = async () =>
       new Map(
         (
-          await admin.query<{ id: string; status: string; attempts: number; result: unknown }>(
-            `SELECT id::text, status, attempts, result FROM ${SCHEMA}.jobs WHERE guild_id IN ($1, $2)`,
+          await admin.query<{
+            id: string;
+            status: string;
+            attempts: number;
+            last_error: string | null;
+            result: unknown;
+          }>(
+            `SELECT id::text, status, attempts, last_error, result FROM ${SCHEMA}.jobs
+             WHERE guild_id IN ($1, $2)`,
             [live, waiting],
           )
         ).map((row) => [row.id, row]),
@@ -278,15 +300,16 @@ describe.skipIf(!url)("database writer lease", () => {
     await resumed.lifecycle.prepare();
     await resumed.lifecycle.start();
     const after = await state();
-    // The newest row per key runs now with a fresh attempt budget.
+    // The newest row per key runs now with a fresh attempt budget and without the stale paused
+    // diagnostic, so it reads `… QUEUED` rather than a retry after a Discord error.
     for (const id of [newer, post])
-      expect(after.get(id)).toMatchObject({ status: "queued", attempts: 0 });
-    // The rows it replaces close as superseded, never as delivered work.
-    for (const id of [older, repair])
-      expect(after.get(id)).toMatchObject({
-        status: "succeeded",
-        result: { skipped: "superseded" },
-      });
+      expect(after.get(id)).toMatchObject({ status: "queued", attempts: 0, last_error: null });
+    // The rows it replaces close as superseded, never as delivered work; a closed reconcile.user
+    // keeps its `applied` list (OPERATIONS.md), and a row without one gains nothing else.
+    expect(after.get(older)).toMatchObject({ status: "succeeded", last_error: null });
+    expect(after.get(older)?.result).toEqual({ skipped: "superseded", applied });
+    expect(after.get(repair)).toMatchObject({ status: "succeeded", last_error: null });
+    expect(after.get(repair)?.result).toEqual({ skipped: "superseded" });
     expect(after.get(blocked)?.status).toBe("blocked");
     expect(after.get(held)?.status).toBe("disabled");
     // Exactly one active repair pass for the guild, and the count (not payloads) is logged.

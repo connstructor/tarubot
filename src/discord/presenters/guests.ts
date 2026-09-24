@@ -724,12 +724,17 @@ function officerStatus(
     : "";
   const revocation = status.revocation[0];
   const deliveries = status.delivery.slice(0, MAX_DELIVERIES);
+  // With effects live, nothing else resumes a `disabled` row left from an earlier pause, so the
+  // record never promises an activation; a /config change requeues parked work (requeueParked),
+  // as the ledger officer views say.
   const nextStep = troubled.length
     ? "Run /config validate, fix the permission or role order it reports, then run /refresh."
     : held
       ? status.effectsMode === "deployment_disabled"
         ? "Discord changes are off for this deployment. Nothing to fix here."
-        : "Role changes start after activation. Nothing to fix."
+        : status.effectsMode === "live"
+          ? "Held from an earlier pause; saving any setting with `/config` re-queues it."
+          : "Role changes start after activation. Nothing to fix."
       : null;
   const fields: (FieldSpec | false | null)[] = [
     {

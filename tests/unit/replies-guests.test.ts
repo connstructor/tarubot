@@ -421,13 +421,30 @@ describe("/guest status, officer record", () => {
     expect(fieldOf(blocked, "Next step")).toBe(
       "Run /config validate, fix the permission or role order it reports, then run /refresh.",
     );
-    const held = guestStatus({
-      grants: R.recordBlocked.grants,
-      delivery: [job({ status: "disabled" })],
-    });
-    const paused = expectHouseStyle(record(held), { tone: "pending" });
-    expect(fieldOf(paused, "Next step")).toBe(
+    // A paused role update's next step follows the effects mode. With effects live the row is
+    // left from an earlier pause, so the record names the /config step that re-queues it and never
+    // promises an activation (the member view says "held from an earlier pause").
+    const held = (effectsMode: EffectsMode) =>
+      expectHouseStyle(
+        record(
+          guestStatus({
+            grants: R.recordBlocked.grants,
+            delivery: [job({ status: "disabled" })],
+            effectsMode,
+          }),
+        ),
+        { tone: "pending" },
+      );
+    const live = fieldOf(held("live"), "Next step");
+    expect(live).toBe(
+      "Held from an earlier pause; saving any setting with `/config` re-queues it.",
+    );
+    expect(live).not.toContain("activation");
+    expect(fieldOf(held("awaiting_activation"), "Next step")).toBe(
       "Role changes start after activation. Nothing to fix.",
+    );
+    expect(fieldOf(held("deployment_disabled"), "Next step")).toBe(
+      "Discord changes are off for this deployment. Nothing to fix here.",
     );
     // A DM the applicant's settings refused is no officer problem (approved guests#7 is info).
     expectHouseStyle(record(R.record), { tone: "info" });

@@ -322,12 +322,21 @@ describe("/sync status, officer views (C4 and C7)", () => {
 
   test("with effects live, work left paused by an earlier pause is never promised a resume", () => {
     // A restart with effects on requeues held work, so a `disabled` row that is still there while
-    // live has nothing coming to resume it: officers see it under Needs attention with no
-    // "Nothing to fix" step, and members aren't told to wait for an activation.
+    // live has nothing coming to resume it: officers see it under Needs attention with the
+    // /config step that re-queues it (never "Nothing to fix"), and members aren't told to wait
+    // for an activation.
     const leftover = S.officerPaused.work.slice(0, 2);
     const officer = overview({ runs: [], work: leftover, effectsMode: "live" }, "officer");
     const embed = expectHouseStyle(officer, { tone: "pending" });
-    expect(fieldOf(embed, "Next step")).toBeUndefined();
+    const requeue =
+      "Paused work is left from an earlier pause; saving any setting with /config re-queues it.";
+    expect(fieldOf(embed, "Next step")).toBe(requeue);
+    // Other work in progress doesn't hide the step: nothing else will resume these rows.
+    const busy = overview(
+      { runs: [], work: [...leftover, work({ status: "running" })], effectsMode: "live" },
+      "officer",
+    );
+    expect(fieldOf(onlyEmbed(busy), "Next step")).toBe(requeue);
     expect(fieldOf(embed, "Needs attention")).toStartWith("`‖ PAUSED` reconcile.user");
     expect(visibleText(officer)).not.toContain("Held work resumes");
     const member = overview(

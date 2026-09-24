@@ -15,7 +15,7 @@ import { jobLine } from "../../src/discord/presenters/jobs.js";
 import type { Tone } from "../../src/discord/presenters/style.js";
 import { userId } from "../../src/discord/selectors.js";
 import { Failure, note } from "../../src/domain/values.js";
-import { onlyEmbed, visibleText } from "../fixtures/replies.js";
+import { buttonsOf, onlyEmbed, visibleText } from "../fixtures/replies.js";
 import { FAILURE_SOURCES } from "../fixtures/replies/failures.js";
 import { CATALOGS, type ReplyCase } from "../fixtures/replies/index.js";
 import { ACTORS, CHARACTER, GUEST_ID, job, NOW, REF, VIEWERS } from "../fixtures/results.js";
@@ -377,6 +377,31 @@ describe("status markers", () => {
         key: reply.key,
         footer: "Check progress any time with /sync status",
       });
+  });
+
+  test("paused-save cards carry the drawn #26 sentence and no buttons, with the documented exceptions", () => {
+    // REPLIES.md's errors-and-style#26 deviation row: a ledger receipt says when its post goes
+    // out and the /apply receipt when officers see the application (their held work is no role,
+    // nickname or channel change), and /setup keeps its approved Check sync status button
+    // (configuration#37).
+    const ownSentence = new Set(["ledger/receipt.paused", "guests/apply.held"]);
+    const drawn = /TaruBot won't change roles, nicknames or channels/u;
+    const saves = CASES.filter((reply) => reply.concept === "paused_save");
+    for (const reply of saves) {
+      const presented = reply.render();
+      expect({
+        key: reply.key,
+        drawn: drawn.test(onlyEmbed(presented).description ?? ""),
+        buttons: buttonsOf(presented).length > 0,
+      }).toEqual({
+        key: reply.key,
+        drawn: !ownSentence.has(reply.key),
+        buttons: reply.key === "configuration/setup.paused",
+      });
+    }
+    // Each exception is still a catalogued paused save, so the list can't go stale silently.
+    for (const key of [...ownSentence, "configuration/setup.paused"])
+      expect(caseOf(key).concept).toBe("paused_save");
   });
 
   test("a paused view is pending unless something is also blocked or failed (C4)", () => {

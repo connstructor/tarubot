@@ -41,7 +41,7 @@ Every reply is one embed in the house style of [REPLIES.md](REPLIES.md). Officer
 - `commands.js list`: reads back the application's global and guild command scopes and exits 0 only when the declared scope matches exactly and every other scope is empty; `commands.js clear-guild` removes leftover guild-scoped commands after a fingerprint-confirmed dry run.
 - `preview.js GUILD_ID --late-joiners`: a database-only list of humans who joined after an imported guild's first-activation enumeration and hold neither a guest grant nor an active link, for an officer `/guest grant` decision.
 
-Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded.
+Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded, or closed as `skipped: superseded` when parked work was requeued.
 
 Job diagnostics are scoped. Repair the configured resource or permissions, then let reconciliation/backoff resume. For a terminal delivery failure, an operator can explicitly retry the job using database credentials:
 
@@ -50,6 +50,8 @@ bun run jobs:retry GUILD_ID JOB_ID
 ```
 
 Against production, run the compiled tool with the production env file instead, as `prod dist/scripts/retry.js GUILD_ID JOB_ID` ([MIGRATION.md](MIGRATION.md) E0).
+
+The tool retries a blocked, failed or disabled job of that guild, clearing its diagnostic. It refuses, changing nothing, when a newer queued, running or blocked job for the same work already exists (the active-job index allows one), and prints that job's ID: retry the newer job instead if it is blocked; otherwise it runs on its own.
 
 Retries recompute current desired roles/nicknames. Ledger notifications refer to their original immutable entry and preserve account order. An ambiguous Discord acknowledgement can produce a duplicate visible message; the stable entry ID identifies the same financial mutation. PostgreSQL remains authoritative.
 
@@ -125,7 +127,7 @@ On App Platform, search the `tarubot` worker's runtime logs for the same string 
 | `eligible` | No application needed | The visitor already qualifies for access | None |
 | `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
-| `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` are the fallbacks |
+| `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key, and clears its paused diagnostic. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` (which refuses a job a newer active job already covers) are the fallbacks |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
 
 **Renamed codes.** Queries that span releases before 2.14.0 must match both names:

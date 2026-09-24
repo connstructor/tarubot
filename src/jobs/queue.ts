@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { DiscordAPIError } from "discord.js";
 import { DISCORD_BLOCKED_CODES, WAITING_CODES } from "../domain/failures.js";
 import { Failure, json } from "../domain/values.js";
+import type { PoolClient } from "pg";
 import { orm, type Connection, type Database } from "../infrastructure/postgres/database.js";
 import {
   and,
@@ -89,26 +90,72 @@ export const secureGuildChannels = (client: Connection, guild: string): Promise<
 export type ParkedStatus = "disabled" | "blocked";
 /** The states the active_job unique index covers: at most one such row per dedupe key. */
 const ACTIVE_STATES = ["queued", "running", "blocked"] as const;
+/** Retry bound for the supersede/requeue pair; each retry needs yet another enqueue in the window. */
+const REQUEUE_ATTEMPTS = 5;
 
 /**
- * Return a guild's parked work to the queue, due now with a fresh attempt budget. Activation, a
- * /config change and a restart with effects on (work parked `disabled` while ENABLE_EFFECTS was
- * off) all resume work this way.
+ * Whether a query failed because another row already holds its dedupe key in the active_job
+ * unique index. Drizzle wraps the driver error, so its `cause` is checked as well as the error.
+ */
+export function activeJobConflict(error: unknown): boolean {
+  const causes = [error, error instanceof Error ? error.cause : undefined];
+  return causes.some(
+    (cause) =>
+      typeof cause === "object" &&
+      cause !== null &&
+      Reflect.get(cause, "code") === "23505" &&
+      Reflect.get(cause, "constraint") === "active_job",
+  );
+}
+
+/**
+ * Return a guild's parked work to the queue, due now with a fresh attempt budget and no stored
+ * diagnostic (as retry.js does), so resumed work reads `… QUEUED` rather than a retry after an
+ * error. Activation, a /config change and a restart with effects on (work parked `disabled` while
+ * ENABLE_EFFECTS was off) all resume work this way.
  *
  * enqueue() only coalesces into queued, running or blocked rows (the active_job index), so a key
  * enqueued again while its row sat `disabled` gets a second row, and several parked rows can
  * share one dedupe key. Requeueing them all would violate that unique index. So, per key, only
  * the newest parked row is requeued, and only when no other active row already holds the key;
  * the rest close as succeeded with {skipped: "superseded"}, because the surviving row runs the
- * same work with the newest payload. Losers close first, since a parked `blocked` row is itself in
- * the index. Returns the requeued job IDs.
+ * same work with the newest payload. A closed row keeps its `applied` list (reconcile.user's
+ * record of role changes Discord actually received), and each sync run that tracked it tracks the
+ * row that now carries its key instead, so the run never reports Completed before that work runs.
+ * Losers close first, since a parked `blocked` row is itself in the index. Returns the requeued
+ * job IDs.
+ *
+ * It needs a transaction client: the pair runs inside a savepoint, so a concurrent enqueue that
+ * commits an active row for the same key between the two statements (a `disabled` row sits outside
+ * active_job, so nothing blocks it) is retried rather than failing the caller's transaction.
  */
 export async function requeueParked(
-  client: Connection,
+  client: PoolClient,
   guilds: readonly string[],
   statuses: readonly ParkedStatus[],
 ): Promise<string[]> {
   if (!guilds.length || !statuses.length) return [];
+  for (let attempt = 1; ; attempt++) {
+    await client.query("SAVEPOINT requeue_parked");
+    try {
+      const ids = await supersedeAndRequeue(client, guilds, statuses);
+      await client.query("RELEASE SAVEPOINT requeue_parked");
+      return ids;
+    } catch (error) {
+      // The unique violation is raised only after the conflicting enqueue committed, so the next
+      // pass sees that row as the key's holder and closes the parked row as superseded instead.
+      if (attempt >= REQUEUE_ATTEMPTS || !activeJobConflict(error)) throw error;
+      await client.query("ROLLBACK TO SAVEPOINT requeue_parked");
+    }
+  }
+}
+
+/** One pass of requeueParked: close the losers, requeue the survivors, then move run links. */
+async function supersedeAndRequeue(
+  client: PoolClient,
+  guilds: readonly string[],
+  statuses: readonly ParkedStatus[],
+): Promise<string[]> {
   const db = orm(client);
   const other = alias(t.jobs, "other");
   // The same filter on the updated row and on the aliased row it is compared with.
@@ -116,14 +163,16 @@ export async function requeueParked(
     and(inArray(table.guild_id, [...guilds]), inArray(table.status, [...statuses]));
   // Active states this call doesn't requeue hold their key in any guild: the index is global.
   const holding = ACTIVE_STATES.filter((state) => !(statuses as readonly string[]).includes(state));
-  await db
+  const superseded = await db
     .update(t.jobs)
     .set({
       status: "succeeded",
       completed_at: sql`now()`,
       lease_until: null,
       last_error: null,
-      result: { skipped: "superseded" },
+      // Keep reconcile.user's append-only `applied` evidence, as queue completion does: it is the
+      // only record of role changes Discord actually received (OPERATIONS.md).
+      result: sql`jsonb_build_object('skipped','superseded') || jsonb_strip_nulls(jsonb_build_object('applied',${t.jobs.result}->'applied'))`,
     })
     .where(
       and(
@@ -151,13 +200,101 @@ export async function requeueParked(
             ),
         ),
       ),
-    );
+    )
+    .returning({ id: t.jobs.id });
   const requeued = await db
     .update(t.jobs)
-    .set({ status: "queued", due_at: sql`now()`, attempts: 0 })
+    .set({ status: "queued", due_at: sql`now()`, attempts: 0, last_error: null })
     .where(parked(t.jobs))
     .returning({ id: t.jobs.id });
+  if (superseded.length) {
+    // A run that tracked a superseded row now tracks the one active row carrying that key's work
+    // (the requeued survivor, or the row that already held the key), as enqueue() coalescing
+    // would have arranged; its link to the closed row goes, so "N of M done" stays exact. Only
+    // moved links are removed: a run never loses track of work without gaining its holder.
+    const ids = superseded.map((row) => row.id);
+    const loser = alias(t.jobs, "loser");
+    const holder = alias(t.jobs, "holder");
+    const holds = and(
+      eq(holder.dedupe_key, loser.dedupe_key),
+      inArray(holder.status, [...ACTIVE_STATES]),
+    );
+    await db
+      .insert(t.syncRunJobs)
+      .select(
+        db
+          .select({ run_id: t.syncRunJobs.run_id, job_id: holder.id })
+          .from(t.syncRunJobs)
+          .innerJoin(loser, eq(loser.id, t.syncRunJobs.job_id))
+          .innerJoin(holder, holds)
+          .where(inArray(t.syncRunJobs.job_id, ids)),
+      )
+      .onConflictDoNothing();
+    await db
+      .delete(t.syncRunJobs)
+      .where(
+        and(
+          inArray(t.syncRunJobs.job_id, ids),
+          exists(
+            db
+              .select({ id: holder.id })
+              .from(loser)
+              .innerJoin(holder, holds)
+              .where(eq(loser.id, t.syncRunJobs.job_id)),
+          ),
+        ),
+      );
+  }
   return requeued.map((row) => row.id);
+}
+
+/**
+ * The operator retry (retry.js): put one of a guild's blocked, failed or disabled jobs back in the
+ * queue, due now with a fresh attempt budget and no stored diagnostic. Completed effects can't be
+ * replayed this way. A failed or disabled row sits outside active_job, so a newer row may already
+ * hold its dedupe key; requeueing it would violate that index, so the retry refuses and names the
+ * newer row, which already carries the same work.
+ */
+export async function retryJob(client: PoolClient, guild: string, job: string): Promise<void> {
+  const db = orm(client);
+  const [target] = await db
+    .select({ key: t.jobs.dedupe_key })
+    .from(t.jobs)
+    .where(
+      and(
+        eq(t.jobs.id, job),
+        eq(t.jobs.guild_id, guild),
+        inArray(t.jobs.status, ["blocked", "failed", "disabled"]),
+      ),
+    )
+    .for("update");
+  if (!target) throw new Error("No retryable job with that ID belongs to this guild.");
+  const [active] = await db
+    .select({ id: t.jobs.id, status: t.jobs.status })
+    .from(t.jobs)
+    .where(
+      and(
+        eq(t.jobs.dedupe_key, target.key),
+        ne(t.jobs.id, job),
+        inArray(t.jobs.status, [...ACTIVE_STATES]),
+      ),
+    );
+  if (active)
+    throw new Error(
+      `A newer job for this work is already ${active.status}: ${active.id}. Retry that job if it is blocked; otherwise it runs on its own.`,
+    );
+  try {
+    await db
+      .update(t.jobs)
+      .set({ status: "queued", attempts: 0, due_at: sql`now()`, last_error: null })
+      .where(eq(t.jobs.id, job));
+  } catch (error) {
+    // An enqueue for the same key committed after the check above: refuse the same way.
+    if (!activeJobConflict(error)) throw error;
+    throw new Error(
+      "A newer job for this work became active while retrying; nothing was changed. Run the retry again to see it.",
+    );
+  }
 }
 
 /** Attempts at or beyond this count end an ordinary retry as a failed delivery. */

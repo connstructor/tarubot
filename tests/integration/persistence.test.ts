@@ -44,6 +44,8 @@ import {
   layoutGuildRoles,
   Queue,
   reconcileUser,
+  requeueParked,
+  retryJob,
   STALE_WAIT_MS,
   type Job,
   type QueueEvent,
@@ -5057,20 +5059,46 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ],
     });
     // A held job is queued again by the change, and the result counts it.
-    await enqueue(db.pool, "reconcile.user", `user:${guildId}:98020`, {}, guildId, "98020");
-    await db.query("UPDATE jobs SET status='blocked' WHERE dedupe_key=$1", [
+    const held = await enqueue(
+      db.pool,
+      "reconcile.user",
       `user:${guildId}:98020`,
-    ]);
+      {},
+      guildId,
+      "98020",
+    );
+    await db.query(
+      "UPDATE jobs SET status='blocked', last_error='blocked: Missing Permissions' WHERE id=$1",
+      [held],
+    );
     // Rows parked while paused can share a key with each other (a repeated refresh) or with the
     // repair pass the change queues; the change requeues one row per key instead of violating
     // the active-job index, and closes the rest as superseded.
     const [repair, older, newer] = await db.query<{ id: string }>(
-      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, status, created_at) VALUES
-         ('reconcile.guild', $1, '{}'::jsonb, $2, 'disabled', now() - interval '3 minutes'),
-         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', now() - interval '2 minutes'),
-         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', now() - interval '1 minute')
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, status, last_error, created_at) VALUES
+         ('reconcile.guild', $1, '{}'::jsonb, $2, 'disabled', $4, now() - interval '3 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', $4, now() - interval '2 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', $4, now() - interval '1 minute')
        RETURNING id::text`,
-      [`guild:${guildId}`, guildId, `user:${guildId}:98021`],
+      [
+        `guild:${guildId}`,
+        guildId,
+        `user:${guildId}:98021`,
+        "disabled: Discord changes are off for this deployment (ENABLE_EFFECTS=false).",
+      ],
+    );
+    // Two /refresh runs made while paused: the earlier one started from the parked repair pass and
+    // tracks it and the older user row; the later one tracks the newer user row.
+    const [earlier, later] = await db.query<{ id: string }>(
+      `INSERT INTO sync_runs (guild_id, requester_id, job_id, created_at) VALUES
+         ($1, '98022', $2, now() - interval '3 minutes'),
+         ($1, '98022', $3, now() - interval '1 minute')
+       RETURNING id::text`,
+      [guildId, repair?.id, newer?.id],
+    );
+    await db.query(
+      `INSERT INTO sync_run_jobs (run_id, job_id) VALUES ($1, $2), ($1, $3), ($4, $5)`,
+      [earlier?.id, repair?.id, older?.id, later?.id, newer?.id],
     );
     expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
       status: "saved",
@@ -5085,23 +5113,50 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     });
     const states = new Map(
       (
-        await db.query<{ id: string; status: string; result: unknown }>(
-          "SELECT id::text, status, result FROM jobs WHERE id = ANY($1::uuid[])",
-          [[repair?.id, older?.id, newer?.id]],
+        await db.query<{ id: string; status: string; last_error: string | null; result: unknown }>(
+          "SELECT id::text, status, last_error, result FROM jobs WHERE id = ANY($1::uuid[])",
+          [[held, repair?.id, older?.id, newer?.id]],
         )
       ).map((row) => [row.id, row]),
     );
-    expect(states.get(newer?.id ?? "")?.status).toBe("queued");
+    // Requeued work drops its stale diagnostic, so it reads `… QUEUED`, not a retry after an error.
+    for (const requeued of [held, newer?.id ?? ""])
+      expect(states.get(requeued)).toMatchObject({ status: "queued", last_error: null });
     for (const closed of [repair, older])
       expect(states.get(closed?.id ?? "")).toMatchObject({
         status: "succeeded",
+        last_error: null,
         result: { skipped: "superseded" },
       });
-    expect(
-      await db.query("SELECT status FROM jobs WHERE dedupe_key=$1 AND status='queued'", [
-        `guild:${guildId}`,
-      ]),
-    ).toEqual([{ status: "queued" }]);
+    const [current] = await db.query<{ id: string }>(
+      "SELECT id::text FROM jobs WHERE dedupe_key=$1 AND status='queued'",
+      [`guild:${guildId}`],
+    );
+    expect(current).toBeDefined();
+    // Each run now tracks the rows that carry its work (the change's own repair pass and the
+    // surviving user row), never a superseded row, so the earlier run isn't reported Completed
+    // before that work runs, and its work total is unchanged.
+    const tracked = async (run: string | undefined) =>
+      (
+        await db.query<{ job_id: string }>(
+          "SELECT job_id::text FROM sync_run_jobs WHERE run_id=$1 ORDER BY job_id",
+          [run],
+        )
+      ).map((row) => row.job_id);
+    expect(await tracked(earlier?.id)).toEqual([current?.id ?? "", newer?.id ?? ""].sort());
+    expect(await tracked(later?.id)).toEqual([newer?.id ?? ""]);
+    const runOf = async (run: string | undefined) =>
+      (await service.syncStatus(manager, run ?? null)).runs[0];
+    expect(await runOf(earlier?.id)).toMatchObject({
+      status: "queued",
+      work_total: 2,
+      work_completed: 0,
+    });
+    // Parked again (Discord changes paused once more), the run reads as held, not completed.
+    await db.query("UPDATE jobs SET status='disabled' WHERE id=$1", [newer?.id]);
+    expect((await runOf(earlier?.id))?.status).toBe("blocked");
+    expect((await runOf(later?.id))?.status).toBe("blocked");
+    await db.query("UPDATE jobs SET status='queued' WHERE id=$1", [newer?.id]);
     expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
       rebound: true,
       requeued: 0,
@@ -5387,6 +5442,104 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         await applicationInput({ ...live, userId: "98050" }),
       ),
     ).toMatchObject({ outcome: "created", effectsMode: "deployment_disabled" });
+  });
+
+  test("a requeue retries when an enqueue commits an active row for the same key mid-pass", async () => {
+    // A `disabled` row sits outside the active-job index, so nothing stops another session from
+    // enqueueing the same key while requeueParked runs (a gateway member update during startup).
+    const guildId = "888888888888888809";
+    await displayGuild(guildId, "9230000000000098011");
+    const key = `user:${guildId}:98060`;
+    const [parked] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, last_error)
+       VALUES ('reconcile.user', $1, '{}'::jsonb, $2, '98060', 'disabled',
+         'disabled: Discord effects are disabled pending activation.')
+       RETURNING id::text`,
+      [key, guildId],
+    );
+    // The other session's enqueue is in place but not committed: the requeue's supersede pass
+    // can't see it, so its requeue waits on that row in the unique index.
+    const other = await db.pool.connect();
+    let active = "";
+    try {
+      await other.query("BEGIN");
+      active = await reconcileUser(other, guildId, "98060");
+      let pid = 0;
+      const caller = db.transaction(async (client) => {
+        pid =
+          (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid ?? 0;
+        return requeueParked(client, [guildId], ["disabled"]);
+      });
+      // Commit the enqueue only once the caller is blocked on it, so the retry path is what runs.
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const [row] = pid
+          ? await db.query<{ waiting: boolean }>(
+              "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1",
+              [pid],
+            )
+          : [];
+        if (row?.waiting) break;
+        if (Date.now() > deadline) throw new Error("The requeue never waited on the enqueue");
+        await Bun.sleep(10);
+      }
+      await other.query("COMMIT");
+      // The unique violation rolled back to the savepoint; the retried pass saw the committed row
+      // and closed the parked one, so the caller's transaction commits with nothing requeued.
+      expect(await caller).toEqual([]);
+    } finally {
+      other.release();
+    }
+    const rows = await db.query<{ id: string; status: string; result: unknown }>(
+      "SELECT id::text, status, result FROM jobs WHERE dedupe_key=$1 ORDER BY created_at",
+      [key],
+    );
+    expect(rows).toEqual([
+      { id: parked?.id ?? "", status: "succeeded", result: { skipped: "superseded" } },
+      { id: active, status: "queued", result: null },
+    ]);
+  });
+
+  test("retry.js requeues a parked job unless a newer row already carries its work", async () => {
+    const guildId = "888888888888888810";
+    await displayGuild(guildId, "9230000000000098012");
+    const key = `user:${guildId}:98061`;
+    // A reconcile.user parked while paused, then a newer row for the same member queued by a
+    // later event: the older row is outside the active-job index, the newer one holds the key.
+    const [older, newer] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, attempts,
+         last_error, created_at) VALUES
+         ('reconcile.user', $1, '{}'::jsonb, $2, '98061', 'disabled', 2,
+           'disabled: Discord effects are disabled pending activation.', now() - interval '2 minutes'),
+         ('reconcile.user', $1, '{}'::jsonb, $2, '98061', 'queued', 0, NULL, now())
+       RETURNING id::text`,
+      [key, guildId],
+    );
+    const retry = (guild: string, job: string | undefined) =>
+      db.transaction((client) => retryJob(client, guild, job ?? ""));
+    const state = async (job: string | undefined) =>
+      (
+        await db.query<{ status: string; attempts: number; last_error: string | null }>(
+          "SELECT status, attempts, last_error FROM jobs WHERE id=$1",
+          [job],
+        )
+      )[0];
+    // Requeueing it would violate the index, so the tool refuses and names the row doing the work.
+    await expect(retry(guildId, older?.id)).rejects.toThrow(
+      `A newer job for this work is already queued: ${newer?.id}.`,
+    );
+    expect(await state(older?.id)).toMatchObject({ status: "disabled", attempts: 2 });
+    // Once the newer row has finished, the parked one retries with a fresh budget and no diagnostic.
+    await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [newer?.id]);
+    await retry(guildId, older?.id);
+    expect(await state(older?.id)).toEqual({ status: "queued", attempts: 0, last_error: null });
+    // A blocked row holds its own key, so it retries in place.
+    await db.query("UPDATE jobs SET status='blocked', attempts=3 WHERE id=$1", [older?.id]);
+    await retry(guildId, older?.id);
+    expect(await state(older?.id)).toMatchObject({ status: "queued", attempts: 0 });
+    // Another guild's job, or completed work, is never retried.
+    await expect(retry("888888888888888804", older?.id)).rejects.toThrow("No retryable job");
+    await expect(retry(guildId, newer?.id)).rejects.toThrow("No retryable job");
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {

@@ -308,9 +308,22 @@ describe("/verify", () => {
       expect(visibleText(presented)).not.toContain("Changes to");
     }
     // Everyone else is still told the nickname changes.
-    expect(
-      fieldOf(onlyEmbed(verifyReply({ ...R.verified, primary: true }, VIEWERS.member)), "Nickname"),
-    ).toStartWith("Changes to **Example Character**");
+    const everyone = verifyReply({ ...R.verified, primary: true }, VIEWERS.member);
+    expect(fieldOf(onlyEmbed(everyone), "Nickname")).toStartWith(
+      "Changes to **Example Character**",
+    );
+    // Live, the owner's card stays the verify.verified success card, as /main's does: the owner
+    // line is information, and only `/nickname enabled:true` by the owner is the warning caveat
+    // card (C4 tone table).
+    const owner = verifyReply(
+      { ...R.verified, primary: true, effectsMode: "live" },
+      VIEWERS.member,
+      {
+        now: NOW,
+        guildOwner: true,
+      },
+    );
+    expectHouseStyle(owner, { tone: "success", title: onlyEmbed(everyone).title ?? "" });
   });
 
   test("stale roster evidence adds the ↻ WAITING Member role field to the success card", () => {
@@ -599,6 +612,20 @@ describe("/main and /nickname", () => {
     );
     expect(nickname({ enabled: true, suspended: false }, true)).toBe(
       "Discord doesn't let bots change the server owner's nickname.",
+    );
+    // The owner's live /main receipt stays success: its Nickname line is information, not a
+    // caveat to fix (only `/nickname enabled:true` by the owner is the warning card).
+    expectHouseStyle(
+      preferencesReply(
+        {
+          ...R.mainSaved,
+          effectsMode: "live",
+          nickname: { enabled: true, suspended: false },
+        },
+        VIEWERS.member,
+        { command: "main", guildOwner: true },
+      ),
+      { tone: "success" },
     );
   });
 

@@ -389,7 +389,8 @@ function nextUp(work: readonly JobView[]): string[] {
  * outstanding-work tally (25+ when the service's cap was reached), what runs next grouped by
  * label, and what needs attention as officer job lines (failed, blocked, paused while live, then
  * queued work retrying after an error), at most ten, split across fields to fit (C7). A next step
- * appears when the view is focused on problems or only paused work remains.
+ * appears when the view is focused on problems or only paused work remains, and, with effects
+ * live, whenever work left from an earlier pause is outstanding: the /config step that re-queues it.
  */
 function officerOverview(
   view: SyncStatusView,
@@ -404,9 +405,13 @@ function officerOverview(
   const problems = view.work.filter(troubled).length;
   const focused = problems > 0 && !inProgress;
   // Only while changes are paused: live, leftover `disabled` work stays under Needs attention with
-  // no "Nothing to fix" step, since no activation or restart is coming to resume it.
+  // the /config step that re-queues it and never the "Nothing to fix" step, since no activation or
+  // restart is coming to resume it.
   const heldOnly =
     paused(mode) && counts.paused > 0 && problems === 0 && counts.queued === 0 && !inProgress;
+  // Shown even while other work is in progress, because nothing else will resume these rows; a
+  // /config save requeues parked work (requeueParked), as the ledger officer views say.
+  const leftover = mode === "live" && counts.paused > 0;
   const completed =
     view.work.length === 0 &&
     view.runs.length > 0 &&
@@ -450,7 +455,9 @@ function officerOverview(
       ? mode === "deployment_disabled"
         ? "Nothing to fix here. Held work resumes when Discord changes are turned back on."
         : "Nothing to fix. Held work resumes when the server is activated."
-      : null;
+      : leftover
+        ? "Paused work is left from an earlier pause; saving any setting with /config re-queues it."
+        : null;
   const fields: (FieldSpec | null | false)[] = [
     {
       name: `Outstanding work (${view.work.length >= 25 ? "25+" : grouped(view.work.length)})`,
