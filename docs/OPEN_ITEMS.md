@@ -60,7 +60,7 @@ Each of these steps needs the owner's go-ahead, in this order:
 
 Open questions for the owner:
 
-- **Launch scope of the resets.** Are `/officer reset` and `/guest reset` in launch scope? Both ship in 2.15.0 and register with every other command.
+- **Launch scope of the resets.** Resolved on 2026-09-24: "everything we've discussed is in launch scope", including `/officer reset` and `/guest reset` (REQUIREMENTS.md).
 - **Late joiners after `/guest reset`.** The late-joiner report leaves out anyone with a guest grant, including one that `/guest reset` ended, consistent with grandfathering. Should it list a late joiner whose only grants were ended?
 - **Deviation-table framing.** The 2.15.0 rows in the [REPLIES.md deviations table](REPLIES.md#deviations-from-approved) compare against drawn mockups and also against reply-spec states that 2.14.0 shipped as specified, although the table lists differences from approved cards. Should the reply-spec rows stay there, or be recorded separately?
 
