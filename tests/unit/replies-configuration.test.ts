@@ -14,6 +14,7 @@ import {
   CONFIG_REPLY_KINDS,
   configurationChecks,
   fcUnlinkReply,
+  guestApplicationsReply,
   healthReply,
   officerOverrideReply,
   officerRankReply,
@@ -35,6 +36,7 @@ import {
   visibleText,
 } from "../fixtures/replies.js";
 import {
+  applications,
   CHANNEL,
   CONFIG_CASES,
   CONFIG_FC,
@@ -327,7 +329,7 @@ describe("approved cards are reproduced exactly", () => {
       color: 0x57f287,
       title: "Officer access granted",
       description:
-        "<@423456789012345678> now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke.",
+        "<@423456789012345678> now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke or /officer reset.",
       fields: [
         { name: "Member", value: "<@423456789012345678>", inline: true },
         { name: "Discord role", value: "Assignment queued", inline: true },
@@ -496,15 +498,38 @@ describe("/config show", () => {
     );
   });
 
-  test("guest applications read open, closed, or closed without a Guest role", () => {
+  test("guest applications read open, off (keeping the channel), or what keeps them closed", () => {
     const value = (overrides: Parameters<typeof configGuild>[0]) =>
       fieldOf(
         onlyEmbed(showReply(configReport({ guild: configGuild(overrides) }), officer, { now })),
         "Guest applications",
       );
     expect(value({})).toBe(`Open · <#${CHANNEL.reviews}>`);
-    expect(value({ guest_application_channel_id: null })).toBe("Closed");
+    expect(value({ guest_application_channel_id: null })).toBe("Closed · no review channel");
     expect(value({ guest_role_id: null })).toBe("Closed · no Guest role");
+    // The switch is separate from the channel (owner decision, 2026-09-24).
+    expect(value({ guest_applications_enabled: false })).toBe(
+      `Off · reviews in <#${CHANNEL.reviews}>`,
+    );
+    expect(value({ guest_applications_enabled: false, guest_application_channel_id: null })).toBe(
+      "Off",
+    );
+  });
+
+  test("validate lists the switch: off, on without a channel, or the checked channel", () => {
+    const channels = (overrides: Parameters<typeof configGuild>[0]) =>
+      fieldOf(
+        onlyEmbed(healthReply(configReport({ guild: configGuild(overrides) }), officer, { now })),
+        "Channels",
+      ) ?? "";
+    expect(channels({})).toContain(`[OK] Guest applications <#${CHANNEL.reviews}>`);
+    // Off keeps the channel unchecked: an imported legacy channel may no longer exist.
+    const off = channels({ guest_applications_enabled: false });
+    expect(off).toContain("[OFF] Guest applications: closed, so /apply refuses");
+    expect(off).not.toContain(`<#${CHANNEL.reviews}>`);
+    expect(channels({ guest_application_channel_id: null })).toContain(
+      "[WARN] Guest applications: on, but no review channel is set, so /apply stays closed",
+    );
   });
 
   test("grandfathering shows while pending and when completed, and the paused note", () => {
@@ -660,7 +685,7 @@ describe("configuration changes", () => {
       changeReply(configChange("leader_role_id", null, { rebound: true }), manager, { now }),
     );
     expect(cleared).toMatchObject({
-      title: "FC Leader role already cleared",
+      title: "FC Leader role already unset",
       description: "`= NO CHANGE` No FC Leader role was set.",
     });
   });
@@ -673,7 +698,7 @@ describe("configuration changes", () => {
     expect(fieldOf(embed, "Who keeps the role")).toStartWith("Only people given /officer grant");
   });
 
-  test("a leader without a linked FC, and every clear is success", () => {
+  test("a leader without a linked FC, and every unset is success", () => {
     expect(fieldOf(embedOf("role.leader_no_fc"), "Free Company")).toBe(
       "Not linked, so no one can receive this role yet. Link one with /config fc link.",
     );
@@ -693,7 +718,7 @@ describe("configuration changes", () => {
       );
       const embed = expectHouseStyle(presented, {
         tone: "success",
-        title: `${label} role cleared`,
+        title: `${label} role unset`,
       });
       expect(embed.description).toContain("<@&223456789012345699> is retired");
       expect(fieldOf(embed, "Discord changes")).toBe("`… QUEUED` Role removal");
@@ -703,15 +728,53 @@ describe("configuration changes", () => {
     );
   });
 
-  test("channel settings and clears, including the Guest-role warning", () => {
-    expect(embedOf("channel.applications_no_role")).toMatchObject({
-      title: "Review channel set; Guest role still needed",
+  test("channel settings and unsets, and every /config guest_applications receipt", () => {
+    expect(embedOf("applications.no_role")).toMatchObject({
+      title: "Guest applications on; Guest role still needed",
       description:
         "<#323456789012345603> will receive applications, but /apply stays closed until a Guest role is set.",
     });
-    expect(embedOf("channel.applications_closed").description).toBe(
+    expect(embedOf("applications.closed").description).toBe(
       "/apply now refuses before the form opens: “Guest applications are not open in this server. Ask an officer about Guest access.”",
     );
+    expect(embedOf("applications.open").description).toBe(
+      "/apply is open. Each application is posted in <#323456789012345603> with Approve and Deny buttons.",
+    );
+    // A new channel for applications that were already open never says they opened.
+    expect(embedOf("applications.review_changed")).toMatchObject({
+      title: "Review channel changed",
+      description:
+        "New applications are posted in <#323456789012345603>. Applications already posted stay reviewable in their original channel.",
+    });
+    expect(embedOf("applications.review_set").description).toBe(
+      "Applications will be posted in <#323456789012345603> once you turn them on with /config guest_applications enabled:true.",
+    );
+    expect(embedOf("applications.no_channel").title).toBe(
+      "Guest applications on; review channel needed",
+    );
+    expect(embedOf("applications.unchanged").description).toBe(
+      "`= NO CHANGE` Applications are already on, reviewed in <#323456789012345603>.",
+    );
+    // Channel set and switch on in one call is the open card, with the channel named once.
+    const both = onlyEmbed(
+      guestApplicationsReply(
+        applications({ enabled: [false, true], channel: [null, CHANNEL.reviews] }),
+        officer,
+        { now },
+      ),
+    );
+    expect(both.title).toBe("Guest applications open");
+    expect(fieldOf(both, "Review channel")).toBeUndefined();
+    // Switching off while unsetting the channel names the unset channel on the closed card.
+    const closedUnset = onlyEmbed(
+      guestApplicationsReply(
+        applications({ enabled: [true, false], channel: [CHANNEL.reviews, null] }),
+        officer,
+        { now },
+      ),
+    );
+    expect(closedUnset.title).toBe("Guest applications closed");
+    expect(fieldOf(closedUnset, "Review channel")).toBe("Unset");
     expect(fieldOf(embedOf("channel.ledger_no_fc"), "Free Company")).toBe(
       "Not linked, so ledger commands stay unavailable. Link one with /config fc link.",
     );
@@ -1203,5 +1266,64 @@ describe("configuration failures render as their approved concepts", () => {
       );
       expect(embed.description).toStartWith(message);
     }
+  });
+});
+
+describe("stored Lodestone tags (2.14.0 reply session, D1)", () => {
+  // Nodestone stores a tag as the Lodestone shows it, «EXMPL»; DevBot's /config show and
+  // /config validate rendered ««Souls»» until presenters stripped the stored pair.
+  const stored = { ...CONFIG_FC, tag: "«EXMPL»" };
+  const tagged = configReport({ fc: fcRow({ tag: stored.tag }) });
+
+  test("show, validate, link and unlink render exactly as with a bare tag", () => {
+    const officer = { now: NOW };
+    const pairs = [
+      [showReply(R.healthy, VIEWERS.officer, officer), showReply(tagged, VIEWERS.officer, officer)],
+      [
+        healthReply(R.healthy, VIEWERS.officer, officer),
+        healthReply(tagged, VIEWERS.officer, officer),
+      ],
+      [
+        changeReply(R.linked, VIEWERS.officer, officer),
+        changeReply(
+          configChange("fc_id", CONFIG_FC.id, { company: stored }),
+          VIEWERS.officer,
+          officer,
+        ),
+      ],
+      [
+        fcUnlinkReply(R.unlinked, VIEWERS.officer, { fcId: CONFIG_FC.id, now: NOW }),
+        fcUnlinkReply(unlinked({ company: stored }), VIEWERS.officer, {
+          fcId: CONFIG_FC.id,
+          now: NOW,
+        }),
+      ],
+    ] as const;
+    for (const [bare, fromLodestone] of pairs) {
+      expect(visibleText(fromLodestone)).toBe(visibleText(bare));
+      expect(visibleText(fromLodestone)).toContain("«EXMPL»");
+      expect(visibleText(fromLodestone)).not.toMatch(/««|»»/u);
+    }
+  });
+});
+
+describe("officer rank repeats (2.15.0 review)", () => {
+  test("a repeat names the saved rank and what is still missing, never access it can't give", () => {
+    const repeat = rankResult({ status: "unchanged", effects: "unchanged", previous: "Officer" });
+    const ready = onlyEmbed(officerRankReply(repeat, VIEWERS.manager, { now: NOW }));
+    expect(ready.description).toContain("is already the saved officer rank.");
+    expect(ready.description).toEndWith("Members who hold it already get bot officer access.");
+    expect(fieldOf(ready, "Heads-up")).toBeUndefined();
+    const unbound = onlyEmbed(
+      officerRankReply({ ...repeat, officerRoleId: null }, VIEWERS.manager, { now: NOW }),
+    );
+    expect(unbound.description).not.toContain("get bot officer access");
+    expect(fieldOf(unbound, "Heads-up")).toBe(
+      "No Officer role is bound; bind one with /config roles officer.",
+    );
+    expectHouseStyle(officerRankReply({ ...repeat, officerRoleId: null }, VIEWERS.manager), {
+      tone: "info",
+      title: "Officer rank already set",
+    });
   });
 });

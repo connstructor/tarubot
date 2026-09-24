@@ -8,7 +8,7 @@ import * as t from "../infrastructure/postgres/schema.js";
 import type { DiscordPort } from "./records.js";
 import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
 import type { GuildAccess } from "./guild-access.js";
-import type { OfficerOverrideResult, SetupResult } from "./results.js";
+import type { OfficerOverrideResult, OfficerResetResult, SetupResult } from "./results.js";
 import { fcLinked, type Service } from "./service.js";
 
 /** Extra provisioning capability, separate from the reconciliation/test port. */
@@ -69,6 +69,12 @@ export class RoleAdministration {
         .where(eq(t.guilds.id, actor.guildId));
       if (fcId && previous?.fc_id && previous.fc_id !== fcId) throw fcLinked(previous.fc_id);
       await this.access.discord.check(actor.guildId, actor.userId);
+      // /setup switches guest applications on. Like /config guest_applications enabled:true, it
+      // first validates a kept review channel it is about to open: an import stores the legacy
+      // channel unvalidated with the switch off. The revision check below catches a concurrent
+      // change to it.
+      if (previous?.guest_application_channel_id && !previous.guest_applications_enabled)
+        await this.discord.validateChannel(actor.guildId, previous.guest_application_channel_id);
       // Setup never changes the role-layout switch. An existing guild keeps its value (an imported
       // guild stays off); a guild first created here gets the column default, which is on. A
       // concurrent /config role_layout bumps the revision, so the check below turns it into a conflict.
@@ -181,6 +187,8 @@ export class RoleAdministration {
               current.officer_notifications_channel_id ?? prepared.officers.id,
             guest_application_channel_id:
               current.guest_application_channel_id ?? prepared.officers.id,
+            // /setup opens /apply (docs/SETUP.md): the switch goes on with the review channel.
+            guest_applications_enabled: true,
             revision: sql`${t.guilds.revision}+1`,
             active: true,
           })
@@ -340,6 +348,65 @@ export class RoleAdministration {
         present: member !== null,
         previous:
           previous?.state === "granted" || previous?.state === "revoked" ? previous.state : null,
+      };
+    });
+  }
+  /**
+   * /officer reset (owner decision, 2026-09-24): remove the member's grant or revoke override, so
+   * the in-game rank decides again ("a third option that removes any override and goes back to
+   * membership/rank logic"). Like a revoke, it needs a server manager and works for someone who
+   * left. With no override it changes nothing and audits nothing.
+   */
+  async officerReset(actor: Actor, user: string, reason: string): Promise<OfficerResetResult> {
+    authorizeRoleManager(actor);
+    reason = note(reason, "reason");
+    const guild = await this.app.guild(actor);
+    // Like grant and revoke: the bound role must still be one this manager and the bot may assign,
+    // since removing a revoke can give the Officer role and removing a grant can take it away.
+    // Channel access is checked as for a revoke; reconciliation revalidates any role it adds.
+    if (guild.officer_role_id)
+      await this.discord.validateRole(guild.id, guild.officer_role_id, actor.userId, false);
+    const member = await this.discord.member(guild.id, user);
+    if (member?.bot)
+      throw new Failure(
+        "not_found",
+        "That user isn't a current member of this server, or is a bot.",
+        0,
+        { kind: "resource", resource: "member", id: user },
+      );
+    return this.app.db.transaction(async (client) => {
+      await ensureUser(client, guild.id, user, member?.joinedAt);
+      const db = orm(client);
+      const scope = and(
+        eq(t.officerOverrides.guild_id, guild.id),
+        eq(t.officerOverrides.user_id, user),
+      );
+      const [previous] = await db
+        .select({ state: t.officerOverrides.state })
+        .from(t.officerOverrides)
+        .where(scope)
+        .for("update");
+      const state =
+        previous?.state === "granted" || previous?.state === "revoked" ? previous.state : null;
+      const common = {
+        effectsMode: this.app.effectsMode(guild),
+        user,
+        reason,
+        present: member !== null,
+        previous: state,
+        rankConfigured: guild.officer_rank_key !== null,
+      } as const;
+      if (!state) return { ...common, status: "unchanged", effects: "unchanged" };
+      await db.delete(t.officerOverrides).where(scope);
+      await audit(client, guild.id, actor.userId, "officer.reset", user, {
+        reason,
+        previous: state,
+      });
+      await reconcileUser(client, guild.id, user);
+      return {
+        ...common,
+        status: "reset",
+        effects: guild.officer_role_id ? "queued" : "recorded",
       };
     });
   }

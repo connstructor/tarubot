@@ -146,6 +146,12 @@ export function sequenceCursor(value: unknown): bigint {
 }
 
 /**
+ * A ledger entry an officer names in /ledger adjust: its entry number in the current FC account
+ * (the '#5' history, receipts and posts show), or its UUID.
+ */
+export type EntryRef = { readonly sequence: bigint } | { readonly id: string };
+
+/**
  * Enforce accepted UTF-16 length and PostgreSQL-compatible Unicode before a mutation. The label
  * names the option being checked (a ledger note, an officer's reason, or a rank name), so the
  * approved message reads correctly for each caller, and it doubles as the option detail.

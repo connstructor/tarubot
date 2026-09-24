@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 import { parseActivateArguments } from "../../scripts/activate.js";
 import { parsePreviewArguments, roleTotals } from "../../scripts/preview.js";
-import { closesGuestApplications, alreadyActive } from "../../src/application/activation.js";
+import { alreadyActive, guestApplicationsChoice } from "../../src/application/activation.js";
 import {
   assemblePlan,
   GRANDFATHER_SAMPLE,
@@ -337,25 +337,23 @@ test("activation choices: no-op reruns and explicit guest applications", () => {
   expect(alreadyActive({ active: true, effects_enabled: false, guest_grandfather: null })).toBe(
     false,
   );
-  const imported = { guest_grandfather: "pending" as const, guest_application_channel_id: "555" };
-  expect(() => closesGuestApplications(imported, undefined)).toThrow(
-    expect.objectContaining({ code: "conflict" }),
-  );
-  expect(closesGuestApplications(imported, "closed")).toBe(true);
-  expect(closesGuestApplications(imported, "open")).toBe(false);
-  const closed = { guest_grandfather: "pending" as const, guest_application_channel_id: null };
-  expect(closesGuestApplications(closed, undefined)).toBe(false);
-  expect(closesGuestApplications(closed, "closed")).toBe(false);
-  expect(() => closesGuestApplications(closed, "open")).toThrow(
+  // 2.15.0 imports store the legacy review channel with the switch off: no choice keeps it off,
+  // `open` switches it on, and `closed` is already the state (owner decision, 2026-09-24).
+  const imported = { guest_application_channel_id: "555", guest_applications_enabled: false };
+  expect(guestApplicationsChoice(imported, undefined)).toBeUndefined();
+  expect(guestApplicationsChoice(imported, "closed")).toBeUndefined();
+  expect(guestApplicationsChoice(imported, "open")).toBe(true);
+  const unset = { guest_application_channel_id: null, guest_applications_enabled: false };
+  expect(guestApplicationsChoice(unset, undefined)).toBeUndefined();
+  expect(guestApplicationsChoice(unset, "closed")).toBeUndefined();
+  expect(() => guestApplicationsChoice(unset, "open")).toThrow(
     expect.objectContaining({ code: "input" }),
   );
-  // Outside the first activation the channel is kept unless closing is asked for.
-  expect(
-    closesGuestApplications(
-      { guest_grandfather: null, guest_application_channel_id: "555" },
-      undefined,
-    ),
-  ).toBe(false);
+  // An open guild closes only when asked, and keeps its channel either way.
+  const open = { guest_application_channel_id: "555", guest_applications_enabled: true };
+  expect(guestApplicationsChoice(open, undefined)).toBeUndefined();
+  expect(guestApplicationsChoice(open, "closed")).toBe(false);
+  expect(guestApplicationsChoice(open, "open")).toBeUndefined();
 });
 
 test("activate and preview command lines are strict", () => {

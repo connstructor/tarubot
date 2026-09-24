@@ -148,13 +148,21 @@ export async function planGrandfathering(
   if (pending.count) throw pendingDepartureFailure(pending);
   if (new Set(members.map((member) => member.id)).size !== members.length)
     throw new Failure("incomplete", "Discord enumeration returned a member twice. Retry it.");
-  // Two guild-wide reads replace per-user lookups for report-only context.
+  // Two guild-wide reads replace per-user lookups. Active grants give the report's provenance;
+  // grants /guest reset ended confer nothing, but still count as an existing grant below, so a
+  // reset before first activation is not undone by a fresh grandfathered grant (2.15.0).
   const grants = new Map<string, Set<string>>();
+  const ended = new Set<string>();
   for (const row of await db
-    .select({ user: t.guestGrants.user_id, provenance: t.guestGrants.provenance })
+    .select({
+      user: t.guestGrants.user_id,
+      provenance: t.guestGrants.provenance,
+      endedAt: t.guestGrants.ended_at,
+    })
     .from(t.guestGrants)
     .where(eq(t.guestGrants.guild_id, guild.id)))
-    grants.set(row.user, (grants.get(row.user) ?? new Set()).add(row.provenance));
+    if (row.endedAt) ended.add(row.user);
+    else grants.set(row.user, (grants.get(row.user) ?? new Set()).add(row.provenance));
   const imported = new Set(
     (
       await db
@@ -173,7 +181,7 @@ export async function planGrandfathering(
     // The exact inputs of a reconcile.user pass (Synchronization.facts): stored evidence plus the
     // member's current roles.
     const facts = await accessFacts(db, guild, member.id, freshnessSeconds, member.roles);
-    const basis = grandfatherBasis(facts);
+    const basis = grandfatherBasis({ ...facts, grant: facts.grant || ended.has(member.id) });
     candidates.push({
       userId: member.id,
       basis,

@@ -10,6 +10,7 @@ import { command, string } from "../../discord/options.js";
 import {
   changeReply,
   fcUnlinkReply,
+  guestApplicationsReply,
   healthReply,
   officerRankReply,
   roleLayoutReply,
@@ -44,10 +45,13 @@ data.addSubcommandGroup((group) => {
     group.addSubcommand((sub) => {
       sub
         .setName(name)
-        .setDescription(`Set or clear the ${name} role`)
+        .setDescription(`Set or unset the ${name} role`)
         .addRoleOption((option) => option.setName("role").setDescription("Access role"))
+        // "unset", not "clear": the role itself and its history stay (owner decision, 2026-09-24).
         .addBooleanOption((option) =>
-          option.setName("clear").setDescription("Clear the configuration and clean up this role"),
+          option
+            .setName("unset_role")
+            .setDescription("Stop managing this role; it stays in Discord and is cleaned up"),
         );
       // Binding an existing staff role normally grants its current holders officer access; a
       // rank-based launch binds it with adopt_holders:false instead (owner decision O1).
@@ -68,10 +72,10 @@ data.addSubcommandGroup((group) => {
 data.addSubcommand((sub) =>
   sub
     .setName("officer_rank")
-    .setDescription("Set or clear the in-game rank granting bot officer access")
+    .setDescription("Set or unset the in-game rank granting bot officer access")
     .addStringOption(string("rank", "Exact in-game FC rank name"))
     .addBooleanOption((option) =>
-      option.setName("clear").setDescription("Use manual officer grants only"),
+      option.setName("unset_rank").setDescription("Use manual officer grants only"),
     ),
 );
 // Managed-role display/ordering is a per-guild opt-in; server managers with Manage Roles change it.
@@ -86,11 +90,11 @@ data.addSubcommand((sub) =>
         .setRequired(true),
     ),
 );
-for (const name of ["ledger", "officer_notifications", "guest_applications"])
+for (const name of ["ledger", "officer_notifications"])
   data.addSubcommand((sub) =>
     sub
       .setName(name)
-      .setDescription(`Set or clear the ${name.replaceAll("_", " ")} channel`)
+      .setDescription(`Set or unset the ${name.replaceAll("_", " ")} channel`)
       // Discord offers only text channels, as /setup's rooms do; the gateway still refuses others.
       .addChannelOption((option) =>
         option
@@ -98,10 +102,29 @@ for (const name of ["ledger", "officer_notifications", "guest_applications"])
           .setDescription("Guild text channel")
           .addChannelTypes(ChannelType.GuildText),
       )
+      // "unset", not "clear": the channel and its messages stay (owner decision, 2026-09-24).
       .addBooleanOption((option) =>
-        option.setName("clear").setDescription("Clear this channel configuration"),
+        option.setName("unset_channel").setDescription("Stop using a channel for this"),
       ),
   );
+// The applications switch is separate from the review channel (owner decision, 2026-09-24).
+data.addSubcommand((sub) =>
+  sub
+    .setName("guest_applications")
+    .setDescription("Turn guest applications on or off, and set their review channel")
+    .addBooleanOption((option) =>
+      option.setName("enabled").setDescription("Whether /apply takes applications"),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName("channel")
+        .setDescription("Staff-only text channel where applications are reviewed")
+        .addChannelTypes(ChannelType.GuildText),
+    )
+    .addBooleanOption((option) =>
+      option.setName("unset_channel").setDescription("Stop using a review channel"),
+    ),
+);
 for (const name of ["show", "validate"])
   data.addSubcommand((sub) =>
     sub
@@ -134,36 +157,55 @@ export default defineCommand({
     if (sub === "validate") return healthReply(await app.validate(actor), viewer);
     if (sub === "officer_rank") {
       const rank = options.getString("rank");
-      const clear = options.getBoolean("clear") === true;
-      if ((rank !== null) === clear)
-        throw new Failure("input", "Give a rank name or set clear:true, not both.", 0, {
+      const unset = options.getBoolean("unset_rank") === true;
+      if ((rank !== null) === unset)
+        throw new Failure("input", "Give a rank name or set unset_rank:true, not both.", 0, {
           kind: "option",
           option: "rank",
         });
       return officerRankReply(await app.configureOfficerRank(actor, rank), viewer);
+    }
+    if (sub === "guest_applications") {
+      const channel = options.getChannel("channel")?.id ?? null;
+      const unset = options.getBoolean("unset_channel") === true;
+      const enabled = options.getBoolean("enabled");
+      if (channel !== null && unset)
+        throw new Failure("input", "Choose a channel or set unset_channel:true, not both.", 0, {
+          kind: "option",
+          option: "channel",
+        });
+      if (channel === null && !unset && enabled === null)
+        throw new Failure("input", "Choose enabled, a channel, or unset_channel:true.", 0, {
+          kind: "option",
+          option: "enabled",
+        });
+      return guestApplicationsReply(
+        await app.configureGuestApplications(actor, {
+          ...(enabled === null ? {} : { enabled }),
+          ...(channel !== null ? { channel } : unset ? { channel: null } : {}),
+        }),
+        viewer,
+      );
     }
     if (sub === "role_layout")
       return roleLayoutReply(
         await app.configureRoleLayout(actor, options.getBoolean("enabled", true)),
         viewer,
       );
-    const value =
-      group === "roles" ? options.getRole("role")?.id : options.getChannel("channel")?.id;
-    const clear = options.getBoolean("clear") === true;
-    // Exactly one of the resource and clear:true; the wording names the resource kind.
-    if (!!value === clear)
+    const roles = group === "roles";
+    const value = roles ? options.getRole("role")?.id : options.getChannel("channel")?.id;
+    const unset = options.getBoolean(roles ? "unset_role" : "unset_channel") === true;
+    // Exactly one of the resource and its unset option; the wording names the resource kind.
+    if (!!value === unset)
       throw new Failure(
         "input",
-        `Choose a ${group === "roles" ? "role" : "channel"} or set clear:true, not both.`,
+        roles
+          ? "Choose a role or set unset_role:true, not both."
+          : "Choose a channel or set unset_channel:true, not both.",
         0,
-        { kind: "option", option: group === "roles" ? "role" : "channel" },
+        { kind: "option", option: roles ? "role" : "channel" },
       );
-    const field =
-      group === "roles"
-        ? `${sub}_role_id`
-        : sub === "guest_applications"
-          ? "guest_application_channel_id"
-          : `${sub}_channel_id`;
+    const field = roles ? `${sub}_role_id` : `${sub}_channel_id`;
     // Only /config roles officer declares adopt_holders; omitted means the service default (true).
     const adoptHolders = group === "roles" ? options.getBoolean("adopt_holders") : null;
     // The service independently validates the field allowlist, ManageRoles, hierarchy, and that

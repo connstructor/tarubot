@@ -27,8 +27,10 @@ import type {
   FcHealthRow,
   FcRef,
   FcUnlinkResult,
+  GuestApplicationsResult,
   OfficerOverrideResult,
   OfficerRankResult,
+  OfficerResetResult,
   RoleLayoutResult,
   SetupResult,
 } from "../../application/results.js";
@@ -38,6 +40,7 @@ import { recheckButton, syncStatusButton } from "./controls.js";
 import {
   code,
   count,
+  fcTagText,
   fcTitleName,
   link,
   lodestone,
@@ -87,15 +90,22 @@ const TIMESTAMP = {
   "channel.ledger_cleared": true,
   "channel.notifications": true,
   "channel.notifications_cleared": true,
-  "channel.applications_open": true,
-  "channel.applications_no_role": true,
-  "channel.applications_closed": true,
   "channel.unchanged": false,
   "channel.paused": false,
+  "applications.open": true,
+  "applications.review_changed": true,
+  "applications.no_role": true,
+  "applications.no_channel": true,
+  "applications.closed": true,
+  "applications.review_set": true,
+  "applications.review_unset": true,
+  "applications.unchanged": false,
+  "applications.paused": false,
   "rank.set": true,
   "rank.heads_up": true,
   "rank.cleared": true,
   "rank.paused": false,
+  "rank.unchanged": false,
   "layout.on": true,
   "layout.off": true,
   "layout.unchanged": false,
@@ -109,6 +119,9 @@ const TIMESTAMP = {
   "officer.absent": true,
   "officer.recorded": true,
   "officer.paused": false,
+  "officer.reset": true,
+  "officer.reset_unchanged": false,
+  "officer.reset_paused": false,
 } as const satisfies Record<string, boolean>;
 
 /** A configuration reply state; tests catalogue one case per kind. */
@@ -188,15 +201,23 @@ const rawName = (fc: Pick<FcRef, "id" | "name">): string => fc.name.trim() || `F
 /** The FC as the checklist and receipts name it: 'Example Company «EXMPL»' (no world). */
 function fcLabel(fc: Pick<FcRef, "id" | "name" | "tag">): string {
   const name = fcTitleName(fc, "text");
-  return fc.tag ? `${name} «${plain(fc.tag, 20)}»` : name;
+  const tag = fcTagText(fc.tag);
+  return tag ? `${name} «${plain(tag, 20)}»` : name;
 }
+
+/** ' «EXMPL»' after a bolded FC name, or '' when the FC has no tag. */
+const tagSuffix = (stored: string): string => {
+  const tag = fcTagText(stored);
+  return tag ? ` «${plain(tag, 20)}»` : "";
+};
 
 /**
  * The FC as a Lodestone link plus its world: '[Example Company «EXMPL»](…) · Diabolos', or with
  * ' on ' between them inside a sentence.
  */
 function fcLink(fc: FcRef, joiner: " · " | " on " = " · "): string {
-  const label = fc.tag ? `${rawName(fc)} «${fc.tag}»` : rawName(fc);
+  const tag = fcTagText(fc.tag);
+  const label = tag ? `${rawName(fc)} «${tag}»` : rawName(fc);
   const world = fc.world ? `${joiner}${plain(fc.world, HOUSE_LIMITS.characterName)}` : "";
   return `${link(label, lodestone.freeCompany(fc.id))}${world}`;
 }
@@ -413,7 +434,9 @@ export function configurationChecks(report: ConfigurationReport): HealthCheck[] 
     );
   else add("Channels", "off", "Officer notifications: not set, so officer alerts are skipped");
   const reviews = guild.guest_application_channel_id;
-  if (reviews !== null) {
+  // A channel is checked only while applications are on; switched off, it is just kept for later.
+  const applicationsOn = guild.guest_applications_enabled;
+  if (applicationsOn && reviews !== null) {
     const review = resourceCheck(
       "Channels",
       "Guest applications",
@@ -449,13 +472,19 @@ export function configurationChecks(report: ConfigurationReport): HealthCheck[] 
   // Wording that differs between the approved problem (#8) and ready (#9) checklists follows the
   // verdict. Fields group rows by section, so this line still lists last among the channels.
   const problems = rows.some((row) => row.check === "fail");
-  if (reviews === null)
+  if (!applicationsOn)
     add(
       "Channels",
       "off",
-      problems
+      problems && reviews === null
         ? "Guest applications: not set, so /apply is closed"
         : "Guest applications: closed, so /apply refuses",
+    );
+  else if (reviews === null)
+    add(
+      "Channels",
+      "warn",
+      "Guest applications: on, but no review channel is set, so /apply stays closed",
     );
 
   if (report.effectsMode === "deployment_disabled")
@@ -575,10 +604,15 @@ function healthLine(checks: readonly HealthCheck[]): string {
   return `Health: all ${count(resources.length, "resource check")} passed.`;
 }
 
-/** What 'Guest applications' reads: open only when both the channel and the Guest role are set. */
+/**
+ * What 'Guest applications' reads: open only when the switch is on and both the channel and the
+ * Guest role are set. Switched off, it names the review channel it keeps for later.
+ */
 function guestApplications(guild: GuildRecord): string {
   const channel = guild.guest_application_channel_id;
-  if (channel === null) return "Closed";
+  if (!guild.guest_applications_enabled)
+    return channel === null ? "Off" : `Off · reviews in ${mentionChannel(channel)}`;
+  if (channel === null) return "Closed · no review channel";
   if (guild.guest_role_id === null) return "Closed · no Guest role";
   return `Open · ${mentionChannel(channel)}`;
 }
@@ -621,7 +655,7 @@ export function showReply(
   const fcLine = fc
     ? [
         `**${fcTitleName(fc, "text")}**`,
-        fc.tag ? ` «${plain(fc.tag, 20)}»` : "",
+        tagSuffix(fc.tag),
         fc.world ? ` · ${plain(fc.world, HOUSE_LIMITS.characterName)}` : "",
       ].join("")
     : "No Free Company linked";
@@ -812,7 +846,7 @@ export function fcUnlinkReply(
   options: UnlinkReplyOptions,
 ): Presented {
   const name = result.company
-    ? `**${fcTitleName(result.company, "text")}**${result.company.tag ? ` «${plain(result.company.tag, 20)}»` : ""}`
+    ? `**${fcTitleName(result.company, "text")}**${tagSuffix(result.company.tag)}`
     : `FC ${code(options.fcId)}`;
   const unlinked = `${name} is no longer linked. Characters, ledger history and audit records are kept.`;
   const facts: FieldSpec[] = [
@@ -885,10 +919,6 @@ const CHANNEL_FIELDS = {
     label: "Officer notifications channel",
     noun: "officer notifications channel",
   },
-  guest_application_channel_id: {
-    label: "Guest applications channel",
-    noun: "guest applications channel",
-  },
 } as const;
 
 /** Whether a saved field is one of the role bindings. */
@@ -940,7 +970,7 @@ function unchangedReply(
     role ? "role.unchanged" : "channel.unchanged",
     {
       tone: "info",
-      title: `${label} already ${change.value ? "set" : "cleared"}`,
+      title: `${label} already ${change.value ? "set" : "unset"}`,
       description: target
         ? `${marker("unchanged")} ${target} was already the ${noun}.${officer}`
         : `${marker("unchanged")} No ${noun} was set.`,
@@ -1091,7 +1121,7 @@ function roleChangeReply(
       "role.cleared",
       {
         tone: "success",
-        title: `${label} role cleared`,
+        title: `${label} role unset`,
         description: saved,
         fields: [
           effect,
@@ -1143,12 +1173,11 @@ function roleChangeReply(
 }
 
 /**
- * /config ledger, officer_notifications and guest_applications (spec #23–#28). Warning variants: a
- * ledger channel with no linked FC, and a review channel with no Guest role ('Review channel set;
- * Guest role still needed', since /apply stays closed). Closing applications quotes the exact
- * refusal /apply now shows. While Discord changes are paused, every channel change is the
- * approved paused-save card (errors-and-style#26 covers any change), like the other /config
- * receipts: it keeps the receipt's own sentence and facts, and held work says when it retries.
+ * /config ledger and officer_notifications (spec #23–#26). Warning variant: a ledger channel with no
+ * linked FC. While Discord changes are paused, every channel change is the approved paused-save
+ * card (errors-and-style#26 covers any change), like the other /config receipts: it keeps the
+ * receipt's own sentence and facts, and held work says when it retries. The guest review channel
+ * has its own receipt, guestApplicationsReply().
  */
 function channelChangeReply(
   change: SavedChange,
@@ -1174,7 +1203,7 @@ function channelChangeReply(
     if (!channel)
       return done("channel.ledger_cleared", {
         tone: "success",
-        title: "Ledger channel cleared",
+        title: "Ledger channel unset",
         description: "Ledger commands are unavailable until a ledger channel is set again.",
         fields: [
           {
@@ -1220,48 +1249,143 @@ function channelChangeReply(
             footer,
           },
     );
+  // configure() no longer saves the guest review channel; guestApplicationsReply() answers it.
+  throw new Error(`No channel receipt for field ${field}.`);
+}
+
+/** Applicants' answers are posted in the review channel, so it should be staff-only. */
+const PRIVATE_REVIEWS: FieldSpec = {
+  name: "Keep it private",
+  value:
+    "Applicants' answers are visible to anyone who can read this channel. Use a staff-only channel.",
+};
+
+/**
+ * /config guest_applications (owner decision, 2026-09-24): the applications switch and the review
+ * channel, saved together. The card follows what changed, so it never implies a change that didn't
+ * happen: switching off is 'Guest applications closed' with the exact refusal /apply now shows;
+ * switching on, or setting the missing channel of a switched-on server, is 'Guest applications
+ * open', or a warning naming what still keeps /apply closed (no channel, no Guest role); a new
+ * channel for already-open applications is 'Review channel changed'; a channel set or unset while
+ * applications stay off says so. A request matching what is saved is the info '= NO CHANGE' card.
+ * Paused, a saved change is the paused-save card with the same sentence and facts.
+ */
+export function guestApplicationsReply(
+  result: GuestApplicationsResult,
+  viewer: Viewer,
+  options: ConfigReplyOptions = {},
+): Presented {
+  if (result.status === "unchanged") {
+    const where = result.channel
+      ? `reviewed in ${mentionChannel(result.channel)}`
+      : "with no review channel";
+    return card(
+      "applications.unchanged",
+      {
+        tone: "info",
+        title: "Guest applications already set",
+        description: `${marker("unchanged")} Applications are already ${result.enabled ? "on" : "off"}, ${where}.`,
+        // Nothing was saved or audited, so the footer names the revision without "Audited".
+        footer: `Configuration revision ${result.guild.revision}`,
+      },
+      options,
+    );
+  }
+  const guild = result.guild;
+  const mode = result.effectsMode;
+  const held = heldWork(result.requeued, mode);
+  const footer = revisionFooter(guild);
+  const done = (
+    kind: ConfigReplyKind,
+    spec: Omit<ReplySpec, "timestamp"> & { readonly description: string },
+  ): Presented =>
+    paused(mode)
+      ? heldCard("applications.paused", mode, viewer, spec.description, spec.fields ?? [], options)
+      : card(kind, spec, options);
+  const channel = result.channel.value ? mentionChannel(result.channel.value) : null;
+  const channelChanged = result.channel.value !== result.channel.previous;
+  const reviewField: FieldSpec | null = channelChanged
+    ? { name: "Review channel", value: channel ?? "Unset", inline: true }
+    : null;
+  if (!result.enabled.value) {
+    if (result.enabled.previous)
+      return done("applications.closed", {
+        tone: "success",
+        title: "Guest applications closed",
+        description: `/apply now refuses before the form opens: “${GUEST_APPLICATIONS_CLOSED}”`,
+        fields: [
+          {
+            name: "Pending applications",
+            value: "Applications already posted stay reviewable in their original channel.",
+          },
+          {
+            name: "Other Guest access",
+            value:
+              "/guest grant still works, and people with a verified character still receive Guest.",
+          },
+          reviewField,
+          held,
+        ],
+        footer,
+      });
+    // Off before and after: only the review channel changed.
+    return channel
+      ? done("applications.review_set", {
+          tone: "success",
+          title: "Review channel set",
+          description: `Applications will be posted in ${channel} once you turn them on with /config guest_applications enabled:true.`,
+          fields: [PRIVATE_REVIEWS, held],
+          footer,
+        })
+      : done("applications.review_unset", {
+          tone: "success",
+          title: "Review channel unset",
+          description:
+            "Applications stay off, and no review channel is set. Choose one before turning them on.",
+          fields: [held],
+          footer,
+        });
+  }
   if (!channel)
-    return done("channel.applications_closed", {
-      tone: "success",
-      title: "Guest applications closed",
-      description: `/apply now refuses before the form opens: “${GUEST_APPLICATIONS_CLOSED}”`,
+    return done("applications.no_channel", {
+      tone: "warning",
+      title: "Guest applications on; review channel needed",
+      description: "/apply stays closed until a review channel is set.",
       fields: [
         {
-          name: "Pending applications",
-          value: "Applications already posted stay reviewable in their original channel.",
+          name: "Next step",
+          value: "Set one with /config guest_applications channel:#guest-reviews.",
         },
-        {
-          name: "Other Guest access",
-          value:
-            "/guest grant still works, and people with a verified character still receive Guest.",
-        },
+        reviewField,
         held,
       ],
       footer,
     });
-  const privacy: FieldSpec = {
-    name: "Keep it private",
-    value:
-      "Applicants' answers are visible to anyone who can read this channel. Use a staff-only channel.",
-  };
   if (guild.guest_role_id === null)
-    return done("channel.applications_no_role", {
+    return done("applications.no_role", {
       tone: "warning",
-      title: "Review channel set; Guest role still needed",
+      title: result.enabled.previous
+        ? "Review channel set; Guest role still needed"
+        : "Guest applications on; Guest role still needed",
       description: `${channel} will receive applications, but /apply stays closed until a Guest role is set.`,
       fields: [
-        privacy,
+        PRIVATE_REVIEWS,
         { name: "Next step", value: "Set the Guest role with /config roles guest role:@Guest." },
         held,
       ],
       footer,
     });
-  return done("channel.applications_open", {
+  // The Guest role can't change here, so applications were open before exactly when the switch
+  // was on with a channel.
+  const wasOpen = result.enabled.previous && result.channel.previous !== null;
+  return done(wasOpen ? "applications.review_changed" : "applications.open", {
     tone: "success",
-    title: "Guest applications open",
-    description: `/apply is open. Each application is posted in ${channel} with Approve and Deny buttons.`,
+    title: wasOpen ? "Review channel changed" : "Guest applications open",
+    description: wasOpen
+      ? `New applications are posted in ${channel}. Applications already posted stay reviewable in their original channel.`
+      : `/apply is open. Each application is posted in ${channel} with Approve and Deny buttons.`,
     fields: [
-      privacy,
+      PRIVATE_REVIEWS,
       { name: "Guest role", value: mentionRole(guild.guest_role_id), inline: true },
       held,
     ],
@@ -1334,6 +1458,23 @@ export function officerRankReply(
         !result.officerRoleId && "No Officer role is bound; bind one with /config roles officer.",
       ].filter((line): line is string => Boolean(line))
     : [];
+  // A repeat names the saved rank without claiming access it can't give yet: the same Heads-up as
+  // the saved path says what is still missing (no FC linked, no Officer role bound).
+  if (result.status === "unchanged")
+    return card(
+      "rank.unchanged",
+      {
+        tone: "info",
+        title: rank ? "Officer rank already set" : "Officer rank already unset",
+        description: rank
+          ? `${marker("unchanged")} ${rankText(rank)} is already the saved officer rank.${
+              headsUp.length ? "" : " Members who hold it already get bot officer access."
+            }`
+          : `${marker("unchanged")} No officer rank was set, so officer access already comes only from manual grants.`,
+        fields: [headsUp.length ? { name: "Heads-up", value: headsUp.join("\n") } : null],
+      },
+      options,
+    );
   const saved = rank
     ? `Members whose linked character holds the in-game rank ${rankText(rank)} get bot officer access and the Officer role, alongside manual grants. /officer revoke still overrides the rank.`
     : "Officer access now comes only from manual grants (/officer grant). People who had the Officer role only through their in-game rank lose it at the next role check.";
@@ -1352,7 +1493,7 @@ export function officerRankReply(
     rank ? (warning ? "rank.heads_up" : "rank.set") : "rank.cleared",
     {
       tone: warning ? "warning" : "success",
-      title: rank ? "Officer rank set" : "Officer rank cleared",
+      title: rank ? "Officer rank set" : "Officer rank unset",
       description: saved,
       fields: [...facts, effectsField(mode, "Officer role check", viewer), warning],
       footer: "Audited as config.officer_rank",
@@ -1610,8 +1751,8 @@ export function officerOverrideReply(
   const footer = `Audited as officer.${grant ? "grant" : "revoke"}`;
   const work = grant ? "Assignment" : "Removal";
   const lead = grant
-    ? `${who} now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke.`
-    : `${who} no longer has bot officer access, and the Officer role will be removed. This revoke also overrides the in-game rank until a server manager runs /officer grant again.`;
+    ? `${who} now has bot officer access and will receive the Officer role. This grant doesn't depend on in-game rank and lasts until a server manager runs /officer revoke or /officer reset.`
+    : `${who} no longer has bot officer access, and the Officer role will be removed. This revoke also overrides the in-game rank until a server manager runs /officer grant or /officer reset.`;
   const discordRole = (value: string): FieldSpec => ({ name: "Discord role", value, inline: true });
   if (!recorded && result.present && !repeated && paused(mode))
     return heldCard("officer.paused", mode, viewer, lead, [memberField, reasonField], options);
@@ -1628,7 +1769,7 @@ export function officerOverrideReply(
     description = `${who} isn't in the server now, so this applies if they rejoin. ${
       grant
         ? "This grant doesn't depend on in-game rank."
-        : "This revoke also overrides the in-game rank until a server manager runs /officer grant again."
+        : "This revoke also overrides the in-game rank until a server manager runs /officer grant or /officer reset."
     }`;
     role = "Applies if they rejoin";
   } else if (repeated) {
@@ -1650,6 +1791,66 @@ export function officerOverrideReply(
       description,
       fields: [memberField, discordRole(role), reasonField],
       footer,
+    },
+    options,
+  );
+}
+
+/**
+ * /officer reset (owner decision, 2026-09-24): the grant or revoke override removed, so the
+ * in-game rank decides again, or nobody without an /officer grant when no rank is set. Success;
+ * nothing to remove is the info '= NO CHANGE' card. The Discord role line matches the grant and
+ * revoke receipts; paused, a queued change is the paused-save card.
+ */
+export function officerResetReply(
+  result: OfficerResetResult,
+  viewer: Viewer,
+  options: ConfigReplyOptions = {},
+): Presented {
+  const who = mentionUser(result.user);
+  const mode = result.effectsMode;
+  const memberField: FieldSpec = { name: "Member", value: who, inline: true };
+  const reasonField: FieldSpec = { name: "Reason", value: userText(result.reason) };
+  // What decides now, as its own sentence: the rank, or (with none set) only /officer grant.
+  const decides = result.rankConfigured
+    ? "The in-game rank decides their officer access."
+    : "No officer rank is set, so only /officer grant confers officer access.";
+  if (result.status === "unchanged")
+    return card(
+      "officer.reset_unchanged",
+      {
+        tone: "info",
+        title: "No officer override to remove",
+        description: `${marker("unchanged")} ${who} has no officer grant or revoke. ${decides}`,
+        fields: [memberField],
+      },
+      options,
+    );
+  const removed = result.previous === "granted" ? "officer grant" : "officer revoke";
+  const lead = `${who}'s ${removed} is removed. ${decides}`;
+  const recorded = result.effects === "recorded";
+  if (!recorded && result.present && paused(mode))
+    return heldCard(
+      "officer.reset_paused",
+      mode,
+      viewer,
+      lead,
+      [memberField, reasonField],
+      options,
+    );
+  const role = recorded
+    ? "Applies once an Officer role is set"
+    : !result.present
+      ? "Applies if they rejoin"
+      : "Update queued";
+  return card(
+    "officer.reset",
+    {
+      tone: "success",
+      title: "Officer override removed",
+      description: lead,
+      fields: [memberField, { name: "Discord role", value: role, inline: true }, reasonField],
+      footer: "Audited as officer.reset",
     },
     options,
   );

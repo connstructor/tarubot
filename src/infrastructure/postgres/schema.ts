@@ -60,6 +60,12 @@ export const guilds = pgTable("guilds", {
   ledger_channel_id: externalId("ledger_channel_id"),
   officer_notifications_channel_id: externalId("officer_notifications_channel_id"),
   guest_application_channel_id: externalId("guest_application_channel_id"),
+  /**
+   * Guest-application switch (migration 006, owner decision 2026-09-24), separate from the review
+   * channel: /apply opens only when it is on and a review channel and a Guest role are set. Guilds
+   * start off; /setup turns it on, and imports keep it off with their legacy channel stored.
+   */
+  guest_applications_enabled: boolean("guest_applications_enabled").notNull().default(false),
   lobby_channel_id: externalId("lobby_channel_id"),
   officer_channel_id: externalId("officer_channel_id"),
   access_policy_enabled: boolean("access_policy_enabled").notNull().default(false),
@@ -200,6 +206,13 @@ export const guestGrants = pgTable("guest_grants", {
   reason: text("reason"),
   source: payload("source").notNull().default(sql`'{}'::jsonb`),
   created_at: instant("created_at").notNull().defaultNow(),
+  /**
+   * Set by /guest reset (migration 006): the grant is history, no longer conferring Guest. Rows are
+   * never deleted, so a repeated import's source key still finds them.
+   */
+  ended_at: instant("ended_at"),
+  ended_by: externalId("ended_by"),
+  ended_reason: text("ended_reason"),
 });
 export const guestApplications = pgTable("guest_applications", {
   id: uuid("id").primaryKey().defaultRandom(),

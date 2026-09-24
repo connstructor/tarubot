@@ -25,7 +25,7 @@ import {
   receiptReply,
 } from "../../src/discord/presenters/ledger.js";
 import { DISCORD_LIMITS } from "../../src/discord/presenters/style.js";
-import { cursor, uuid } from "../../src/discord/selectors.js";
+import { cursor, entryRef } from "../../src/discord/selectors.js";
 import type { FailureCode, FailureDetail } from "../../src/domain/failures.js";
 import { Failure, MAX_GIL, note } from "../../src/domain/values.js";
 import {
@@ -948,13 +948,7 @@ describe("ledger failures render as their approved concepts", () => {
       ],
       [thrown(() => cursor("next")), "member", "/ledger history", "input", "Check your input"],
       [thrown(() => note("   ")), "member", "/ledger deposit", "input", "Check your input"],
-      [
-        thrown(() => uuid("#42", "entry")),
-        "officer",
-        "/ledger adjust",
-        "input",
-        "Check your input",
-      ],
+      [thrown(() => entryRef("#entry")), "officer", "/ledger adjust", "input", "Check your input"],
       [
         failure(
           "not_found",

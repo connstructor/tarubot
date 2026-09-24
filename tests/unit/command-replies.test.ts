@@ -49,10 +49,11 @@ import { CHARACTER_RESULTS as R, TARGET_ID, TOKEN } from "../fixtures/replies/ch
 import {
   CHANNEL,
   CONFIG_FC,
+  applications,
   CONFIG_RESULTS as C,
   configChange,
-  configGuild,
   OVERRIDE_USER,
+  officerReset,
   override,
   ROLE,
 } from "../fixtures/replies/configuration.js";
@@ -61,6 +62,7 @@ import {
   APPLICATION_ID,
   decision,
   GUEST_RESULTS as G,
+  guestReset,
 } from "../fixtures/replies/guests.js";
 import { ENTRY_IDS, LEDGER_RESULTS as L } from "../fixtures/replies/ledger.js";
 import { refreshed, RUN_ID, SYNC_RESULTS as SR } from "../fixtures/replies/sync-utility.js";
@@ -115,6 +117,8 @@ function stubService(results: Readonly<Record<string, unknown>>) {
     "unlinkCompany",
     "configureOfficerRank",
     "configureRoleLayout",
+    "configureGuestApplications",
+    "guestReset",
   ] as const)
     Object.assign(app, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
@@ -359,7 +363,30 @@ const PATHS: readonly {
     actor: MANAGER,
     results: { ledger: L.adjust },
     title: "Correction recorded",
-    call: ["ledger", "400", "adjust", "117900000", "Recount", INTERACTION_ID, ENTRY_IDS[42]],
+    call: [
+      "ledger",
+      "400",
+      "adjust",
+      "117900000",
+      "Recount",
+      INTERACTION_ID,
+      { id: ENTRY_IDS[42] },
+    ],
+  },
+  {
+    // The entry number history shows is accepted too, with or without '#' (owner decision).
+    command: ledgerCommand,
+    options: [
+      subcommand("adjust", [
+        text("balance", "117900000"),
+        text("note", "Recount"),
+        text("entry", " #42 "),
+      ]),
+    ],
+    actor: MANAGER,
+    results: { ledger: L.adjust },
+    title: "Correction recorded",
+    call: ["ledger", "400", "adjust", "117900000", "Recount", INTERACTION_ID, { sequence: 42n }],
   },
   {
     command: ledgerCommand,
@@ -481,7 +508,7 @@ test("malformed ledger options are input failures that name the option and skip 
     [[subcommand("history", [text("before", "0")])], "before"],
     [[subcommand("balance", [text("fc_id", "Example Free Company")])], "fc_id"],
     [
-      [subcommand("adjust", [text("balance", "1"), text("note", "Fix"), text("entry", "#42")])],
+      [subcommand("adjust", [text("balance", "1"), text("note", "Fix"), text("entry", "#abc")])],
       "entry",
     ],
   ];
@@ -553,6 +580,15 @@ const GUEST_SYNC_PATHS: readonly {
     results: { guestAction: GA.revoked },
     title: "Guest access revoked",
     call: ["guestAction", "400", GUEST_ID, true, "Disruptive", INTERACTION_ID],
+  },
+  {
+    // reset removes every override (owner decision, 2026-09-24).
+    command: guestCommand,
+    options: [subcommand("reset", [text("member", GUEST_ID), text("reason", "Settled")])],
+    actor: OFFICER,
+    results: { guestReset: guestReset() },
+    title: "Guest access reset",
+    call: ["guestReset", "400", GUEST_ID, "Settled"],
   },
   {
     command: guestCommand,
@@ -688,7 +724,7 @@ function stubAdministration(
 ): RoleAdministration {
   const admin: unknown = Object.create(RoleAdministration.prototype);
   if (!(admin instanceof RoleAdministration)) throw new Error("Invalid administration fixture");
-  for (const method of ["setup", "officer"] as const)
+  for (const method of ["setup", "officer", "officerReset"] as const)
     Object.assign(admin, {
       [method]: async (actor: Actor, ...args: unknown[]) => {
         calls.push([method, actor.userId, ...args]);
@@ -748,6 +784,13 @@ const resolvedRoles = (...ids: string[]) => ({
   ),
 });
 
+/** The resolved channel objects Discord sends beside channel options, keyed by ID. */
+const resolvedChannels = (...ids: string[]) => ({
+  channels: Object.fromEntries(
+    ids.map((id) => [id, { id, name: "guest-reviews", type: 0, permissions: "0" }]),
+  ),
+});
+
 /** Each configuration command path: options, actor, stubbed result, expected title and call. */
 const CONFIG_PATHS: readonly {
   readonly command: Command;
@@ -793,10 +836,10 @@ const CONFIG_PATHS: readonly {
   },
   {
     command: configCommand,
-    options: [subcommand("ledger", [{ type: B, name: "clear", value: true }])],
+    options: [subcommand("ledger", [{ type: B, name: "unset_channel", value: true }])],
     actor: OFFICER,
     results: { configure: configChange("ledger_channel_id", null) },
-    title: "Ledger channel cleared",
+    title: "Ledger channel unset",
     call: ["configure", "400", "ledger_channel_id", null, {}],
   },
   {
@@ -810,10 +853,12 @@ const CONFIG_PATHS: readonly {
   },
   {
     command: configCommand,
-    options: [group("roles", [subcommand("guest", [{ type: B, name: "clear", value: true }])])],
+    options: [
+      group("roles", [subcommand("guest", [{ type: B, name: "unset_role", value: true }])]),
+    ],
     actor: OFFICER,
     results: { configure: configChange("guest_role_id", null, { previous: ROLE.guest }) },
-    title: "Guest role cleared",
+    title: "Guest role unset",
     call: ["configure", "400", "guest_role_id", null, {}],
   },
   {
@@ -844,7 +889,9 @@ const CONFIG_PATHS: readonly {
   },
   {
     command: configCommand,
-    options: [subcommand("officer_notifications", [{ type: B, name: "clear", value: true }])],
+    options: [
+      subcommand("officer_notifications", [{ type: B, name: "unset_channel", value: true }]),
+    ],
     actor: OFFICER,
     results: {
       configure: configChange("officer_notifications_channel_id", null, {
@@ -855,17 +902,45 @@ const CONFIG_PATHS: readonly {
     call: ["configure", "400", "officer_notifications_channel_id", null, {}],
   },
   {
+    // The switch and the channel go to one service call (owner decision, 2026-09-24).
     command: configCommand,
-    options: [subcommand("guest_applications", [{ type: B, name: "clear", value: true }])],
+    options: [subcommand("guest_applications", [{ type: B, name: "enabled", value: false }])],
+    actor: OFFICER,
+    results: { configureGuestApplications: applications({ enabled: [true, false] }) },
+    title: "Guest applications closed",
+    call: ["configureGuestApplications", "400", { enabled: false }],
+  },
+  {
+    command: configCommand,
+    options: [
+      subcommand("guest_applications", [
+        { type: B, name: "enabled", value: true },
+        { type: S.Channel, name: "channel", value: CHANNEL.reviews },
+      ]),
+    ],
+    resolved: resolvedChannels(CHANNEL.reviews),
     actor: OFFICER,
     results: {
-      configure: configChange("guest_application_channel_id", null, {
-        previous: CHANNEL.reviews,
-        guild: configGuild({ guest_application_channel_id: null }),
+      configureGuestApplications: applications({
+        enabled: [false, true],
+        channel: [null, CHANNEL.reviews],
       }),
     },
-    title: "Guest applications closed",
-    call: ["configure", "400", "guest_application_channel_id", null, {}],
+    title: "Guest applications open",
+    call: ["configureGuestApplications", "400", { enabled: true, channel: CHANNEL.reviews }],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("guest_applications", [{ type: B, name: "unset_channel", value: true }])],
+    actor: OFFICER,
+    results: {
+      configureGuestApplications: applications({
+        enabled: [false, false],
+        channel: [CHANNEL.reviews, null],
+      }),
+    },
+    title: "Review channel unset",
+    call: ["configureGuestApplications", "400", { channel: null }],
   },
   {
     command: configCommand,
@@ -911,6 +986,16 @@ const CONFIG_PATHS: readonly {
     title: "Officer access revoked",
     call: ["officer", "400", OVERRIDE_USER, false, "Stepped down"],
   },
+  {
+    command: officerCommand,
+    options: [
+      subcommand("reset", [text("member", OVERRIDE_USER), text("reason", "Back to the rank")]),
+    ],
+    actor: MANAGER,
+    results: { officerReset: officerReset() },
+    title: "Officer override removed",
+    call: ["officerReset", "400", OVERRIDE_USER, "Back to the rank"],
+  },
 ];
 
 test("every configuration, setup and officer command returns its presenter's one embed", async () => {
@@ -935,34 +1020,56 @@ test("every configuration, setup and officer command returns its presenter's one
 });
 
 test("/config's exactly-one checks are input failures that never reach the service", async () => {
-  const cases: [unknown[], string, string][] = [
-    [[subcommand("officer_rank")], "Give a rank name or set clear:true, not both.", "rank"],
+  const cases: [unknown[], string, string, unknown?][] = [
+    [[subcommand("officer_rank")], "Give a rank name or set unset_rank:true, not both.", "rank"],
     [
       [
         subcommand("officer_rank", [
           text("rank", "Officer"),
-          { type: B, name: "clear", value: true },
+          { type: B, name: "unset_rank", value: true },
         ]),
       ],
-      "Give a rank name or set clear:true, not both.",
+      "Give a rank name or set unset_rank:true, not both.",
       "rank",
     ],
     [
       [group("roles", [subcommand("member")])],
-      "Choose a role or set clear:true, not both.",
+      "Choose a role or set unset_role:true, not both.",
       "role",
     ],
-    [[subcommand("ledger")], "Choose a channel or set clear:true, not both.", "channel"],
+    [[subcommand("ledger")], "Choose a channel or set unset_channel:true, not both.", "channel"],
+    // /config guest_applications needs at least one option, and never a channel with its unset.
+    [
+      [subcommand("guest_applications")],
+      "Choose enabled, a channel, or unset_channel:true.",
+      "enabled",
+    ],
+    [
+      [
+        subcommand("guest_applications", [
+          { type: S.Channel, name: "channel", value: CHANNEL.reviews },
+          { type: B, name: "unset_channel", value: true },
+        ]),
+      ],
+      "Choose a channel or set unset_channel:true, not both.",
+      "channel",
+      resolvedChannels(CHANNEL.reviews),
+    ],
   ];
   // Every service method fails if reached, so only the command's own parse can refuse.
   const reached = new Error("The service was reached with an unparsed option");
   const unreachable = Object.fromEntries(
-    ["configure", "configureOfficerRank", "configureRoleLayout", "unlinkCompany", "validate"].map(
-      (method) => [method, reached],
-    ),
+    [
+      "configure",
+      "configureOfficerRank",
+      "configureRoleLayout",
+      "configureGuestApplications",
+      "unlinkCompany",
+      "validate",
+    ].map((method) => [method, reached]),
   );
-  for (const [options, message, option] of cases) {
-    const error = await runConfig(configCommand, options, MANAGER, unreachable).then(
+  for (const [options, message, option, resolved] of cases) {
+    const error = await runConfig(configCommand, options, MANAGER, unreachable, resolved).then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -1018,7 +1125,8 @@ test("the path tables return one embed for every registered command path", async
     ),
   );
   const paths = await registeredPaths();
-  expect(paths).toHaveLength(41);
+  // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24).
+  expect(paths).toHaveLength(43);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
   // and /version reads GitHub, which version.test stubs; every other path is exercised above.
   expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "version"]);

@@ -139,7 +139,7 @@ export function importReport(data: LegacyData, snapshot: Snapshot | null, mappin
         utc: `${row.last_updated?.replace(" ", "T")}Z`,
       })),
     // What each guild row will hold, so the dry run shows every launch default before publication
-    // (MIG-02). The legacy review channel is only recorded; it is kept for a later explicit choice.
+    // (MIG-02). The legacy review channel is imported with applications switched off.
     guildSettings: data.guilds.map((row) => ({
       guildId: row.guild_id,
       memberRoleId: row.member_role_id,
@@ -162,8 +162,9 @@ export function importReport(data: LegacyData, snapshot: Snapshot | null, mappin
   };
 }
 /**
- * /apply opens only after an explicit `/config guest_applications` choice (owner decision
- * 2026-09-23). The legacy channel ID is kept here so that choice can reuse it.
+ * Applications start switched off (owner decision 2026-09-23); the legacy review channel is
+ * imported with them (owner decision 2026-09-24), so /config guest_applications enabled:true
+ * reopens them after launch. The report and audit name the channel for that later choice.
  */
 function importedGuestApplications(legacyChannelId: string | null) {
   return { state: "closed", legacyChannelId } as const;
@@ -247,10 +248,11 @@ export async function importLegacy(
         // Ledger and roster notices keep their legacy destinations; activation validates them.
         ledger_channel_id: guild.ledger_channel_id,
         officer_notifications_channel_id: guild.officer_notifications_channel_id,
-        // Owner launch decisions of 2026-09-23:
-        // - applications start closed; /apply opens only through an explicit
-        //   /config guest_applications, and the report and audit keep the legacy channel;
-        guest_application_channel_id: null,
+        // Owner launch decisions of 2026-09-23 and 2026-09-24:
+        // - applications start switched off, so /apply refuses; the legacy review channel is kept,
+        //   so reopening after launch is one /config guest_applications enabled:true;
+        guest_application_channel_id: guild.guest_application_channel_id,
+        guest_applications_enabled: false,
         // - imported servers keep their existing role display and order until a manager opts in;
         role_layout_enabled: false,
         // - the guild owes exactly one first-activation grandfathering run.

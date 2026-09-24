@@ -50,6 +50,11 @@ export interface MemberView {
   nickname: string | null;
   roles: string[];
   bot: boolean;
+  /**
+   * The server owner, whose nickname Discord lets no bot change. Absent in test fakes means not
+   * the owner; the gateway always sets it.
+   */
+  owner?: boolean;
 }
 /**
  * What a ledger channel post shows: the immutable entry, and the entry number of the entry an

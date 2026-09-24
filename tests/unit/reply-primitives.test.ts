@@ -27,6 +27,7 @@ import {
   cut,
   deadline,
   fcName,
+  fcTagText,
   fcTitleName,
   footerText,
   gilText,
@@ -241,6 +242,15 @@ describe("formatting", () => {
     );
     expect(fcName(FC)).toBe("Example Free Company «EXFC» · Diabolos");
     expect(fcName({ ...FC, tag: "" }, "footer")).toBe("Example Free Company · Diabolos");
+    // The Lodestone's own guillemets are stored with the tag; the house pair is added once (D1).
+    expect(fcName({ ...FC, tag: "«EXFC»" })).toBe("Example Free Company «EXFC» · Diabolos");
+    expect(fcTagText("«Souls»")).toBe("Souls");
+    expect(fcTagText(" « Souls » ")).toBe("Souls");
+    expect(fcTagText("EXFC")).toBe("EXFC");
+    expect(fcTagText("«»")).toBeNull();
+    expect(fcTagText("  ")).toBeNull();
+    // Only one surrounding pair is the Lodestone's; anything inside it is the tag itself.
+    expect(fcTagText("««x»»")).toBe("«x»");
     expect(fcTitleName(FC)).toBe("Example Free Company");
     expect(fcTitleName({ id: FC.id, name: " " })).toBe(`FC ${FC.id}`);
     expect(link("Example [Char](x)", lodestone.character(CHARACTER.id))).toBe(

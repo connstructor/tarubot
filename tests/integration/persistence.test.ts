@@ -11,7 +11,7 @@ import {
 } from "discord.js";
 import type { AccessChannel } from "../../src/domain/channel-access.js";
 import { channelAccessOverwrites } from "../../src/domain/channel-access.js";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import * as t from "../../src/infrastructure/postgres/schema.js";
 import { capabilityMetrics } from "../../src/application/metrics.js";
@@ -263,12 +263,12 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.migrate();
     await db.schema();
     await importLegacy(db, source, snapshot, mappings(source));
-    // Imports now leave guest applications closed (owner decision 2026-09-23), so the form
-    // scenarios below opt in to the legacy review channel explicitly. A dedicated test covers the
-    // closed state.
+    // Imports keep the legacy review channel with applications switched off (owner decisions
+    // 2026-09-23 and 2026-09-24), so the form scenarios below switch them on explicitly. A dedicated
+    // test covers the closed state.
     await db.orm
       .update(t.guilds)
-      .set({ guest_application_channel_id: legacyGuild.guest_application_channel_id })
+      .set({ guest_applications_enabled: true })
       .where(eq(t.guilds.id, guild));
     for (const member of snapshot.guilds[0]?.members ?? [])
       members.set(member.id, {
@@ -883,7 +883,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       (deposit.entry.balance - 2n).toString(),
       "The deposit was 5 gil",
       randomUUID(),
-      deposit.entry.id,
+      { id: deposit.entry.id },
     );
     if (correction.status !== "recorded") throw new Error("Missing correction");
     // Posts go out in entry order, so the deposit's post is delivered first.
@@ -1104,10 +1104,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       status: "imported",
       report: { guildSettings: [{ guildId: closedGuild, guestApplications: closed }] },
     });
-    // Ledger and roster notices keep their legacy destinations; only the review channel is closed.
+    // Ledger, roster and review channels keep their legacy destinations; applications start off.
     const [row] = await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closedGuild));
     expect(row).toMatchObject({
-      guest_application_channel_id: null,
+      guest_application_channel_id: first.guest_application_channel_id,
+      guest_applications_enabled: false,
       ledger_channel_id: first.ledger_channel_id,
       officer_notifications_channel_id: first.officer_notifications_channel_id,
       effects_enabled: false,
@@ -1173,11 +1174,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect(await applications()).toHaveLength(0);
       // An explicit, audited /config choice opens applications; the form then opens and a
       // submission queues its officer review.
-      await service.configure(
-        { ...actor, guildId: closedGuild },
-        "guest_application_channel_id",
-        "81003",
-      );
+      expect(
+        await service.configureGuestApplications(
+          { ...actor, guildId: closedGuild },
+          { enabled: true, channel: "81003" },
+        ),
+      ).toMatchObject({
+        status: "saved",
+        enabled: { previous: false, value: true },
+        channel: { previous: first.guest_application_channel_id, value: "81003" },
+      });
       await router.handle(interactions.slash());
       expect(interactions.requests.at(-1)?.body).toMatchObject({
         type: InteractionResponseType.Modal,
@@ -1447,6 +1453,72 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0]?.nickname_suspended,
     ).toBe(true);
   });
+  test("the server owner's nickname is skipped, never a blocked job (2.14.0 reply session)", async () => {
+    const serverOwner = "90012";
+    await service.assign(
+      actor,
+      serverOwner,
+      { id: "77777783", name: "Owner Nickname", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Server owner fixture",
+    );
+    const member = await discord.member(guild, serverOwner);
+    if (!member) throw new Error("Missing member");
+    member.owner = true;
+    const before = member.nickname;
+    const queue = new Queue(db, dispatcher(service, sync, access), () => {});
+    // Discord would refuse the write (modelled by nicknameBlocked); the worker never attempts it.
+    const reconcileOwner = async () => {
+      const key = await enqueue(
+        db.pool,
+        "reconcile.user",
+        `user:${guild}:${serverOwner}`,
+        {},
+        guild,
+        serverOwner,
+      );
+      await queue.perform(await leased(key));
+      return (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]
+        ?.status;
+    };
+    nicknameBlocked = true;
+    try {
+      expect(await reconcileOwner()).toBe("succeeded");
+      // Turning sync off queues a restore; for the owner it is dropped, never attempted.
+      await db.query(
+        "UPDATE guild_users SET nickname_restore=true, nickname_pending=true, nickname_baseline_set=true, nickname_written=true WHERE guild_id=$1 AND user_id=$2",
+        [guild, serverOwner],
+      );
+      expect(await reconcileOwner()).toBe("succeeded");
+    } finally {
+      nicknameBlocked = false;
+    }
+    expect(member.nickname).toBe(before);
+    expect(
+      (
+        await db.query<{ nickname_restore: boolean; nickname_pending: boolean }>(
+          "SELECT nickname_restore, nickname_pending FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guild, serverOwner],
+        )
+      )[0],
+    ).toEqual({ nickname_restore: false, nickname_pending: false });
+    // A preview plans no nickname change for the owner either, even with a restore pending.
+    await db.query(
+      "UPDATE guild_users SET nickname_restore=true, nickname_baseline_set=true, nickname_written=true, nickname_before='Original' WHERE guild_id=$1 AND user_id=$2",
+      [guild, serverOwner],
+    );
+    const previewKey = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${guild}:${serverOwner}`,
+      {},
+      guild,
+      serverOwner,
+    );
+    expect(await sync.user(await leased(previewKey), async () => {}, true)).toMatchObject({
+      nickname: { current: before, desired: before },
+    });
+    await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [previewKey]);
+  });
   test("replacement, tuple binding and expiry prevent invalid proof completion", async () => {
     const owner = { ...actor, userId: "90013", officer: false };
     const identity = {
@@ -1594,7 +1666,40 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ).toHaveLength(1);
     expect(configured.officer_notifications_channel_id).toBe(configured.officer_channel_id);
     expect(configured.guest_application_channel_id).toBe(configured.officer_channel_id);
+    // /setup opens /apply: the switch goes on with the review channel.
+    expect(configured.guest_applications_enabled).toBe(true);
     await administration.setup(manager, "DevBot", null, null);
+    // Switching applications on validates a kept review channel first (an import's legacy channel
+    // may be gone), as /config guest_applications enabled:true does (2.15.0 review).
+    await db.orm
+      .update(t.guilds)
+      .set({ guest_application_channel_id: "89999", guest_applications_enabled: false })
+      .where(eq(t.guilds.id, setupGuild));
+    const keptChannel = provisioner.validateChannel;
+    provisioner.validateChannel = async (guildId, channel) => {
+      if (channel === "89999")
+        throw new Failure("blocked", "<#89999> is unavailable.", 0, {
+          kind: "resource",
+          resource: "channel",
+          id: channel,
+        });
+      return keptChannel(guildId, channel);
+    };
+    try {
+      await expect(administration.setup(manager, "DevBot", null, null)).rejects.toMatchObject({
+        code: "blocked",
+      });
+    } finally {
+      provisioner.validateChannel = keptChannel;
+    }
+    expect((await service.guild(manager)).guest_applications_enabled).toBe(false);
+    await db.orm
+      .update(t.guilds)
+      .set({
+        guest_application_channel_id: configured.guest_application_channel_id,
+        guest_applications_enabled: true,
+      })
+      .where(eq(t.guilds.id, setupGuild));
     expect(created.size).toBe(4);
     expect((await service.guild(manager)).officer_role_id).toBe(configured.officer_role_id);
     const officerRole = configured.officer_role_id;
@@ -1681,10 +1786,106 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(false);
     const revoked = await rankAccess(db, configured, "90032", 21600);
     expect(desiredRankRole(revoked.officer, true, true)).toBe(false);
+    // Like grant and revoke, a manager below the Officer role is refused and the revoke stands.
+    const validateRole = provisioner.validateRole;
+    const refusals: unknown[][] = [];
+    provisioner.validateRole = async (...args) => {
+      refusals.push(args);
+      throw new Failure("forbidden", "Your highest Discord role must be above @Officer.", 0, {
+        kind: "scope",
+        scope: "hierarchy",
+      });
+    };
+    try {
+      await expect(
+        administration.officerReset(manager, "90032", "Below the role"),
+      ).rejects.toMatchObject({ code: "forbidden" });
+    } finally {
+      provisioner.validateRole = validateRole;
+    }
+    expect(refusals).toEqual([[configured.id, configured.officer_role_id, manager.userId, false]]);
+    expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(false);
+    // /officer reset removes the revoke, so the in-game rank decides again; a second reset has
+    // nothing to remove (owner decision, 2026-09-24).
+    expect(await administration.officerReset(manager, "90032", "Rank decides")).toMatchObject({
+      status: "reset",
+      previous: "revoked",
+      rankConfigured: true,
+    });
+    expect((await service.enrichActor({ ...base, userId: "90032" })).officer).toBe(true);
+    expect(await administration.officerReset(manager, "90032", "Again")).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      previous: null,
+    });
+    await expect(
+      administration.officerReset({ ...manager, serverManager: false }, "90032", "Not allowed"),
+    ).rejects.toMatchObject({ code: "forbidden" });
     await service.configureOfficerRank(manager, null);
     expect((await rankAccess(db, await service.guild(manager), "90030", 21600)).manualOfficer).toBe(
       true,
     );
+  });
+
+  test("/guest reset lifts the revoke and ends every grant, keeping them as history (2026-09-24)", async () => {
+    const user = "90095";
+    await service.guestAction(actor, user, false, "Manual fixture", randomUUID());
+    await db.orm.insert(t.guestGrants).values({
+      guild_id: guild,
+      user_id: user,
+      provenance: "imported_guest",
+      source_key: `import:reset-fixture:${user}`,
+    });
+    await service.guestAction(actor, user, true, "Revoke fixture", randomUUID());
+    expect(await service.guestReset(actor, user, "Back to the automatic rules")).toMatchObject({
+      status: "reset",
+      effects: "queued",
+      revocationLifted: true,
+      grantsEnded: ["imported_guest", "manual"],
+    });
+    // Both grant rows remain as history, ended by this officer with the reason.
+    expect(
+      await db.query<{ provenance: string; ended: boolean; by: string | null; why: string | null }>(
+        "SELECT provenance, ended_at IS NOT NULL AS ended, ended_by AS by, ended_reason AS why FROM guest_grants WHERE guild_id=$1 AND user_id=$2 ORDER BY provenance",
+        [guild, user],
+      ),
+    ).toEqual([
+      {
+        provenance: "imported_guest",
+        ended: true,
+        by: actor.userId,
+        why: "Back to the automatic rules",
+      },
+      { provenance: "manual", ended: true, by: actor.userId, why: "Back to the automatic rules" },
+    ]);
+    // Status and access see no grant and no revocation; the audit records what was removed.
+    const status = await service.guestStatus(actor, user);
+    expect(status.grants).toEqual([]);
+    expect(status.revocation.some((row) => row.revoked)).toBe(false);
+    expect(
+      (
+        await db.orm
+          .select({ details: t.auditEvents.details })
+          .from(t.auditEvents)
+          .where(and(eq(t.auditEvents.guild_id, guild), eq(t.auditEvents.action, "guest.reset")))
+      ).map((row) => row.details),
+    ).toContainEqual({
+      reason: "Back to the automatic rules",
+      revocationLifted: true,
+      grantsEnded: ["imported_guest", "manual"],
+    });
+    // Nothing left to remove; a later grant is a fresh, active one.
+    expect(await service.guestReset(actor, user, "Again")).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      revocationLifted: false,
+      grantsEnded: [],
+    });
+    await service.guestAction(actor, user, false, "Welcome back", randomUUID());
+    expect((await service.guestStatus(actor, user)).grants).toHaveLength(1);
+    await expect(
+      service.guestReset({ ...actor, officer: false, serverManager: false }, user, "No"),
+    ).rejects.toMatchObject({ code: "forbidden" });
   });
 
   test("a lost roster lease is an ownership change, not Lodestone degradation", async () => {
@@ -2371,6 +2572,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           access_policy_enabled: onboarding,
           access_everyone_before: onboarding ? remote.everyonePermissions : null,
           guest_application_channel_id: "81002",
+          guest_applications_enabled: true,
         });
       if (onboarding)
         await policy.remember(client, guildId, structuredClone(remote), "81001", "81002", false);
@@ -3693,6 +3895,42 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(await lateJoiners(db.orm, guild)).toMatchObject({ state: "pending", count: 0 });
   });
 
+  test("a /guest reset before first activation is not undone by grandfathering (2.15.0)", async () => {
+    const id = "666666666666666711";
+    const fcId = "9232097761132950021";
+    const row = await importedGuild(id, fcId);
+    const [reset, untouched] = ["97111", "97112"];
+    await importedHuman(id, reset);
+    await importedHuman(id, untouched);
+    // The first member's imported grant was ended by /guest reset; the second has no grant.
+    await db.orm.insert(t.guestGrants).values({
+      guild_id: id,
+      user_id: reset,
+      provenance: "imported_guest",
+      source_key: `import:reset-before-activation:${reset}`,
+      ended_at: new Date(),
+      ended_by: "90001",
+      ended_reason: "Back to the automatic rules",
+    });
+    await publishRoster(fcId, []);
+    const plan = await planGrandfathering(
+      db.orm,
+      row,
+      [memberView(id, reset), memberView(id, untouched)],
+      21600,
+      new Date(),
+    );
+    const basisOf = (user: string) =>
+      plan.candidates.find((candidate) => candidate.userId === user)?.basis;
+    // An ended grant still counts as an existing grant here, but no longer as provenance.
+    expect(basisOf(reset)).toBe("existing_grant");
+    expect(
+      plan.candidates.find((candidate) => candidate.userId === reset)?.existingProvenance,
+    ).toEqual([]);
+    expect(basisOf(untouched)).toBe("grant");
+    expect(plan.grants).toEqual([untouched]);
+  });
+
   test("grandfathering fails closed and rolls activation back", async () => {
     const id = "666666666666666701";
     const fcId = "9232097761132950011";
@@ -3809,38 +4047,48 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         grandfatherPlan: checksum,
         guestApplications: choice,
       });
-    // A 2.12.x import still carries its review channel: activation needs an explicit choice.
+    const channelOf = async (id: string) =>
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, id)))[0];
+    // 2.15.0 imports keep the legacy review channel with the switch off: without a choice,
+    // activation keeps applications closed and the channel stored (owner decision, 2026-09-24).
     const kept = await setup("666666666666666703", "9232097761132950012");
-    await expect(activate(kept.row.id, kept.plan.checksum)).rejects.toMatchObject({
-      code: "conflict",
+    expect(await activate(kept.row.id, kept.plan.checksum)).toMatchObject({
+      status: "activated",
+      guestApplications: "closed",
     });
-    await expectNotActivated(kept.row.id);
-    expect(await activate(kept.row.id, kept.plan.checksum, "open")).toMatchObject({
+    expect(await channelOf(kept.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: false,
+    });
+    expect(await auditsOf(kept.row.id, "config")).toEqual([]);
+    // --guest-applications open switches them on, audited as activation's config change.
+    const opened = await setup("666666666666666704", "9232097761132950013");
+    expect(await activate(opened.row.id, opened.plan.checksum, "open")).toMatchObject({
       status: "activated",
       guestApplications: "open",
+      revision: opened.row.revision + 1n,
     });
-    expect(
-      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, kept.row.id)))[0]
-        ?.guest_application_channel_id,
-    ).toBe(legacyChannel);
-    expect(await auditsOf(kept.row.id, "config")).toEqual([]);
-    const closed = await setup("666666666666666704", "9232097761132950013");
+    expect(await channelOf(opened.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: true,
+    });
+    expect(await auditsOf(opened.row.id, "config")).toEqual([
+      {
+        target: "guest_applications_enabled",
+        details: { value: true, source: "activation" },
+      },
+    ]);
+    // --guest-applications closed is already the imported state: nothing changes or is audited.
+    const closed = await setup("666666666666666710", "9232097761132950020");
     expect(await activate(closed.row.id, closed.plan.checksum, "closed")).toMatchObject({
       status: "activated",
       guestApplications: "closed",
-      revision: closed.row.revision + 1n,
     });
-    expect(
-      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, closed.row.id)))[0]
-        ?.guest_application_channel_id,
-    ).toBeNull();
-    expect(await auditsOf(closed.row.id, "config")).toEqual([
-      {
-        target: "guest_application_channel_id",
-        details: { value: null, source: "activation" },
-      },
-    ]);
-    // A guild imported closed (2.13.0) needs no flag; the first scenario above activates one.
+    expect(await channelOf(closed.row.id)).toMatchObject({
+      guest_application_channel_id: legacyChannel,
+      guest_applications_enabled: false,
+    });
+    expect(await auditsOf(closed.row.id, "config")).toEqual([]);
   });
 
   test("pending departures block grandfathering until a confirming roster settles them", async () => {
@@ -4690,6 +4938,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       leader_role_id: "98104",
       ledger_channel_id: "98201",
       guest_application_channel_id: "98202",
+      guest_applications_enabled: true,
     });
     await db.orm.insert(t.ledgerAccounts).values({ guild_id: guildId, fc_id: fcId });
     return { ...actor, guildId, serverManager: true };
@@ -4785,6 +5034,61 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       code: "not_found",
       detail: { kind: "resource", resource: "link", id: "77989999" },
     });
+    // A request that matches what is saved changes nothing and queues no reconciliation: naming
+    // the current main, or turning sync on or off when it already is (owner decision, 2026-09-24).
+    const reconcileWork = async () =>
+      (
+        await db.query<{ rows: string; generations: string }>(
+          "SELECT count(*)::text AS rows, coalesce(sum(generation),0)::text AS generations FROM jobs WHERE dedupe_key=$1",
+          [`user:${guildId}:${self.userId}`],
+        )
+      )[0];
+    const before = await reconcileWork();
+    expect(await service.preferences(self, "77980002", null)).toEqual({
+      status: "unchanged",
+      effects: "unchanged",
+      effectsMode: "live",
+      primary: { id: "77980002", name: "Assigned Character", world: "Diabolos" },
+      nickname: { enabled: true, suspended: false },
+    });
+    expect(await service.preferences(self, null, true)).toMatchObject({
+      status: "unchanged",
+      nickname: { enabled: true, suspended: false },
+    });
+    expect(await reconcileWork()).toEqual(before);
+    expect(await service.preferences(self, null, false)).toMatchObject({
+      status: "saved",
+      effects: "queued",
+      nickname: { enabled: false },
+    });
+    expect(await service.preferences(self, null, false)).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      nickname: { enabled: false },
+    });
+    // /main with sync off (just turned off above) keeps the restore that queued; with sync on it
+    // replaces it.
+    expect(await service.preferences(self, "77980001", null)).toMatchObject({ status: "saved" });
+    const restorePending = async () =>
+      (
+        await db.query<{ nickname_restore: boolean }>(
+          "SELECT nickname_restore FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guildId, self.userId],
+        )
+      )[0]?.nickname_restore;
+    expect(await restorePending()).toBe(true);
+    expect(await service.preferences(self, "77980002", null)).toMatchObject({ status: "saved" });
+    expect(await service.preferences(self, null, true)).toMatchObject({ status: "saved" });
+    expect(await restorePending()).toBe(false);
+    // Resuming sync that a manual nickname suspended is a change, not a repeat.
+    await db.query(
+      "UPDATE guild_users SET nickname_enabled=true, nickname_suspended=true WHERE guild_id=$1 AND user_id=$2",
+      [guildId, self.userId],
+    );
+    expect(await service.preferences(self, null, true)).toMatchObject({
+      status: "saved",
+      nickname: { enabled: true, suspended: false },
+    });
     // Turning nickname sync off for someone TaruBot never tracked is a no-op, not a refusal.
     const untracked = { ...self, userId: "98010" };
     expect(await service.preferences(untracked, null, false)).toEqual({
@@ -4794,10 +5098,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       primary: null,
       nickname: { enabled: false, suspended: false },
     });
-    await expect(service.preferences(untracked, null, true)).rejects.toMatchObject({
+    // No option detail, so the card shows no Example repeating /nickname enabled:true.
+    const withoutMain = await service.preferences(untracked, null, true).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(withoutMain).toMatchObject({
       code: "input",
-      detail: { kind: "option", option: "enabled" },
+      message: "Choose a main character with /main before turning on nicknames.",
     });
+    expect(withoutMain instanceof Failure ? withoutMain.detail : "missing").toBeUndefined();
     // Unlinking the main character clears it; the owner keeps one active link.
     expect(await service.unclaim(self, self.userId, "77980002")).toMatchObject({
       status: "unlinked",
@@ -4816,6 +5126,44 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ["77980002", false],
     ]);
     for (const row of history.characters) expect(row.ended_at).toBeInstanceOf(Date);
+    // With no main and no active link left, a new link becomes the main again and keeps the
+    // member's sync setting (owner decision, 2026-09-24: a re-link used to leave no main). With
+    // sync on, it replaces the restore the last unlink queued, so the new nickname applies.
+    const userRow = async () =>
+      (
+        await db.query<{
+          primary_character_id: string | null;
+          nickname_enabled: boolean;
+          nickname_restore: boolean;
+        }>(
+          "SELECT primary_character_id,nickname_enabled,nickname_restore FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guildId, self.userId],
+        )
+      )[0];
+    expect(await userRow()).toMatchObject({ primary_character_id: null, nickname_restore: true });
+    expect(
+      await service.assign(manager, self.userId, character("77980004", "Relinked"), "Came back"),
+    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: true });
+    expect(await userRow()).toEqual({
+      primary_character_id: "77980004",
+      nickname_enabled: true,
+      nickname_restore: false,
+    });
+    // With sync off, a re-link still becomes the main, but the pending restore stands.
+    await service.unclaim(manager, self.userId, "77980004", "Gone again");
+    expect(await service.preferences(self, null, false)).toMatchObject({ status: "saved" });
+    expect(
+      await service.assign(manager, self.userId, character("77980006", "Relinked Again"), "Back"),
+    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: false });
+    expect(await userRow()).toEqual({
+      primary_character_id: "77980006",
+      nickname_enabled: false,
+      nickname_restore: true,
+    });
+    // A second link while the main is set leaves it alone.
+    expect(
+      await service.assign(manager, self.userId, character("77980005", "Second"), "Alt"),
+    ).toMatchObject({ status: "assigned", primary: false, firstLink: false });
   });
 
   test("claim limits carry retry timing and which limit refused", async () => {
@@ -4899,7 +5247,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       "40",
       "Recount after chest audit",
       randomUUID(),
-      fifth.id,
+      { id: fifth.id },
     );
     expect(corrected).toMatchObject({
       status: "recorded",
@@ -4920,7 +5268,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await service.ledger(officer, "adjust", "40", "Same balance", randomUUID()),
     ).toMatchObject({ status: "unchanged", balance: 40n, fc: company, channelId: "98201" });
     await expect(
-      service.ledger(officer, "adjust", "41", "Bad target", randomUUID(), randomUUID()),
+      service.ledger(officer, "adjust", "41", "Bad target", randomUUID(), { id: randomUUID() }),
     ).rejects.toMatchObject({ code: "not_found", detail: { kind: "resource", resource: "entry" } });
     await expect(
       service.ledger(officer, "withdraw", 50, "Too much", randomUUID()),
@@ -5037,6 +5385,125 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         true,
       ),
     ).rejects.toMatchObject({ code: "forbidden", detail: { kind: "scope", scope: "officer" } });
+    // The entry number history shows names the same entry in the current account (owner
+    // decision, 2026-09-24); it runs last because it appends entry #44.
+    expect(
+      await service.ledger(officer, "adjust", "39", "By number", randomUUID(), { sequence: 5n }),
+    ).toMatchObject({
+      status: "recorded",
+      correction: { id: fifth.id, sequence: 5n },
+      entry: { sequence: 44n, balance: 39n, correction_id: fifth.id },
+    });
+    await expect(
+      service.ledger(officer, "adjust", "38", "No such number", randomUUID(), { sequence: 999n }),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "entry", id: "#999" },
+    });
+  });
+
+  test("the guest-application switch and review channel change together (2026-09-24)", async () => {
+    const guildId = "888888888888888811";
+    const officer = await displayGuild(guildId, "9230000000000098021");
+    const revisionOf = async () =>
+      (await db.orm.select().from(t.guilds).where(eq(t.guilds.id, guildId)))[0]?.revision;
+    const configAudits = async () =>
+      (
+        await db.orm
+          .select({ target: t.auditEvents.target, details: t.auditEvents.details })
+          .from(t.auditEvents)
+          .where(and(eq(t.auditEvents.guild_id, guildId), eq(t.auditEvents.action, "config")))
+          .orderBy(asc(t.auditEvents.id))
+      ).map((row) => [row.target, row.details]);
+    // Starting open with channel 98202: a repeat changes nothing, bumps no revision, audits nothing.
+    const start = await revisionOf();
+    expect(await service.configureGuestApplications(officer, { enabled: true })).toMatchObject({
+      status: "unchanged",
+      enabled: true,
+      channel: "98202",
+    });
+    expect(await revisionOf()).toBe(start);
+    // Switching off keeps the channel; the gate closes, and the audit names the switch.
+    expect(await service.configureGuestApplications(officer, { enabled: false })).toMatchObject({
+      status: "saved",
+      enabled: { previous: true, value: false },
+      channel: { previous: "98202", value: "98202" },
+    });
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    // Unsetting the channel and switching back on in one call is one revision.
+    const before = await revisionOf();
+    expect(
+      await service.configureGuestApplications(officer, { enabled: true, channel: null }),
+    ).toMatchObject({
+      status: "saved",
+      enabled: { previous: false, value: true },
+      channel: { previous: "98202", value: null },
+    });
+    expect(await revisionOf()).toBe((before ?? 0n) + 1n);
+    // On without a channel stays closed until one is set.
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    await service.configureGuestApplications(officer, { channel: "98203" });
+    expect(await service.guestApplicationsOpen(guildId)).toBe(true);
+    expect(await configAudits()).toEqual([
+      ["guest_applications_enabled", { value: false }],
+      ["guest_application_channel_id", { value: null }],
+      ["guest_applications_enabled", { value: true }],
+      ["guest_application_channel_id", { value: "98203" }],
+    ]);
+    // Switching on validates the stored channel too: an imported legacy channel may be gone.
+    // Switching off never validates, so a deleted channel can't block closing applications.
+    await service.configureGuestApplications(officer, { enabled: false, channel: "98299" });
+    const validateChannel = discord.validateChannel;
+    const checked: string[] = [];
+    discord.validateChannel = async (_guild, channel) => {
+      checked.push(channel);
+      if (channel === "98299")
+        throw new Failure("blocked", "<#98299> is unavailable.", 0, {
+          kind: "resource",
+          resource: "channel",
+          id: channel,
+        });
+    };
+    try {
+      await expect(
+        service.configureGuestApplications(officer, { enabled: true }),
+      ).rejects.toMatchObject({ code: "blocked" });
+      expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+      expect(await service.configureGuestApplications(officer, { enabled: false })).toMatchObject({
+        status: "unchanged",
+      });
+      expect(await service.configureGuestApplications(officer, { channel: null })).toMatchObject({
+        status: "saved",
+        channel: { previous: "98299", value: null },
+      });
+    } finally {
+      discord.validateChannel = validateChannel;
+    }
+    expect(checked).toEqual(["98299"]);
+    // A change to the stored channel between validation and the save is a conflict, and nothing
+    // is saved: applications never open on a channel nobody validated.
+    await service.configureGuestApplications(officer, { enabled: false, channel: "98203" });
+    discord.validateChannel = async () => {
+      await db.orm
+        .update(t.guilds)
+        .set({ guest_application_channel_id: "98204" })
+        .where(eq(t.guilds.id, guildId));
+    };
+    try {
+      await expect(
+        service.configureGuestApplications(officer, { enabled: true }),
+      ).rejects.toMatchObject({ code: "conflict" });
+    } finally {
+      discord.validateChannel = validateChannel;
+    }
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    // Only officers configure it, and configure() no longer takes the review channel.
+    await expect(
+      service.configureGuestApplications({ ...officer, officer: false }, { enabled: false }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      service.configure(officer, "guest_application_channel_id", "98202"),
+    ).rejects.toMatchObject({ code: "input" });
   });
 
   test("configuration results carry what changed, the FC identity and the role order", async () => {
@@ -5194,6 +5661,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       officerRoleId: "98103",
       effectsMode: "live",
     });
+    // The saved rank again changes nothing: no revision bump, audit or repair pass (2026-09-24).
+    const rankRevision = (await service.guild(manager)).revision;
+    const savedRank = (await service.guild(manager)).officer_rank_name;
+    expect(await service.configureOfficerRank(manager, savedRank)).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      officerRank: savedRank,
+    });
+    expect((await service.guild(manager)).revision).toBe(rankRevision);
     await expect(service.configureOfficerRank(manager, " ")).rejects.toMatchObject({
       code: "input",
       detail: { kind: "option", option: "rank" },

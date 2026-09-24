@@ -112,8 +112,15 @@ export type VerifyResult =
       readonly effects: "queued";
       readonly effectsMode: EffectsMode;
       readonly character: CharacterRef;
-      /** True when this became the member's first link, so it is their main character. */
+      /**
+       * True when this link became the member's main character: their first link, or a new link
+       * while they had no main and no other active link.
+       */
       readonly primary: boolean;
+      /** Their first link in this server, which also turned nickname sync on. */
+      readonly firstLink: boolean;
+      /** Whether nickname sync is on after linking. */
+      readonly nicknameSync: boolean;
       readonly roster: RosterEvidence;
     }
   | { readonly status: "already_verified"; readonly character: CharacterRef };
@@ -127,8 +134,15 @@ export interface AssignResult {
   readonly character: CharacterRef;
   readonly owner: string;
   readonly reason: string;
-  /** True when this became the member's first link, so it is their main character. */
+  /**
+   * True when this link became the member's main character: their first link, or a new link
+   * while they had no main and no other active link.
+   */
   readonly primary: boolean;
+  /** Their first link in this server, which also turned nickname sync on. */
+  readonly firstLink: boolean;
+  /** Whether nickname sync is on after linking. */
+  readonly nicknameSync: boolean;
   /** Whether the assigning officer may vouch for officer authority (a server manager). */
   readonly officerAuthority: boolean;
   readonly roster: RosterEvidence;
@@ -173,7 +187,10 @@ export interface CharactersResult {
   readonly characters: readonly CharacterRow[];
 }
 
-/** /main and /nickname: the saved preferences, or 'unchanged' when there was nothing to turn off. */
+/**
+ * /main and /nickname: the saved preferences, or 'unchanged' when the request matched what was
+ * already saved (the current main, or sync already on or off); an unchanged result queued nothing.
+ */
 export interface PreferencesResult {
   readonly status: "saved" | "unchanged";
   readonly effects: "queued" | "unchanged";
@@ -331,6 +348,31 @@ export type ConfigChange =
       readonly officerHolders?: OfficerHolders;
     };
 
+/**
+ * /config guest_applications: the switch and the review channel, changed together in one revision
+ * (owner decision, 2026-09-24). 'unchanged' when the request matched what was saved; it bumped no
+ * revision and queued nothing.
+ */
+export type GuestApplicationsResult =
+  | {
+      readonly status: "unchanged";
+      readonly effectsMode: EffectsMode;
+      readonly enabled: boolean;
+      readonly channel: string | null;
+      readonly guild: GuildRecord;
+    }
+  | {
+      readonly status: "saved";
+      readonly effects: "queued";
+      readonly effectsMode: EffectsMode;
+      readonly enabled: { readonly previous: boolean; readonly value: boolean };
+      readonly channel: { readonly previous: string | null; readonly value: string | null };
+      /** Blocked or paused jobs queued again by this change. */
+      readonly requeued: number;
+      /** The configuration row after the change. */
+      readonly guild: GuildRecord;
+    };
+
 /** /config fc unlink. */
 export interface FcUnlinkResult {
   readonly status: "unlinked";
@@ -341,11 +383,12 @@ export interface FcUnlinkResult {
 
 /** /config officer_rank. */
 export interface OfficerRankResult {
-  readonly status: "saved";
+  /** 'unchanged' when the rank named (or unset) is already the saved one; nothing was saved. */
+  readonly status: "saved" | "unchanged";
   readonly officerRank: string | null;
   readonly previous: string | null;
   readonly mode: "rank_and_manual_overrides" | "manual_only";
-  readonly effects: "queued";
+  readonly effects: "queued" | "unchanged";
   readonly effectsMode: EffectsMode;
   readonly fcLinked: boolean;
   readonly officerRoleId: string | null;
@@ -419,6 +462,24 @@ export interface OfficerOverrideResult {
   readonly previous: "granted" | "revoked" | null;
 }
 
+/**
+ * /officer reset (owner decision, 2026-09-24): the override removed, so the in-game rank decides
+ * again. 'unchanged' when there was none.
+ */
+export interface OfficerResetResult {
+  readonly status: "reset" | "unchanged";
+  /** 'recorded' means no Officer role is bound yet, so nothing is applied until one is. */
+  readonly effects: "queued" | "recorded" | "unchanged";
+  readonly effectsMode: EffectsMode;
+  readonly user: string;
+  readonly reason: string;
+  readonly present: boolean;
+  /** The override removed, or null when there was none. */
+  readonly previous: "granted" | "revoked" | null;
+  /** An in-game officer rank is configured, so it decides now; otherwise nobody gets officer. */
+  readonly rankConfigured: boolean;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Guests
 
@@ -477,6 +538,24 @@ export interface GuestActionResult {
   readonly restored: boolean;
   /** Pending applications a revocation cancelled. */
   readonly cancelledApplications: number;
+  readonly present: boolean;
+  readonly guestRoleConfigured: boolean;
+}
+
+/**
+ * /guest reset (owner decision, 2026-09-24): the revocation lifted and every active grant ended, so
+ * FC membership and registered characters decide Guest again. 'unchanged' when there was neither.
+ */
+export interface GuestResetResult {
+  readonly status: "reset" | "unchanged";
+  readonly effects: "queued" | "unchanged";
+  readonly effectsMode: EffectsMode;
+  readonly user: string;
+  readonly reason: string;
+  /** A revocation was lifted. */
+  readonly revocationLifted: boolean;
+  /** The provenance of each grant ended ('approved', 'manual', 'imported_guest', 'grandfathered'). */
+  readonly grantsEnded: readonly string[];
   readonly present: boolean;
   readonly guestRoleConfigured: boolean;
 }

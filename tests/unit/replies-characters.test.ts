@@ -295,6 +295,19 @@ describe("/verify", () => {
     expect(fieldOf(embed, "Nickname")).toBeUndefined();
   });
 
+  test("a re-link with no main becomes the main and keeps the sync setting (2026-09-24)", () => {
+    // PigeonMuffin in the 2.14.0 session: an officer assignment removed, then a verified re-link
+    // left one active link and no main while the reply said "Unchanged".
+    const relink = { ...R.verified, primary: true, firstLink: false };
+    const on = onlyEmbed(verifyReply({ ...relink, nicknameSync: true }, VIEWERS.member));
+    expect(fieldOf(on, "Main character")).toBe("Set as your main because you didn't have one.");
+    expect(fieldOf(on, "Nickname")).toStartWith("Changes to **Example Character**");
+    const off = onlyEmbed(verifyReply({ ...relink, nicknameSync: false }, VIEWERS.member));
+    expect(fieldOf(off, "Nickname")).toBe(
+      "Nickname sync is off. Turn it on with `/nickname enabled:true` to use this name.",
+    );
+  });
+
   test("the server owner's first link says Discord keeps their nickname, live and paused", () => {
     // The gateway always refuses the owner's nickname, so no receipt may promise that change.
     for (const effectsMode of ["live", "awaiting_activation", "deployment_disabled"] as const) {
@@ -667,7 +680,13 @@ describe("/assign", () => {
   test("a first link says it became the main; stale evidence adds ↻ WAITING", () => {
     const embed = onlyEmbed(
       assignReply(
-        { ...R.assigned, primary: true, roster: roster({ fresh: false, checkedAt: null }) },
+        {
+          ...R.assigned,
+          primary: true,
+          firstLink: true,
+          nicknameSync: true,
+          roster: roster({ fresh: false, checkedAt: null }),
+        },
         VIEWERS.manager,
       ),
     );
@@ -675,6 +694,14 @@ describe("/assign", () => {
       "It's their first link, so it's also their main, with nickname sync on.",
     );
     expect(fieldOf(embed, "Member role")).toBe("`↻ WAITING` for the first roster check");
+  });
+
+  test("a link for a member with no main says it became their main (2026-09-24)", () => {
+    const embed = onlyEmbed(assignReply({ ...R.assigned, primary: true }, VIEWERS.manager));
+    expect(fieldOf(embed, "Effects")).toContain(
+      "They had no main character, so it's now their main.",
+    );
+    expect(fieldOf(embed, "Effects")).not.toContain("first link");
   });
 
   test("an escaped 1,000-character reason is capped at 300 and renders no markup", () => {

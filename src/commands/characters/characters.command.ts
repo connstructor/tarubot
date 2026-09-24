@@ -1,6 +1,7 @@
 /** Private link inventory; inspecting another user requires officer permission. */
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
+import { completeMember } from "../../discord/autocomplete.js";
 import { command, string } from "../../discord/options.js";
 import { charactersReply } from "../../discord/presenters/characters.js";
 import { userId } from "../../discord/selectors.js";
@@ -8,7 +9,12 @@ import { authorize } from "../../domain/policy.js";
 
 export default defineCommand({
   data: command("characters", "List local characters and verification provenance").addStringOption(
-    string("member", "Discord user ID; officers may inspect another user"),
+    string(
+      "member",
+      "Officers: the member to inspect; pick a suggestion or paste a user ID",
+      false,
+      true,
+    ),
   ),
   requires: [applicationKey],
   async execute({ actor, viewer, interaction, services }) {
@@ -21,4 +27,6 @@ export default defineCommand({
       memberOption: option !== null,
     });
   },
+  // Members may read only their own links, so they are offered only themselves.
+  autocomplete: (context) => completeMember(context, !context.actor.officer),
 });

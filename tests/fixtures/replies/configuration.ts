@@ -12,17 +12,21 @@ import type {
   FcHealthRow,
   FcRef,
   FcUnlinkResult,
+  GuestApplicationsResult,
   OfficerOverrideResult,
   OfficerRankResult,
+  OfficerResetResult,
   RoleLayoutResult,
   SetupResult,
 } from "../../../src/application/results.js";
 import {
   changeReply,
   fcUnlinkReply,
+  guestApplicationsReply,
   healthReply,
   officerOverrideReply,
   officerRankReply,
+  officerResetReply,
   roleLayoutReply,
   setupReply,
   showReply,
@@ -86,6 +90,7 @@ export const configGuild = (overrides: Partial<GuildRecord> = {}): GuildRecord =
   ledger_channel_id: CHANNEL.ledger,
   officer_notifications_channel_id: CHANNEL.notices,
   guest_application_channel_id: CHANNEL.reviews,
+  guest_applications_enabled: true,
   lobby_channel_id: CHANNEL.lobby,
   officer_channel_id: CHANNEL.officers,
   access_policy_enabled: true,
@@ -175,11 +180,39 @@ export function configChange(
   };
 }
 
+/**
+ * A saved /config guest_applications result: [previous, value] for the switch and the review
+ * channel (default: the reviews channel both times), on the configured guild after the change.
+ */
+export function applications(options: {
+  readonly enabled: readonly [boolean, boolean];
+  readonly channel?: readonly [string | null, string | null];
+  readonly guild?: Partial<GuildRecord>;
+  readonly effectsMode?: EffectsMode;
+}): Extract<GuestApplicationsResult, { readonly status: "saved" }> {
+  const [previousChannel, channel] = options.channel ?? [CHANNEL.reviews, CHANNEL.reviews];
+  return {
+    status: "saved",
+    effects: "queued",
+    effectsMode: options.effectsMode ?? "live",
+    enabled: { previous: options.enabled[0], value: options.enabled[1] },
+    channel: { previous: previousChannel, value: channel },
+    requeued: 0,
+    guild: configGuild({
+      revision: 43n,
+      guest_applications_enabled: options.enabled[1],
+      guest_application_channel_id: channel,
+      ...options.guild,
+    }),
+  };
+}
+
 /** The imported, not yet activated guild of configuration#6 and #9. */
 const IMPORTED = configGuild({
   revision: 7n,
   leader_role_id: null,
-  guest_application_channel_id: null,
+  // 2.15.0 imports keep the legacy review channel with applications switched off.
+  guest_applications_enabled: false,
   lobby_channel_id: null,
   officer_channel_id: null,
   access_policy_enabled: false,
@@ -191,6 +224,7 @@ const IMPORTED = configGuild({
 /** The guild of the approved problems checklist (configuration#8). */
 const TROUBLED = configGuild({
   guest_application_channel_id: null,
+  guest_applications_enabled: false,
   lobby_channel_id: null,
   officer_channel_id: null,
   access_policy_enabled: false,
@@ -239,6 +273,19 @@ export const override = (
   reason: "Runs FC events while the officer rank is vacant.",
   present: true,
   previous: null,
+  ...overrides,
+});
+
+/** An /officer reset result: a grant removed with the rank configured, unless overridden. */
+export const officerReset = (overrides: Partial<OfficerResetResult> = {}): OfficerResetResult => ({
+  status: "reset",
+  effects: "queued",
+  effectsMode: "live",
+  user: OVERRIDE_USER,
+  reason: "Back to the in-game rank now the vacancy is filled.",
+  present: true,
+  previous: "granted",
+  rankConfigured: true,
   ...overrides,
 });
 
@@ -538,7 +585,7 @@ export const CONFIG_CASES = {
     spec: "configuration#20",
     audience: "manager",
     tone: "success",
-    title: "Officer role cleared",
+    title: "Officer role unset",
     timestamp: true,
     render: () =>
       changeReply(
@@ -606,7 +653,7 @@ export const CONFIG_CASES = {
     spec: "configuration#24",
     audience: "officer",
     tone: "success",
-    title: "Ledger channel cleared",
+    title: "Ledger channel unset",
     timestamp: true,
     render: () =>
       changeReply(
@@ -641,44 +688,120 @@ export const CONFIG_CASES = {
         { now },
       ),
   },
-  "channel.applications_open": {
+  // /config guest_applications (owner decision, 2026-09-24): the switch and the review channel.
+  "applications.open": {
     spec: "configuration#27",
     audience: "officer",
     tone: "success",
     title: "Guest applications open",
     timestamp: true,
     render: () =>
-      changeReply(configChange("guest_application_channel_id", CHANNEL.reviews), VIEWERS.officer, {
-        now,
-      }),
+      guestApplicationsReply(applications({ enabled: [false, true] }), VIEWERS.officer, { now }),
   },
-  "channel.applications_no_role": {
-    spec: "configuration#27",
+  "applications.review_changed": {
+    spec: null,
     audience: "officer",
-    tone: "warning",
-    title: "Review channel set; Guest role still needed",
+    tone: "success",
+    title: "Review channel changed",
     timestamp: true,
     render: () =>
-      changeReply(
-        configChange("guest_application_channel_id", CHANNEL.reviews, {
-          guild: configGuild({ guest_role_id: null }),
-        }),
+      guestApplicationsReply(
+        applications({ enabled: [true, true], channel: [CHANNEL.notices, CHANNEL.reviews] }),
         VIEWERS.officer,
         { now },
       ),
   },
-  "channel.applications_closed": {
+  "applications.no_role": {
+    spec: "configuration#27",
+    audience: "officer",
+    tone: "warning",
+    title: "Guest applications on; Guest role still needed",
+    timestamp: true,
+    render: () =>
+      guestApplicationsReply(
+        applications({ enabled: [false, true], guild: { guest_role_id: null } }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "applications.no_channel": {
+    spec: null,
+    audience: "officer",
+    tone: "warning",
+    title: "Guest applications on; review channel needed",
+    timestamp: true,
+    render: () =>
+      guestApplicationsReply(
+        applications({ enabled: [false, true], channel: [null, null] }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "applications.closed": {
     spec: "configuration#28",
     audience: "officer",
     tone: "success",
     title: "Guest applications closed",
     timestamp: true,
     render: () =>
-      changeReply(
-        configChange("guest_application_channel_id", null, {
-          previous: CHANNEL.reviews,
-          guild: configGuild({ guest_application_channel_id: null }),
-        }),
+      guestApplicationsReply(applications({ enabled: [true, false] }), VIEWERS.officer, { now }),
+  },
+  "applications.review_set": {
+    spec: null,
+    audience: "officer",
+    tone: "success",
+    title: "Review channel set",
+    timestamp: true,
+    render: () =>
+      guestApplicationsReply(
+        applications({ enabled: [false, false], channel: [null, CHANNEL.reviews] }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "applications.review_unset": {
+    spec: null,
+    audience: "officer",
+    tone: "success",
+    title: "Review channel unset",
+    timestamp: true,
+    render: () =>
+      guestApplicationsReply(
+        applications({ enabled: [false, false], channel: [CHANNEL.reviews, null] }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "applications.unchanged": {
+    spec: null,
+    audience: "officer",
+    noOp: true,
+    tone: "info",
+    title: "Guest applications already set",
+    timestamp: false,
+    render: () =>
+      guestApplicationsReply(
+        {
+          status: "unchanged",
+          effectsMode: "live",
+          enabled: true,
+          channel: CHANNEL.reviews,
+          guild: configGuild(),
+        },
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "applications.paused": {
+    spec: "errors-and-style#26",
+    audience: "officer",
+    concept: "paused_save",
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    timestamp: false,
+    render: () =>
+      guestApplicationsReply(
+        applications({ enabled: [true, false], effectsMode: "awaiting_activation" }),
         VIEWERS.officer,
         { now },
       ),
@@ -734,7 +857,7 @@ export const CONFIG_CASES = {
     spec: "configuration#31",
     audience: "manager",
     tone: "success",
-    title: "Officer rank cleared",
+    title: "Officer rank unset",
     timestamp: true,
     render: () =>
       officerRankReply(
@@ -754,6 +877,21 @@ export const CONFIG_CASES = {
       officerRankReply(rankResult({ effectsMode: "awaiting_activation" }), VIEWERS.manager, {
         now,
       }),
+  },
+  // The saved rank again is a no-op (owner decision, 2026-09-24: never imply a change).
+  "rank.unchanged": {
+    spec: null,
+    audience: "manager",
+    noOp: true,
+    tone: "info",
+    title: "Officer rank already set",
+    timestamp: false,
+    render: () =>
+      officerRankReply(
+        rankResult({ status: "unchanged", effects: "unchanged", previous: "Officer" }),
+        VIEWERS.manager,
+        { now },
+      ),
   },
   "layout.on": {
     spec: "configuration#33",
@@ -911,6 +1049,40 @@ export const CONFIG_CASES = {
     timestamp: false,
     render: () =>
       officerOverrideReply(override({ effectsMode: "deployment_disabled" }), VIEWERS.manager, {
+        now,
+      }),
+  },
+  "officer.reset": {
+    spec: null,
+    audience: "manager",
+    tone: "success",
+    title: "Officer override removed",
+    timestamp: true,
+    render: () => officerResetReply(officerReset(), VIEWERS.manager, { now }),
+  },
+  "officer.reset_unchanged": {
+    spec: null,
+    audience: "manager",
+    noOp: true,
+    tone: "info",
+    title: "No officer override to remove",
+    timestamp: false,
+    render: () =>
+      officerResetReply(
+        officerReset({ status: "unchanged", effects: "unchanged", previous: null }),
+        VIEWERS.manager,
+        { now },
+      ),
+  },
+  "officer.reset_paused": {
+    spec: "errors-and-style#26",
+    audience: "manager",
+    concept: "paused_save",
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    timestamp: false,
+    render: () =>
+      officerResetReply(officerReset({ effectsMode: "deployment_disabled" }), VIEWERS.manager, {
         now,
       }),
   },

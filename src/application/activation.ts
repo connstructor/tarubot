@@ -39,9 +39,9 @@ export interface ActivationInput {
   /** The reviewed plan file (--grandfather-plan-file), for a diff when the plan has changed. */
   reviewedPlan?: ReviewedPlan | undefined;
   /**
-   * The explicit guest-application choice. It is required at the first activation of a guild
-   * imported with a review channel still set (a 2.12.x import): `closed` clears the channel,
-   * `open` keeps it. Activation never opens applications implicitly.
+   * The explicit guest-application choice: `open` switches applications on (a review channel must
+   * be set), `closed` switches them off and keeps the channel. Without it the switch keeps its
+   * state, which is off for every import, so activation never opens applications implicitly.
    */
   guestApplications?: "open" | "closed" | undefined;
   /** Re-run the activation writes on an already-active guild (--requeue). */
@@ -118,29 +118,23 @@ export function alreadyActive(
 }
 
 /**
- * Resolve the guest-application choice; true means activation clears the review channel. A
- * pending imported guild that still has a channel (a 2.12.x import) must choose explicitly, and
- * `open` needs a configured channel. Without a choice anything else keeps its current state.
+ * Resolve the guest-application choice into the switch value activation writes, or undefined to
+ * leave the switch alone (no choice, or the choice it already has). `open` needs a configured
+ * review channel; `closed` keeps the channel. Imports store the legacy channel with the switch
+ * off (2.15.0, owner decision 2026-09-24), so a channel alone no longer forces a choice.
  */
-export function closesGuestApplications(
-  guild: Pick<GuildRecord, "guest_grandfather" | "guest_application_channel_id">,
+export function guestApplicationsChoice(
+  guild: Pick<GuildRecord, "guest_application_channel_id" | "guest_applications_enabled">,
   choice: "open" | "closed" | undefined,
-): boolean {
+): boolean | undefined {
   if (choice === "open" && !guild.guest_application_channel_id)
     throw new Failure(
       "input",
-      "No guest review channel is configured; open applications later with /config.",
+      "No guest review channel is configured; set one later with /config guest_applications channel:.",
     );
-  if (
-    choice === undefined &&
-    guild.guest_grandfather === "pending" &&
-    guild.guest_application_channel_id
-  )
-    throw new Failure(
-      "conflict",
-      "This imported guild still has a guest review channel. Choose --guest-applications closed or open.",
-    );
-  return choice === "closed" && guild.guest_application_channel_id !== null;
+  if (choice === undefined) return undefined;
+  const enabled = choice === "open";
+  return enabled === guild.guest_applications_enabled ? undefined : enabled;
 }
 
 /** Activate one guild: validate the choices, grandfather once if owed, then enable effects. */
@@ -186,7 +180,7 @@ export async function activateGuild(
       );
 
     const pending = guild.guest_grandfather === "pending";
-    const closeApplications = closesGuestApplications(guild, input.guestApplications);
+    const applications = guestApplicationsChoice(guild, input.guestApplications);
 
     await assertFreshRoster(store, guild, input.freshnessSeconds);
 
@@ -224,15 +218,15 @@ export async function activateGuild(
         active: true,
         effects_enabled: true,
         revision: sql`${t.guilds.revision}+1`,
-        ...(closeApplications ? { guest_application_channel_id: null } : {}),
+        ...(applications === undefined ? {} : { guest_applications_enabled: applications }),
       })
       .where(eq(t.guilds.id, guild.id))
       .returning();
     if (!updated) throw new Error("Missing activated guild");
-    if (closeApplications)
+    if (applications !== undefined)
       // The same config audit /config writes, attributed to activation rather than an officer.
-      await audit(client, guild.id, null, "config", "guest_application_channel_id", {
-        value: null,
+      await audit(client, guild.id, null, "config", "guest_applications_enabled", {
+        value: applications,
         source: "activation",
       });
     const result = summary(updated, plan?.checksum ?? null, granted);

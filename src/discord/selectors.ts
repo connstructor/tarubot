@@ -7,23 +7,30 @@ import type { ChatInputCommandInteraction } from "discord.js";
 import { z } from "zod";
 import type { Service } from "../application/service.js";
 import type { CharacterIdentity } from "../infrastructure/nodestone/client.js";
-import { Failure, idSchema, lodestoneId, sequenceCursor } from "../domain/values.js";
+import {
+  type EntryRef,
+  Failure,
+  idSchema,
+  lodestoneId,
+  MAX_GIL,
+  sequenceCursor,
+} from "../domain/values.js";
 
 /** Longest Lodestone search inputs the sidecar accepts (its request schema's bounds). */
 const MAX_NAME = 100;
 const MAX_WORLD = 80;
 
 /**
- * User IDs remain usable after a member leaves the server; mentions are presentation sugar. The
- * option is free text, not autocomplete, so the failure asks for an ID or mention rather than a
- * suggestion.
+ * User IDs remain usable after a member leaves the server; mentions are presentation sugar. Every
+ * member option suggests server members (their user IDs) as the officer types, and a pasted ID or
+ * mention still works, so the failure names both.
  */
 export function userId(value: string, option = "member"): string {
   const candidate = /^<@!?([0-9]+)>$/.exec(value.trim())?.[1] ?? value.trim();
   if (!idSchema.safeParse(candidate).success)
     throw new Failure(
       "input",
-      "Paste a Discord user ID or @mention, for example 123456789012345678.",
+      "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
       0,
       { kind: "option", option },
     );
@@ -37,22 +44,37 @@ const UUID_OPTIONS = {
     message:
       "That isn't a valid application ID. Pick one from the suggestions, or copy it from /guest status.",
   },
-  entry: {
-    option: "entry",
-    message: "That isn't a valid entry ID. Copy it from /ledger history.",
-  },
   run: {
     option: "run_id",
     message: "That isn't a valid run ID. Copy it from your /refresh reply.",
   },
 } as const;
 
-/** Parse an application, ledger entry or sync run UUID option. */
+/** Parse an application or sync run UUID option. */
 export function uuid(value: string, kind: keyof typeof UUID_OPTIONS): string {
   const parsed = z.uuid().safeParse(value.trim());
   const { option, message } = UUID_OPTIONS[kind];
   if (!parsed.success) throw new Failure("input", message, 0, { kind: "option", option });
   return parsed.data;
+}
+
+/**
+ * /ledger adjust's entry option: the entry number history, receipts and posts show ('5' or '#5'),
+ * or the entry's full ID. A number is digits only and an ID is a UUID, so the two forms can't be
+ * confused (owner decision, 2026-09-24: the UUID-only option read as the entry number).
+ */
+export function entryRef(value: string): EntryRef {
+  const text = value.trim();
+  const number = /^#?\s*([1-9][0-9]{0,18})$/u.exec(text)?.[1];
+  if (number !== undefined && BigInt(number) <= MAX_GIL) return { sequence: BigInt(number) };
+  const parsed = z.uuid().safeParse(text);
+  if (parsed.success) return { id: parsed.data };
+  throw new Failure(
+    "input",
+    "That isn't an entry number or ID. Use the number from /ledger history, such as 5, or the entry's full ID.",
+    0,
+    { kind: "option", option: "entry" },
+  );
 }
 
 /**

@@ -162,34 +162,79 @@ const MIXED_ROOTS: ReadonlySet<string> = new Set(["guest"]);
 
 /**
  * Example commands per command path. An input failure's option detail picks the first example
- * that uses that option, so the Example always shows the value the user got wrong.
+ * that uses that option, so the Example always shows the value the user got wrong. Every option of
+ * every command path has one ("If there's a parameter to input, it should provide an example":
+ * owner decision, 2026-09-24); failure-reply.test.ts checks this against the registered commands.
  */
-const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
+export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   "ledger deposit": ["/ledger deposit amount:10005000 note:Weekly FC chest deposit"],
   "ledger withdraw": ["/ledger withdraw amount:2500000 note:Housing materials"],
   "ledger initialize": ["/ledger initialize balance:10005000 note:Opening balance from FC chest"],
-  "ledger adjust": ["/ledger adjust balance:10005000 note:Recount after chest audit"],
-  "ledger history": ["/ledger history before:34"],
+  "ledger adjust": [
+    "/ledger adjust balance:10005000 note:Recount after chest audit",
+    "/ledger adjust balance:10005000 note:Withdrawal #42 was 2,550,000 gil entry:42",
+  ],
+  "ledger balance": ["/ledger balance fc_id:9230000000000000001"],
+  "ledger history": ["/ledger history before:34", "/ledger history fc_id:9230000000000000001"],
   claim: ["/claim character:99000001", "/claim forename:Example surname:Character world:Diabolos"],
   verify: ["/verify character:99000001"],
+  main: ["/main character:99000001"],
+  unclaim: ["/unclaim character:99000001"],
+  nickname: ["/nickname enabled:true"],
   assign: [
     "/assign member:123456789012345678 reason:Confirmed in voice chat character:99000001",
     "/assign member:123456789012345678 reason:Confirmed in voice chat forename:Example surname:Character world:Diabolos",
   ],
   unassign: ["/unassign member:123456789012345678 character:99000001 reason:Linked by mistake"],
   characters: ["/characters member:123456789012345678"],
+  "guest approve": ["/guest approve application:3f2b8c1e-5d4a-4b3c-9e2f-1a0b9c8d7e6f"],
+  "guest deny": [
+    "/guest deny application:3f2b8c1e-5d4a-4b3c-9e2f-1a0b9c8d7e6f reason:Not part of our community",
+  ],
   "guest grant": ["/guest grant member:123456789012345678 reason:Friend of the FC"],
   "guest revoke": ["/guest revoke member:123456789012345678 reason:Left the community"],
+  "guest reset": ["/guest reset member:123456789012345678 reason:Back to the automatic rules"],
   "guest status": ["/guest status member:123456789012345678"],
   "officer grant": ["/officer grant member:123456789012345678 reason:New FC officer"],
   "officer revoke": ["/officer revoke member:123456789012345678 reason:Stepped down"],
-  "config officer_rank": ["/config officer_rank rank:Officer"],
+  "officer reset": ["/officer reset member:123456789012345678 reason:Back to the in-game rank"],
+  "config officer_rank": [
+    "/config officer_rank rank:Officer",
+    "/config officer_rank unset_rank:true",
+  ],
   "config fc link": ["/config fc link fc_id:9230000000000000001"],
-  "config roles member": ["/config roles member role:@Member"],
-  "config roles guest": ["/config roles guest role:@Guest"],
-  "config roles officer": ["/config roles officer role:@Officer"],
-  "config roles leader": ["/config roles leader role:@FC Leader"],
-  setup: ["/setup fc_id:9230000000000000001", "/setup prefix:EXFC"],
+  "config fc unlink": ["/config fc unlink fc_id:9230000000000000001"],
+  "config roles member": [
+    "/config roles member role:@Member",
+    "/config roles member unset_role:true",
+  ],
+  "config roles guest": ["/config roles guest role:@Guest", "/config roles guest unset_role:true"],
+  "config roles officer": [
+    "/config roles officer role:@Officer adopt_holders:false",
+    "/config roles officer unset_role:true",
+  ],
+  "config roles leader": [
+    "/config roles leader role:@FC Leader",
+    "/config roles leader unset_role:true",
+  ],
+  "config role_layout": ["/config role_layout enabled:true"],
+  "config ledger": ["/config ledger channel:#fc-ledger", "/config ledger unset_channel:true"],
+  "config officer_notifications": [
+    "/config officer_notifications channel:#officer-chat",
+    "/config officer_notifications unset_channel:true",
+  ],
+  "config guest_applications": [
+    "/config guest_applications enabled:true channel:#officer-chat",
+    "/config guest_applications unset_channel:true",
+  ],
+  setup: [
+    "/setup fc_id:9230000000000000001",
+    "/setup prefix:EXFC",
+    "/setup officer_rank:Officer lobby:#lobby officers:#officer-chat",
+  ],
+  refresh: ["/refresh force:true"],
+  "sync status": ["/sync status run_id:9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"],
+  version: ["/version commits:10"],
 };
 
 /** The Example for an input failure's option in this scope, if the scope has one. */
@@ -453,7 +498,7 @@ const SETUP_NEXT: Readonly<
 /** What an officer runs to open guest applications, by the piece still missing. */
 const GUEST_NEXT: Readonly<Record<"guest_applications" | "guest_role", string>> = {
   guest_applications:
-    "Choose a review channel with `/config guest_applications channel:#guest-reviews`.",
+    "Turn applications on with a review channel: `/config guest_applications enabled:true channel:#guest-reviews`.",
   guest_role: "Set the Guest role with `/config roles guest role:@Guest`.",
 };
 

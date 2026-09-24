@@ -6,16 +6,18 @@
  *
  * The first activation of an imported guild writes exactly the grandfathering plan preview
  * reported: pass its checksum with --grandfather-plan, and the plan file from preview --output to
- * see only the added and removed users if the plan has changed since. A 2.12.x import that still
- * has a review channel needs an explicit --guest-applications choice. Rerunning on a live guild
- * changes nothing and skips Discord login unless --requeue is given.
+ * see only the added and removed users if the plan has changed since. --guest-applications open
+ * switches applications on (the review channel must be set and is validated); closed switches them
+ * off and keeps the channel; without it the switch keeps its state, which is off for imports
+ * (2.15.0). Rerunning on a live guild changes nothing and skips Discord login unless --requeue is
+ * given.
  */
 import { Events } from "discord.js";
 import {
   activateGuild,
   alreadyActive,
   assertFreshRoster,
-  closesGuestApplications,
+  guestApplicationsChoice,
   GrandfatherPlanMismatch,
 } from "../src/application/activation.js";
 import { pendingDepartureFailure, pendingDepartures } from "../src/application/grandfathering.js";
@@ -145,7 +147,7 @@ if (import.meta.main) {
       );
     } else {
       // Fail fast, before login and a long enumeration; activateGuild repeats these checks.
-      closesGuestApplications(guild, args.guestApplications);
+      guestApplicationsChoice(guild, args.guestApplications);
       await assertFreshRoster(db.orm, guild, config.ROSTER_INTERVAL_SECONDS);
       const pending = guild.guest_grandfather === "pending";
       if (pending) {
@@ -167,9 +169,12 @@ if (import.meta.main) {
         guild.leader_role_id,
       ])
         if (role) await gateway.validateRole(args.guildId, role);
-      // A review channel that stays closed, or is being closed now, is never validated.
-      const reviewChannel =
-        args.guestApplications === "closed" ? null : guild.guest_application_channel_id;
+      // Only a review channel that will take applications after activation is validated; a legacy
+      // channel imported with the switch off may no longer exist.
+      const opens =
+        args.guestApplications === "open" ||
+        (args.guestApplications === undefined && guild.guest_applications_enabled);
+      const reviewChannel = opens ? guild.guest_application_channel_id : null;
       for (const channel of [
         guild.ledger_channel_id,
         guild.officer_notifications_channel_id,

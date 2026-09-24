@@ -14,7 +14,7 @@ import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
 import syncCommand from "../../src/commands/synchronization/sync.command.js";
 import type { Command } from "../../src/bot/command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
-import { cursor, userId, uuid } from "../../src/discord/selectors.js";
+import { cursor, entryRef, userId, uuid } from "../../src/discord/selectors.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure, lodestoneId } from "../../src/domain/values.js";
 import { interactionFixture } from "../fixtures/interactions.js";
@@ -62,6 +62,7 @@ test("command inventory exactly matches the declared public surface", async () =
       "setup",
       "officer grant",
       "officer revoke",
+      "officer reset",
       "config ledger",
       "config officer_notifications",
       "config guest_applications",
@@ -82,6 +83,7 @@ test("command inventory exactly matches the declared public surface", async () =
       "guest deny",
       "guest grant",
       "guest revoke",
+      "guest reset",
       "guest status",
       "ledger deposit",
       "ledger withdraw",
@@ -94,6 +96,50 @@ test("command inventory exactly matches the declared public surface", async () =
       "version",
     ].sort(),
   );
+});
+
+test("every member option suggests server members (owner decision, 2026-09-24)", async () => {
+  interface Option {
+    type: number;
+    name: string;
+    autocomplete?: boolean;
+    options?: readonly Option[] | undefined;
+  }
+  const members: { path: string; autocomplete: boolean }[] = [];
+  const visit = (path: string, options: readonly Option[]): void => {
+    for (const option of options) {
+      if (
+        option.type === ApplicationCommandOptionType.Subcommand ||
+        option.type === ApplicationCommandOptionType.SubcommandGroup
+      )
+        visit(`${path} ${option.name}`, option.options ?? []);
+      else if (option.name === "member")
+        members.push({ path, autocomplete: option.autocomplete === true });
+    }
+  };
+  const commands = await loadCommands();
+  for (const command of commands.values()) {
+    const data = command.toJSON();
+    visit(data.name, (data.options ?? []) as readonly Option[]);
+    // A command with an autocomplete option must have a handler for it.
+    if (JSON.stringify(data.options ?? []).includes('"autocomplete":true'))
+      expect(typeof command.autocomplete).toBe("function");
+  }
+  expect(members.map((row) => row.path).sort()).toEqual(
+    [
+      "assign",
+      "characters",
+      "guest grant",
+      "guest reset",
+      "guest revoke",
+      "guest status",
+      "officer grant",
+      "officer reset",
+      "officer revoke",
+      "unassign",
+    ].sort(),
+  );
+  expect(members.filter((row) => !row.autocomplete)).toEqual([]);
 });
 
 test("/config role_layout and /config roles officer adopt_holders reach the service as parsed", async () => {
@@ -140,11 +186,21 @@ test("/config role_layout and /config roles officer adopt_holders reach the serv
       (sub.options ?? []).map((option) => option.name),
     ]),
   ).toEqual([
-    ["member", ["role", "clear"]],
-    ["guest", ["role", "clear"]],
-    ["officer", ["role", "clear", "adopt_holders"]],
-    ["leader", ["role", "clear"]],
+    ["member", ["role", "unset_role"]],
+    ["guest", ["role", "unset_role"]],
+    ["officer", ["role", "unset_role", "adopt_holders"]],
+    ["leader", ["role", "unset_role"]],
   ]);
+  // No /config option is named "clear" (owner decision, 2026-09-24: it sounds like erasing).
+  expect(JSON.stringify(declared)).not.toContain('"name":"clear"');
+  expect(declared.find((option) => option.name === "guest_applications")).toMatchObject({
+    type: S.Subcommand,
+    options: [
+      { type: S.Boolean, name: "enabled" },
+      { type: S.Channel, name: "channel" },
+      { type: S.Boolean, name: "unset_channel" },
+    ],
+  });
   expect(declared.find((option) => option.name === "role_layout")).toMatchObject({
     type: S.Subcommand,
     options: [{ type: S.Boolean, name: "enabled", required: true }],
@@ -244,12 +300,11 @@ test("option parsers refuse typed names, role mentions and malformed UUIDs as in
   for (const typed of ["Pazzberry", "@Pazzberry", "12 34", "<@&123456789012345678>", ""])
     expect(inputFailure(() => userId(typed, "member"))).toMatchObject({
       code: "input",
-      message: "Paste a Discord user ID or @mention, for example 123456789012345678.",
+      message: "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
       detail: { kind: "option", option: "member" },
     });
   const uuidCases = [
     ["application", "application", "Pick one from the suggestions"],
-    ["entry", "entry", "Copy it from /ledger history"],
     ["run", "run_id", "Copy it from your /refresh reply"],
   ] as const;
   for (const [kind, option, hint] of uuidCases) {
@@ -257,9 +312,21 @@ test("option parsers refuse typed names, role mentions and malformed UUIDs as in
     expect(failure).toMatchObject({ code: "input", detail: { kind: "option", option } });
     expect(failure.message).toContain(hint);
   }
-  expect(uuid(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ", "entry")).toBe(
+  expect(uuid(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ", "run")).toBe(
     "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98",
   );
+  // /ledger adjust's entry is the number history shows, with or without '#', or the entry ID.
+  expect(entryRef("5")).toEqual({ sequence: 5n });
+  expect(entryRef(" #42 ")).toEqual({ sequence: 42n });
+  expect(entryRef("# 7")).toEqual({ sequence: 7n });
+  expect(entryRef(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ")).toEqual({
+    id: "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98",
+  });
+  for (const bad of ["0", "#0", "05", "-5", "5.0", "five", "9223372036854775808", "#"]) {
+    const failure = inputFailure(() => entryRef(bad));
+    expect(failure).toMatchObject({ code: "input", detail: { kind: "option", option: "entry" } });
+    expect(failure.message).toContain("such as 5");
+  }
   expect(cursor(null)).toBeNull();
   expect(cursor("34")).toBe("34");
   expect(inputFailure(() => cursor("page 2"))).toMatchObject({
@@ -321,7 +388,7 @@ test("commands reject malformed IDs with an option detail before any service cal
     [
       ledgerCommand,
       "ledger",
-      sub("adjust", [text("balance", "5"), text("note", "n"), text("entry", "#12")]),
+      sub("adjust", [text("balance", "5"), text("note", "n"), text("entry", "12a")]),
       "entry",
     ],
     [ledgerCommand, "ledger", sub("balance", [text("fc_id", "Example FC")]), "fc_id"],

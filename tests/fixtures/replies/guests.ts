@@ -9,12 +9,14 @@ import type {
   ApplyResult,
   DecisionResult,
   GuestActionResult,
+  GuestResetResult,
   GuestStatusView,
 } from "../../../src/application/results.js";
 import {
   applicationReceivedReply,
   decisionReply,
   guestActionReply,
+  guestResetReply,
   guestStatusReply,
   type GuestReplyKind,
 } from "../../../src/discord/presenters/guests.js";
@@ -190,6 +192,20 @@ export const ACTION_RESULTS = {
     guestRoleConfigured: true,
   },
 } as const satisfies Record<string, GuestActionResult>;
+
+/** A /guest reset result: a revocation lifted and two grants ended unless overridden. */
+export const guestReset = (overrides: Partial<GuestResetResult> = {}): GuestResetResult => ({
+  status: "reset",
+  effects: "queued",
+  effectsMode: "live",
+  user: GUEST_ID,
+  reason: "Back to the automatic rules after the dispute was settled.",
+  revocationLifted: true,
+  grantsEnded: ["approved", "manual"],
+  present: true,
+  guestRoleConfigured: true,
+  ...overrides,
+});
 
 /** A decision result; overrides state only what a case varies. */
 export const decision = (overrides: Partial<DecisionResult> = {}): DecisionResult => ({
@@ -390,6 +406,45 @@ export const GUEST_CASES = {
     timestamp: false,
     render: () =>
       guestActionReply({ ...A.granted, effectsMode: "awaiting_activation" }, VIEWERS.officer, {
+        now,
+      }),
+  },
+  "reset.reset": {
+    spec: null,
+    audience: "officer",
+    tone: "success",
+    title: "Guest access reset",
+    timestamp: false,
+    render: () => guestResetReply(guestReset(), VIEWERS.officer, { now }),
+  },
+  "reset.unchanged": {
+    spec: null,
+    audience: "officer",
+    noOp: true,
+    tone: "info",
+    title: "No Guest overrides to remove",
+    timestamp: false,
+    render: () =>
+      guestResetReply(
+        guestReset({
+          status: "unchanged",
+          effects: "unchanged",
+          revocationLifted: false,
+          grantsEnded: [],
+        }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "reset.paused": {
+    spec: "errors-and-style#26",
+    audience: "officer",
+    concept: "paused_save",
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    timestamp: false,
+    render: () =>
+      guestResetReply(guestReset({ effectsMode: "deployment_disabled" }), VIEWERS.officer, {
         now,
       }),
   },

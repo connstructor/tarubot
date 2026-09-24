@@ -701,7 +701,8 @@ describe("resolved inconsistencies", () => {
       "configuration/officer.revoked",
       "configuration/channel.ledger_cleared",
       "configuration/channel.notifications_cleared",
-      "configuration/channel.applications_closed",
+      "configuration/applications.closed",
+      "configuration/applications.review_unset",
       "configuration/role.cleared",
       "configuration/rank.cleared",
       "configuration/fc.unlinked",
@@ -719,7 +720,8 @@ describe("resolved inconsistencies", () => {
       "configuration/role.leader_no_fc",
       "configuration/role.officer_no_rank",
       "configuration/channel.ledger_no_fc",
-      "configuration/channel.applications_no_role",
+      "configuration/applications.no_role",
+      "configuration/applications.no_channel",
       "configuration/rank.heads_up",
       "guests/grant.no_role",
     ])
@@ -782,12 +784,14 @@ describe("resolved inconsistencies", () => {
     for (const reply of casesMatching(/^sync\/refresh\./u)) expect(reply.tone).toBe("pending");
   });
 
-  test("22. free-text member options ask for an ID or mention, not a suggestion", () => {
+  test("22. member options suggest members and still take an ID or mention (2026-09-24)", () => {
+    // The owner's decision replaced the free-text wording: every member option autocompletes.
     const error = thrown(() => userId("Pazzberry"));
     expect(error).toBeInstanceOf(Failure);
     const text = JSON.stringify(render(error, "officer", "/assign"));
-    expect(text).toContain("Paste a Discord user ID or @mention");
-    expect(text).not.toContain("suggestions");
+    expect(text).toContain(
+      "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
+    );
   });
 
   test("23. note checks name their option and are all 'Check your input'", () => {

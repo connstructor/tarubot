@@ -24,7 +24,15 @@ import type { Configuration } from "../config/env.js";
 import { authorize, authorizeRoleManager, type AccessFacts, type Actor } from "../domain/policy.js";
 import { rankAccess } from "./rank-policy.js";
 import { accessFacts } from "./access-facts.js";
-import { Failure, gil, MAX_GIL, note, normalized, sequenceCursor } from "../domain/values.js";
+import {
+  type EntryRef,
+  Failure,
+  gil,
+  MAX_GIL,
+  note,
+  normalized,
+  sequenceCursor,
+} from "../domain/values.js";
 import {
   GUEST_APPLICATIONS_CLOSED,
   guestApplicationInput,
@@ -68,6 +76,8 @@ import type {
   EffectsMode,
   FcRef,
   FcUnlinkResult,
+  GuestApplicationsResult,
+  GuestResetResult,
   GuestActionResult,
   GuestStatusView,
   LedgerBalanceView,
@@ -88,7 +98,7 @@ const SETTINGS_CHANGED =
 
 /** Approved wording shared by the role-binding and /setup input checks. */
 const ONBOARDING_ROLES =
-  "Onboarding is on, so all four roles are required. Choose a replacement role instead of clearing it, or run /setup again.";
+  "Onboarding is on, so all four roles are required. Choose a replacement role instead of unsetting it, or run /setup again.";
 const DISTINCT_ROLES = "Member, Guest, Officer and FC Leader must be four different roles.";
 
 /**
@@ -181,8 +191,15 @@ interface TrustResult {
   readonly id: string;
   /** False when the same owner already held this link (an idempotent repeat). */
   readonly created: boolean;
-  /** The owner's first link in this guild, which therefore became their main character. */
+  /** The owner's first link in this guild, which became their main and turned nickname sync on. */
   readonly firstLink: boolean;
+  /**
+   * The link became the owner's main character: their first link, or a new link while they had no
+   * main and no other active link (owner decision, 2026-09-24). Imported users keep their state.
+   */
+  readonly becameMain: boolean;
+  /** Whether the owner's nickname sync is on after this link. */
+  readonly nicknameSync: boolean;
   /** Fresh roster evidence listed the character, so FC membership was recorded now. */
   readonly listed: boolean;
   readonly character: CharacterRef;
@@ -352,7 +369,14 @@ export class Service {
           reason: t.guestGrants.reason,
         })
         .from(t.guestGrants)
-        .where(and(eq(t.guestGrants.guild_id, actor.guildId), eq(t.guestGrants.user_id, owner)))
+        .where(
+          and(
+            eq(t.guestGrants.guild_id, actor.guildId),
+            eq(t.guestGrants.user_id, owner),
+            // A grant /guest reset ended no longer confers Guest; the audit keeps its history.
+            isNull(t.guestGrants.ended_at),
+          ),
+        )
         .orderBy(desc(t.guestGrants.created_at)),
       revocation: await this.db.orm
         .select({
@@ -710,8 +734,8 @@ export class Service {
       "leader_role_id",
       "ledger_channel_id",
       "officer_notifications_channel_id",
-      "guest_application_channel_id",
     ] as const;
+    // The guest review channel has its own method, which changes it with the applications switch.
     const column = fields.find((candidate) => candidate === field);
     // Unreachable from /config, whose subcommands name only allowlisted fields.
     if (!column) throw new Failure("input", "Invalid configuration field.");
@@ -720,7 +744,7 @@ export class Service {
     if (options.adoptHolders !== undefined && !bindsOfficer)
       throw new Failure(
         "input",
-        "Use adopt_holders only when choosing an Officer role, not with clear:true.",
+        "Use adopt_holders only when choosing an Officer role, not with unset_role:true.",
         0,
         { kind: "option", option: "adopt_holders" },
       );
@@ -893,6 +917,102 @@ export class Service {
     });
   }
   /**
+   * /config guest_applications: the applications switch and the review channel (owner decision,
+   * 2026-09-24: "The channel setting should be separate from whether applications are enabled").
+   * One call may change either or both, in one revision; a request matching what is saved changes
+   * nothing. A new channel is validated first; a saved change is audited per setting and queues the
+   * repair pass like every /config change. Switching off keeps waiting applications reviewable, and
+   * switching on without a channel or Guest role saves but leaves /apply closed.
+   */
+  async configureGuestApplications(
+    actor: Actor,
+    change: { readonly channel?: string | null; readonly enabled?: boolean },
+  ): Promise<GuestApplicationsResult> {
+    authorize(actor, actor.guildId, "officer");
+    // Validate the channel that will take applications once this saves: a newly named one, or the
+    // stored one when this call switches them on (imports keep the legacy channel unvalidated).
+    // Switching off or unsetting never validates, so a deleted channel can't block closing.
+    const [before] = await this.db.orm
+      .select({
+        channel: t.guilds.guest_application_channel_id,
+        enabled: t.guilds.guest_applications_enabled,
+      })
+      .from(t.guilds)
+      .where(eq(t.guilds.id, actor.guildId));
+    const target = change.channel === undefined ? (before?.channel ?? null) : change.channel;
+    const turnsOn = (change.enabled ?? before?.enabled ?? false) && !(before?.enabled ?? false);
+    const validated = change.channel ? change.channel : turnsOn ? target : null;
+    if (validated) await this.discord.validateChannel(actor.guildId, validated);
+    return this.db.transaction(async (client) => {
+      const db = orm(client);
+      // A guild first created here takes the column defaults, as configure() does.
+      await db
+        .insert(t.guilds)
+        .values({ id: actor.guildId, effects_enabled: true })
+        .onConflictDoNothing();
+      const [saved] = await db
+        .select()
+        .from(t.guilds)
+        .where(eq(t.guilds.id, actor.guildId))
+        .for("update");
+      if (!saved) throw new Error("Missing guild");
+      const channel =
+        change.channel === undefined ? saved.guest_application_channel_id : change.channel;
+      const enabled = change.enabled ?? saved.guest_applications_enabled;
+      const channelChanged = channel !== saved.guest_application_channel_id;
+      const enabledChanged = enabled !== saved.guest_applications_enabled;
+      // Under the row lock: a change that leaves applications taking a channel must use the one
+      // validated above; a concurrent change in between means trying again.
+      if (
+        enabled &&
+        channel !== null &&
+        (enabledChanged || channelChanged) &&
+        channel !== validated
+      )
+        throw new Failure("conflict", SETTINGS_CHANGED);
+      if (!channelChanged && !enabledChanged)
+        return {
+          status: "unchanged",
+          effectsMode: this.effectsMode(saved),
+          enabled,
+          channel,
+          guild: saved,
+        };
+      const [updated] = await db
+        .update(t.guilds)
+        .set({
+          guest_application_channel_id: channel,
+          guest_applications_enabled: enabled,
+          revision: sql`${t.guilds.revision}+1`,
+          active: true,
+        })
+        .where(eq(t.guilds.id, actor.guildId))
+        .returning();
+      if (!updated) throw new Error("Missing guild");
+      if (channelChanged)
+        await audit(client, actor.guildId, actor.userId, "config", "guest_application_channel_id", {
+          value: channel,
+        });
+      if (enabledChanged)
+        await audit(client, actor.guildId, actor.userId, "config", "guest_applications_enabled", {
+          value: enabled,
+        });
+      if (channelChanged && saved.access_policy_enabled)
+        await secureGuildChannels(client, actor.guildId);
+      await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
+      const requeued = await requeueParked(client, [actor.guildId], ["blocked", "disabled"]);
+      return {
+        status: "saved",
+        effects: "queued",
+        effectsMode: this.effectsMode(updated),
+        enabled: { previous: saved.guest_applications_enabled, value: enabled },
+        channel: { previous: saved.guest_application_channel_id, value: channel },
+        requeued: requeued.length,
+        guild: updated,
+      };
+    });
+  }
+  /**
    * Selecting an automatic authority source is reserved for actual server role managers. The
    * result says whether an FC and Officer role exist yet, because a rank alone grants nothing
    * until both do.
@@ -909,6 +1029,21 @@ export class Service {
         .where(eq(t.guilds.id, actor.guildId))
         .for("update");
       if (!saved) throw new Error("Missing guild");
+      const common = {
+        officerRank: rank,
+        previous: saved.officer_rank_name,
+        mode: rank ? "rank_and_manual_overrides" : "manual_only",
+        effectsMode: this.effectsMode(saved),
+        fcLinked: saved.fc_id !== null,
+        officerRoleId: saved.officer_role_id,
+      } as const;
+      // The saved rank again (or unset_rank with none set) changes nothing: no revision bump, audit
+      // or repair pass, and the reply says so (owner decision, 2026-09-24).
+      if (
+        rank === saved.officer_rank_name &&
+        (rank ? normalized(rank) : null) === saved.officer_rank_key
+      )
+        return { ...common, status: "unchanged", effects: "unchanged" };
       await db
         .update(t.guilds)
         .set({
@@ -921,16 +1056,7 @@ export class Service {
         rank,
       });
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
-      return {
-        status: "saved",
-        officerRank: rank,
-        previous: saved.officer_rank_name,
-        mode: rank ? "rank_and_manual_overrides" : "manual_only",
-        effects: "queued",
-        effectsMode: this.effectsMode(saved),
-        fcLinked: saved.fc_id !== null,
-        officerRoleId: saved.officer_role_id,
-      };
+      return { ...common, status: "saved", effects: "queued" };
     });
   }
   /**
@@ -1057,31 +1183,40 @@ export class Service {
         id: linked.id,
         created: false,
         firstLink: false,
+        becameMain: false,
+        nicknameSync: false,
         listed: false,
         character: identity,
       };
     }
-    const previous =
-      (
-        await db
-          .select({ id: t.links.id })
-          .from(t.links)
-          .where(and(eq(t.links.guild_id, actor.guildId), eq(t.links.user_id, owner)))
-          .limit(1)
-      ).length > 0 ||
-      (
-        await db
-          .select({ user_id: t.guildUsers.user_id })
-          .from(t.guildUsers)
-          .where(
-            and(
-              eq(t.guildUsers.guild_id, actor.guildId),
-              eq(t.guildUsers.user_id, owner),
-              eq(t.guildUsers.imported, true),
-            ),
-          )
-          .limit(1)
-      ).length > 0;
+    // Before this insert: whether the owner ever had a link here, still has an active one, and
+    // what their guild row says. An imported user keeps the legacy state (no automatic main).
+    const [state] = await db
+      .select({
+        imported: t.guildUsers.imported,
+        primary: t.guildUsers.primary_character_id,
+        nicknameEnabled: t.guildUsers.nickname_enabled,
+      })
+      .from(t.guildUsers)
+      .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)))
+      .for("update");
+    const ownerLinks = (active: boolean) =>
+      db
+        .select({ id: t.links.id })
+        .from(t.links)
+        .where(
+          and(
+            eq(t.links.guild_id, actor.guildId),
+            eq(t.links.user_id, owner),
+            active ? eq(t.links.active, true) : undefined,
+          ),
+        )
+        .limit(1);
+    const imported = state?.imported === true;
+    const firstLink = !imported && (await ownerLinks(false)).length === 0;
+    // After removing every link, a new one becomes the main again, but sync keeps its setting.
+    const becameMain =
+      firstLink || (!imported && !state?.primary && (await ownerLinks(true)).length === 0);
     await db
       .delete(t.membership)
       .where(
@@ -1163,10 +1298,19 @@ export class Service {
         })
         .onConflictDoNothing();
     }
-    if (!previous)
+    if (becameMain)
       await db
         .update(t.guildUsers)
-        .set({ primary_character_id: character, nickname_enabled: true, nickname_suspended: false })
+        .set(
+          firstLink
+            ? { primary_character_id: character, nickname_enabled: true, nickname_suspended: false }
+            : // With sync on, the new main's nickname replaces the restore unlinking queued (as
+              // /main does); with sync off, a pending restore of the original nickname stands.
+              {
+                primary_character_id: character,
+                ...(state?.nicknameEnabled ? { nickname_restore: false } : {}),
+              },
+        )
         .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)));
     await audit(client, actor.guildId, actor.userId, "character.link", link.id, {
       character,
@@ -1178,7 +1322,9 @@ export class Service {
     return {
       id: link.id,
       created: true,
-      firstLink: !previous,
+      firstLink,
+      becameMain,
+      nicknameSync: firstLink || state?.nicknameEnabled === true,
       listed: evidence !== undefined,
       character: identity,
     };
@@ -1394,7 +1540,9 @@ export class Service {
         effects: "queued",
         effectsMode: this.effectsMode(guild),
         character: link.character,
-        primary: link.firstLink,
+        primary: link.becameMain,
+        firstLink: link.firstLink,
+        nicknameSync: link.nicknameSync,
         roster: await this.rosterEvidence(db, guild, link.listed),
       };
     });
@@ -1439,7 +1587,9 @@ export class Service {
         character: link.character,
         owner,
         reason,
-        primary: link.firstLink,
+        primary: link.becameMain,
+        firstLink: link.firstLink,
+        nicknameSync: link.nicknameSync,
         officerAuthority,
         roster: await this.rosterEvidence(orm(client), guild, link.listed),
       };
@@ -1562,7 +1712,12 @@ export class Service {
       };
     });
   }
-  /** Persist explicit primary/nickname intent and let the worker safely project or restore it. */
+  /**
+   * Persist explicit primary/nickname intent and let the worker safely project or restore it. A
+   * request that would change nothing (/main naming the current main, or turning sync on or off
+   * when it already is) saves nothing, queues no reconciliation and returns 'unchanged', so the
+   * reply never implies a change (owner decision, 2026-09-24).
+   */
   async preferences(
     actor: Actor,
     character: string | null,
@@ -1575,8 +1730,12 @@ export class Service {
         eq(t.guildUsers.guild_id, actor.guildId),
         eq(t.guildUsers.user_id, actor.userId),
       );
-      await db
-        .select({ user_id: t.guildUsers.user_id })
+      const [current] = await db
+        .select({
+          primary: t.guildUsers.primary_character_id,
+          enabled: t.guildUsers.nickname_enabled,
+          suspended: t.guildUsers.nickname_suspended,
+        })
         .from(t.guildUsers)
         .where(scope)
         .for("update");
@@ -1600,13 +1759,32 @@ export class Service {
             0,
             { kind: "resource", resource: "link", id: character },
           );
+      }
+      if (enabled === true && !current?.primary && !character)
+        // No option detail: enabled:true is a valid value, so an Example would only repeat the
+        // command that failed; the message names the /main step instead.
+        throw new Failure(
+          "input",
+          "Choose a main character with /main before turning on nicknames.",
+        );
+      // Resuming sync that a manual nickname suspended is a change; on-and-not-suspended is not.
+      const mainChanges = character !== null && current?.primary !== character;
+      const syncChanges =
+        enabled !== null &&
+        current !== undefined &&
+        (enabled ? !current.enabled || current.suspended : current.enabled);
+      if (mainChanges)
         await db
           .update(t.guildUsers)
-          .set({ primary_character_id: character, nickname_restore: false })
+          // With sync on, the new main's nickname replaces a pending restore; with sync off, a
+          // restore that /nickname enabled:false or an unlink queued still runs (as trust() does).
+          .set({
+            primary_character_id: character,
+            ...(current?.enabled ? { nickname_restore: false } : {}),
+          })
           .where(scope);
-      }
-      if (enabled !== null) {
-        const updated = await db
+      if (syncChanges)
+        await db
           .update(t.guildUsers)
           .set({
             nickname_enabled: enabled,
@@ -1614,27 +1792,9 @@ export class Service {
             nickname_restore: !enabled,
             nickname_baseline_set: enabled ? false : t.guildUsers.nickname_baseline_set,
           })
-          .where(and(scope, enabled ? isNotNull(t.guildUsers.primary_character_id) : undefined))
-          .returning({ user_id: t.guildUsers.user_id });
-        // Turning sync off for someone TaruBot has never tracked changes nothing, so it is a
-        // no-op rather than a refusal; turning it on still needs a main character first.
-        if (!updated.length && !enabled)
-          return {
-            status: "unchanged",
-            effects: "unchanged",
-            effectsMode: this.effectsMode(guild),
-            primary: null,
-            nickname: { enabled: false, suspended: false },
-          };
-        if (!updated.length)
-          throw new Failure(
-            "input",
-            "Choose a main character with /main before turning on nicknames.",
-            0,
-            { kind: "option", option: "enabled" },
-          );
-      }
-      await reconcileUser(client, actor.guildId, actor.userId);
+          .where(scope);
+      const changed = mainChanges || syncChanges;
+      if (changed) await reconcileUser(client, actor.guildId, actor.userId);
       const [saved] = await db
         .select({
           enabled: t.guildUsers.nickname_enabled,
@@ -1647,8 +1807,8 @@ export class Service {
         .leftJoin(t.characters, eq(t.characters.id, t.guildUsers.primary_character_id))
         .where(scope);
       return {
-        status: "saved",
-        effects: "queued",
+        status: changed ? "saved" : "unchanged",
+        effects: changed ? "queued" : "unchanged",
         effectsMode: this.effectsMode(guild),
         primary:
           saved?.id && saved.name !== null && saved.world !== null
@@ -1722,7 +1882,7 @@ export class Service {
     input: string | number,
     noteText: string,
     key: string,
-    correction: string | null = null,
+    correction: EntryRef | null = null,
   ): Promise<LedgerReceipt> {
     const guild = await this.guild(actor);
     noteText = note(noteText);
@@ -1813,7 +1973,9 @@ export class Service {
           ...context,
           entry: duplicate,
           status: "already_recorded",
-          correction: await this.correction(db, account.id, duplicate.correction_id),
+          correction: duplicate.correction_id
+            ? await this.correction(db, account.id, { id: duplicate.correction_id })
+            : null,
           post: post ?? null,
         };
       }
@@ -1828,9 +1990,13 @@ export class Service {
       if (correction && !corrected)
         throw new Failure(
           "not_found",
-          "That entry isn't in this FC's ledger. Copy the entry ID from /ledger history.",
+          "That entry isn't in this FC's ledger. Check its number or ID in /ledger history.",
           0,
-          { kind: "resource", resource: "entry", id: correction },
+          {
+            kind: "resource",
+            resource: "entry",
+            id: "id" in correction ? correction.id : `#${correction.sequence}`,
+          },
         );
       const before = account.balance ?? 0n;
       const balance =
@@ -1868,7 +2034,7 @@ export class Service {
           guild_id: actor.guildId,
           note: noteText,
           idempotency_key: key,
-          correction_id: correction,
+          correction_id: corrected?.id ?? null,
         })
         .returning();
       if (!entry) throw new Error("Missing entry");
@@ -1898,17 +2064,26 @@ export class Service {
       };
     });
   }
-  /** The entry number of a corrected entry in the same account, or null when there is none. */
+  /**
+   * A corrected entry in the same account, named by its ID or its entry number, or null when the
+   * account has no such entry.
+   */
   private async correction(
     db: Orm,
     account: string,
-    entry: string | null,
+    entry: EntryRef,
   ): Promise<CorrectionRef | null> {
-    if (!entry) return null;
     const [row] = await db
       .select({ id: t.ledgerEntries.id, sequence: t.ledgerEntries.sequence })
       .from(t.ledgerEntries)
-      .where(and(eq(t.ledgerEntries.id, entry), eq(t.ledgerEntries.account_id, account)));
+      .where(
+        and(
+          eq(t.ledgerEntries.account_id, account),
+          "id" in entry
+            ? eq(t.ledgerEntries.id, entry.id)
+            : eq(t.ledgerEntries.sequence, entry.sequence),
+        ),
+      );
     return row ?? null;
   }
   /**
@@ -2095,14 +2270,15 @@ export class Service {
   }
   /**
    * Whether /apply may open its form in this guild: one primary-key read, fast enough for the
-   * router's pre-modal check. A guild with no active row, no review channel (imports start that
-   * way) or no Guest role is closed, by the same rule apply() enforces at submission, so a visitor
-   * is never shown a form that would then be refused. It reveals nothing beyond that and grants
-   * nothing.
+   * router's pre-modal check. A guild with no active row, applications switched off (imports start
+   * that way), no review channel or no Guest role is closed, by the same rule apply() enforces at
+   * submission, so a visitor is never shown a form that would then be refused. It reveals nothing
+   * beyond that and grants nothing.
    */
   async guestApplicationsOpen(guildId: string): Promise<boolean> {
     const [row] = await this.db.orm
       .select({
+        guest_applications_enabled: t.guilds.guest_applications_enabled,
         guest_application_channel_id: t.guilds.guest_application_channel_id,
         guest_role_id: t.guilds.guest_role_id,
       })
@@ -2120,10 +2296,10 @@ export class Service {
     if (!submitted.success)
       throw new Failure("input", "Both answers need 10–300 characters. Run /apply again.");
     const guild = await this.guild(actor);
-    // Closed without a review channel (imports start closed; owner decision 2026-09-23) or without
-    // a Guest role. Either way the visitor gets the same message as the pre-modal refusal, never
-    // officer setup text; the detail tells an officer's reply which piece is missing.
-    if (!guild.guest_application_channel_id)
+    // Closed while switched off (imports start that way; owner decisions 2026-09-23 and -24), or
+    // without a review channel or a Guest role. The visitor always gets the pre-modal refusal's
+    // message, never officer setup text; the detail tells an officer's reply which piece is missing.
+    if (!guild.guest_applications_enabled || !guild.guest_application_channel_id)
       throw new Failure("setup", GUEST_APPLICATIONS_CLOSED, 0, {
         kind: "setup",
         missing: "guest_applications",
@@ -2574,6 +2750,74 @@ export class Service {
         present: member !== null,
         guestRoleConfigured: guild.guest_role_id !== null,
       };
+    });
+  }
+  /**
+   * /guest reset (owner decision, 2026-09-24): lift the member's Guest revocation and end every
+   * active grant of any provenance (approved, manual, imported, grandfathered), so FC membership
+   * and registered characters decide Guest again. Ended grants stay as history and never confer
+   * Guest; grandfathering still counts them, so grants a reset ended before activation are not
+   * replaced by a grandfathered grant.
+   * With nothing to remove it changes nothing and audits nothing.
+   */
+  async guestReset(actor: Actor, user: string, reason: string): Promise<GuestResetResult> {
+    authorizeGuestDecision(actor);
+    const guild = await this.guild(actor);
+    reason = note(reason, "reason");
+    const member = await this.discord.member(actor.guildId, user);
+    if (member?.bot)
+      throw new Failure("input", "Guest access is for human members, not bots.", 0, {
+        kind: "option",
+        option: "member",
+      });
+    return this.db.transaction(async (client) => {
+      await ensureUser(client, actor.guildId, user);
+      const db = orm(client);
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, user)))
+        .for("update");
+      const [state] = await db
+        .select({ revoked: t.guestState.revoked })
+        .from(t.guestState)
+        .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)))
+        .for("update");
+      const ended = await db
+        .update(t.guestGrants)
+        .set({ ended_at: sql`now()`, ended_by: actor.userId, ended_reason: reason })
+        .where(
+          and(
+            eq(t.guestGrants.guild_id, actor.guildId),
+            eq(t.guestGrants.user_id, user),
+            isNull(t.guestGrants.ended_at),
+          ),
+        )
+        .returning({ provenance: t.guestGrants.provenance });
+      const revocationLifted = state?.revoked === true;
+      const common = {
+        effectsMode: this.effectsMode(guild),
+        user,
+        reason,
+        revocationLifted,
+        grantsEnded: ended.map((row) => row.provenance).sort(),
+        present: member !== null,
+        guestRoleConfigured: guild.guest_role_id !== null,
+      } as const;
+      if (!revocationLifted && !ended.length)
+        return { ...common, status: "unchanged", effects: "unchanged" };
+      if (revocationLifted)
+        await db
+          .update(t.guestState)
+          .set({ revoked: false, actor_id: actor.userId, reason, changed_at: sql`now()` })
+          .where(and(eq(t.guestState.guild_id, actor.guildId), eq(t.guestState.user_id, user)));
+      await audit(client, actor.guildId, actor.userId, "guest.reset", user, {
+        reason,
+        revocationLifted,
+        grantsEnded: common.grantsEnded,
+      });
+      await reconcileUser(client, actor.guildId, user);
+      return { ...common, status: "reset", effects: "queued" };
     });
   }
 }
