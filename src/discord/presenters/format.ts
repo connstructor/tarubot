@@ -288,6 +288,18 @@ export function characterName(
 const companyName = (fc: Pick<FcRef, "id" | "name">): string => fc.name.trim() || `FC ${fc.id}`;
 
 /**
+ * An FC tag without its guillemets, or null when there is none. The Lodestone shows a tag as
+ * «Souls», and Nodestone and the stored row keep that form, while fixtures and older rows may hold
+ * the bare tag. Every presenter adds its own «…», so one surrounding pair is removed first; without
+ * this, a stored tag rendered as ««Souls»» (2.14.0 reply session, D1).
+ */
+export function fcTagText(tag: string): string | null {
+  const trimmed = tag.trim();
+  const bare = /^«(.*)»$/su.exec(trimmed)?.[1]?.trim() ?? trimmed;
+  return bare || null;
+}
+
+/**
  * An FC with its tag and world, 'Example Company «EXMPL» · Diabolos', where an approved card
  * shows the tag (footers, the linked-FC field). Titles use fcTitleName().
  */
@@ -295,7 +307,8 @@ export function fcName(
   fc: Pick<FcRef, "id" | "name" | "tag" | "world">,
   where: TextContext = "text",
 ): string {
-  const named = fc.tag ? `${companyName(fc)} «${fc.tag}»` : companyName(fc);
+  const tag = fcTagText(fc.tag);
+  const named = tag ? `${companyName(fc)} «${tag}»` : companyName(fc);
   return forContext(title(named, fc.world), where, HOUSE_LIMITS.characterName);
 }
 

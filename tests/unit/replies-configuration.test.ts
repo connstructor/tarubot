@@ -1205,3 +1205,41 @@ describe("configuration failures render as their approved concepts", () => {
     }
   });
 });
+
+describe("stored Lodestone tags (2.14.0 reply session, D1)", () => {
+  // Nodestone stores a tag as the Lodestone shows it, «EXMPL»; DevBot's /config show and
+  // /config validate rendered ««Souls»» until presenters stripped the stored pair.
+  const stored = { ...CONFIG_FC, tag: "«EXMPL»" };
+  const tagged = configReport({ fc: fcRow({ tag: stored.tag }) });
+
+  test("show, validate, link and unlink render exactly as with a bare tag", () => {
+    const officer = { now: NOW };
+    const pairs = [
+      [showReply(R.healthy, VIEWERS.officer, officer), showReply(tagged, VIEWERS.officer, officer)],
+      [
+        healthReply(R.healthy, VIEWERS.officer, officer),
+        healthReply(tagged, VIEWERS.officer, officer),
+      ],
+      [
+        changeReply(R.linked, VIEWERS.officer, officer),
+        changeReply(
+          configChange("fc_id", CONFIG_FC.id, { company: stored }),
+          VIEWERS.officer,
+          officer,
+        ),
+      ],
+      [
+        fcUnlinkReply(R.unlinked, VIEWERS.officer, { fcId: CONFIG_FC.id, now: NOW }),
+        fcUnlinkReply(unlinked({ company: stored }), VIEWERS.officer, {
+          fcId: CONFIG_FC.id,
+          now: NOW,
+        }),
+      ],
+    ] as const;
+    for (const [bare, fromLodestone] of pairs) {
+      expect(visibleText(fromLodestone)).toBe(visibleText(bare));
+      expect(visibleText(fromLodestone)).toContain("«EXMPL»");
+      expect(visibleText(fromLodestone)).not.toMatch(/««|»»/u);
+    }
+  });
+});

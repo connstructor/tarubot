@@ -38,6 +38,7 @@ import { recheckButton, syncStatusButton } from "./controls.js";
 import {
   code,
   count,
+  fcTagText,
   fcTitleName,
   link,
   lodestone,
@@ -188,15 +189,23 @@ const rawName = (fc: Pick<FcRef, "id" | "name">): string => fc.name.trim() || `F
 /** The FC as the checklist and receipts name it: 'Example Company «EXMPL»' (no world). */
 function fcLabel(fc: Pick<FcRef, "id" | "name" | "tag">): string {
   const name = fcTitleName(fc, "text");
-  return fc.tag ? `${name} «${plain(fc.tag, 20)}»` : name;
+  const tag = fcTagText(fc.tag);
+  return tag ? `${name} «${plain(tag, 20)}»` : name;
 }
+
+/** ' «EXMPL»' after a bolded FC name, or '' when the FC has no tag. */
+const tagSuffix = (stored: string): string => {
+  const tag = fcTagText(stored);
+  return tag ? ` «${plain(tag, 20)}»` : "";
+};
 
 /**
  * The FC as a Lodestone link plus its world: '[Example Company «EXMPL»](…) · Diabolos', or with
  * ' on ' between them inside a sentence.
  */
 function fcLink(fc: FcRef, joiner: " · " | " on " = " · "): string {
-  const label = fc.tag ? `${rawName(fc)} «${fc.tag}»` : rawName(fc);
+  const tag = fcTagText(fc.tag);
+  const label = tag ? `${rawName(fc)} «${tag}»` : rawName(fc);
   const world = fc.world ? `${joiner}${plain(fc.world, HOUSE_LIMITS.characterName)}` : "";
   return `${link(label, lodestone.freeCompany(fc.id))}${world}`;
 }
@@ -621,7 +630,7 @@ export function showReply(
   const fcLine = fc
     ? [
         `**${fcTitleName(fc, "text")}**`,
-        fc.tag ? ` «${plain(fc.tag, 20)}»` : "",
+        tagSuffix(fc.tag),
         fc.world ? ` · ${plain(fc.world, HOUSE_LIMITS.characterName)}` : "",
       ].join("")
     : "No Free Company linked";
@@ -812,7 +821,7 @@ export function fcUnlinkReply(
   options: UnlinkReplyOptions,
 ): Presented {
   const name = result.company
-    ? `**${fcTitleName(result.company, "text")}**${result.company.tag ? ` «${plain(result.company.tag, 20)}»` : ""}`
+    ? `**${fcTitleName(result.company, "text")}**${tagSuffix(result.company.tag)}`
     : `FC ${code(options.fcId)}`;
   const unlinked = `${name} is no longer linked. Characters, ledger history and audit records are kept.`;
   const facts: FieldSpec[] = [

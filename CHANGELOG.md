@@ -1,6 +1,12 @@
 # Version history
 
-The current application version is **2.14.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.15.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.15.0 — Reply session fixes, member autocomplete and the guest-application switch
+
+The owner's 2.14.0 reply session on DevBot (2026-09-24) compared every reply with the approved mockups; this release ships its findings and the decisions the owner made during it. The officer alerts and telemetry planned as 2.15.0 (OPS-10/OPS-11) move to **2.16.0**, and the production cutover now requires a published release at or above 2.16.0.
+
+- Show an FC's tag once. The Lodestone delivers tags with their guillemets (`«Souls»`) and the stored row keeps them, so `/config show`, `/config validate`, `/config fc link|unlink` and the ledger receipt footers rendered `Woven Souls ««Souls»»`. One helper, `fcTagText`, removes a surrounding pair before every presenter adds its own; bare tags render as before.
 
 ## 2.14.1 — Foreground Claude reviews and sidecar test clock
 

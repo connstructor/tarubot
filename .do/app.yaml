@@ -30,7 +30,7 @@ workers:
       registry_type: GHCR
       registry: connstructor
       repository: tarubot
-      tag: &release "2.14.1"
+      tag: &release "2.15.0"
       # For private packages, add registry_credentials in your untracked deployment copy.
     run_command: bun dist/src/main.js
     instance_count: 1
