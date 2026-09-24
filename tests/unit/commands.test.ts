@@ -14,7 +14,7 @@ import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
 import syncCommand from "../../src/commands/synchronization/sync.command.js";
 import type { Command } from "../../src/bot/command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
-import { cursor, userId, uuid } from "../../src/discord/selectors.js";
+import { cursor, entryRef, userId, uuid } from "../../src/discord/selectors.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure, lodestoneId } from "../../src/domain/values.js";
 import { interactionFixture } from "../fixtures/interactions.js";
@@ -249,7 +249,6 @@ test("option parsers refuse typed names, role mentions and malformed UUIDs as in
     });
   const uuidCases = [
     ["application", "application", "Pick one from the suggestions"],
-    ["entry", "entry", "Copy it from /ledger history"],
     ["run", "run_id", "Copy it from your /refresh reply"],
   ] as const;
   for (const [kind, option, hint] of uuidCases) {
@@ -257,9 +256,21 @@ test("option parsers refuse typed names, role mentions and malformed UUIDs as in
     expect(failure).toMatchObject({ code: "input", detail: { kind: "option", option } });
     expect(failure.message).toContain(hint);
   }
-  expect(uuid(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ", "entry")).toBe(
+  expect(uuid(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ", "run")).toBe(
     "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98",
   );
+  // /ledger adjust's entry is the number history shows, with or without '#', or the entry ID.
+  expect(entryRef("5")).toEqual({ sequence: 5n });
+  expect(entryRef(" #42 ")).toEqual({ sequence: 42n });
+  expect(entryRef("# 7")).toEqual({ sequence: 7n });
+  expect(entryRef(" 3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98 ")).toEqual({
+    id: "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e4f98",
+  });
+  for (const bad of ["0", "#0", "05", "-5", "5.0", "five", "9223372036854775808", "#"]) {
+    const failure = inputFailure(() => entryRef(bad));
+    expect(failure).toMatchObject({ code: "input", detail: { kind: "option", option: "entry" } });
+    expect(failure.message).toContain("such as 5");
+  }
   expect(cursor(null)).toBeNull();
   expect(cursor("34")).toBe("34");
   expect(inputFailure(() => cursor("page 2"))).toMatchObject({
@@ -321,7 +332,7 @@ test("commands reject malformed IDs with an option detail before any service cal
     [
       ledgerCommand,
       "ledger",
-      sub("adjust", [text("balance", "5"), text("note", "n"), text("entry", "#12")]),
+      sub("adjust", [text("balance", "5"), text("note", "n"), text("entry", "12a")]),
       "entry",
     ],
     [ledgerCommand, "ledger", sub("balance", [text("fc_id", "Example FC")]), "fc_id"],

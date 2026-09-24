@@ -5,17 +5,19 @@
  * approved copy.
  */
 import { describe, expect, test } from "bun:test";
-import { RateLimitError } from "discord.js";
+import { ApplicationCommandOptionType, RateLimitError } from "discord.js";
+import { loadCommands } from "../../src/bot/discovery.js";
 import { z } from "zod";
 import type { Viewer } from "../../src/discord/presenters/audience.js";
 import {
+  EXAMPLES,
   FAILURE_CONCEPTS,
   failureConcept,
   failureReply,
   type FailureReplyOptions,
   rendersInPlace,
 } from "../../src/discord/presenters/failure.js";
-import { userId } from "../../src/discord/selectors.js";
+import { entryRef, userId, uuid } from "../../src/discord/selectors.js";
 import { FAILURE_CATEGORY, type FailureCode } from "../../src/domain/failures.js";
 import { GUEST_APPLICATIONS_CLOSED } from "../../src/domain/guest-application.js";
 import { Failure, id } from "../../src/domain/values.js";
@@ -703,5 +705,71 @@ describe("details", () => {
       { scope: "modal guest-apply" },
     );
     expect(onlyEmbed(until).fields?.[0]?.value).toBe("<t:1790169090:R> (<t:1790169090:T>)");
+  });
+});
+
+describe("every option has an Example (owner decision, 2026-09-24)", () => {
+  /** A registered option: its command path without the slash, and its name. */
+  interface OptionRow {
+    readonly path: string;
+    readonly name: string;
+  }
+  /** Walk subcommand groups and subcommands down to the options a user types or picks. */
+  const optionsOf = (
+    path: string[],
+    options: readonly { type: number; name: string; options?: unknown }[] | undefined,
+  ): OptionRow[] =>
+    (options ?? []).flatMap((option) =>
+      option.type === ApplicationCommandOptionType.Subcommand ||
+      option.type === ApplicationCommandOptionType.SubcommandGroup
+        ? optionsOf(
+            [...path, option.name],
+            option.options as readonly { type: number; name: string }[] | undefined,
+          )
+        : [{ path: path.join(" "), name: option.name }],
+    );
+
+  test("each command path's examples use every option it declares", async () => {
+    const rows = [...(await loadCommands()).values()].flatMap((command) =>
+      optionsOf([command.name], command.toJSON().options),
+    );
+    expect(rows.length).toBeGreaterThan(50);
+    const missing = rows.filter(
+      (row) => !EXAMPLES[row.path]?.some((example) => example.includes(` ${row.name}:`)),
+    );
+    expect(missing).toEqual([]);
+    // Every example names its own command path, so a copied line can't point elsewhere.
+    for (const [path, examples] of Object.entries(EXAMPLES))
+      for (const example of examples) expect(example).toStartWith(`/${path} `);
+  });
+
+  test("the reply-session input cards now carry their Example", () => {
+    // DevBot 2.14.0: a bad /ledger adjust entry and a bad /sync status run_id had none.
+    const entry = field(
+      (() => {
+        try {
+          entryRef("abc");
+        } catch (error) {
+          return error;
+        }
+      })(),
+      "Example",
+      { scope: "/ledger adjust" },
+    );
+    expect(entry).toBe(
+      "`/ledger adjust balance:10005000 note:Withdrawal #42 was 2,550,000 gil entry:42`",
+    );
+    const run = field(
+      (() => {
+        try {
+          uuid("nope", "run");
+        } catch (error) {
+          return error;
+        }
+      })(),
+      "Example",
+      { scope: "/sync status" },
+    );
+    expect(run).toBe("`/sync status run_id:9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a`");
   });
 });

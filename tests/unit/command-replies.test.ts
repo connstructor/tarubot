@@ -359,7 +359,30 @@ const PATHS: readonly {
     actor: MANAGER,
     results: { ledger: L.adjust },
     title: "Correction recorded",
-    call: ["ledger", "400", "adjust", "117900000", "Recount", INTERACTION_ID, ENTRY_IDS[42]],
+    call: [
+      "ledger",
+      "400",
+      "adjust",
+      "117900000",
+      "Recount",
+      INTERACTION_ID,
+      { id: ENTRY_IDS[42] },
+    ],
+  },
+  {
+    // The entry number history shows is accepted too, with or without '#' (owner decision).
+    command: ledgerCommand,
+    options: [
+      subcommand("adjust", [
+        text("balance", "117900000"),
+        text("note", "Recount"),
+        text("entry", " #42 "),
+      ]),
+    ],
+    actor: MANAGER,
+    results: { ledger: L.adjust },
+    title: "Correction recorded",
+    call: ["ledger", "400", "adjust", "117900000", "Recount", INTERACTION_ID, { sequence: 42n }],
   },
   {
     command: ledgerCommand,
@@ -481,7 +504,7 @@ test("malformed ledger options are input failures that name the option and skip 
     [[subcommand("history", [text("before", "0")])], "before"],
     [[subcommand("balance", [text("fc_id", "Example Free Company")])], "fc_id"],
     [
-      [subcommand("adjust", [text("balance", "1"), text("note", "Fix"), text("entry", "#42")])],
+      [subcommand("adjust", [text("balance", "1"), text("note", "Fix"), text("entry", "#abc")])],
       "entry",
     ],
   ];

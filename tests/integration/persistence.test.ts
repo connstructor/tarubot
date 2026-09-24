@@ -883,7 +883,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       (deposit.entry.balance - 2n).toString(),
       "The deposit was 5 gil",
       randomUUID(),
-      deposit.entry.id,
+      { id: deposit.entry.id },
     );
     if (correction.status !== "recorded") throw new Error("Missing correction");
     // Posts go out in entry order, so the deposit's post is delivered first.
@@ -4940,7 +4940,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       "40",
       "Recount after chest audit",
       randomUUID(),
-      fifth.id,
+      { id: fifth.id },
     );
     expect(corrected).toMatchObject({
       status: "recorded",
@@ -4961,7 +4961,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await service.ledger(officer, "adjust", "40", "Same balance", randomUUID()),
     ).toMatchObject({ status: "unchanged", balance: 40n, fc: company, channelId: "98201" });
     await expect(
-      service.ledger(officer, "adjust", "41", "Bad target", randomUUID(), randomUUID()),
+      service.ledger(officer, "adjust", "41", "Bad target", randomUUID(), { id: randomUUID() }),
     ).rejects.toMatchObject({ code: "not_found", detail: { kind: "resource", resource: "entry" } });
     await expect(
       service.ledger(officer, "withdraw", 50, "Too much", randomUUID()),
@@ -5078,6 +5078,21 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         true,
       ),
     ).rejects.toMatchObject({ code: "forbidden", detail: { kind: "scope", scope: "officer" } });
+    // The entry number history shows names the same entry in the current account (owner
+    // decision, 2026-09-24); it runs last because it appends entry #44.
+    expect(
+      await service.ledger(officer, "adjust", "39", "By number", randomUUID(), { sequence: 5n }),
+    ).toMatchObject({
+      status: "recorded",
+      correction: { id: fifth.id, sequence: 5n },
+      entry: { sequence: 44n, balance: 39n, correction_id: fifth.id },
+    });
+    await expect(
+      service.ledger(officer, "adjust", "38", "No such number", randomUUID(), { sequence: 999n }),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "entry", id: "#999" },
+    });
   });
 
   test("configuration results carry what changed, the FC identity and the role order", async () => {

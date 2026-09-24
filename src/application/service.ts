@@ -24,7 +24,15 @@ import type { Configuration } from "../config/env.js";
 import { authorize, authorizeRoleManager, type AccessFacts, type Actor } from "../domain/policy.js";
 import { rankAccess } from "./rank-policy.js";
 import { accessFacts } from "./access-facts.js";
-import { Failure, gil, MAX_GIL, note, normalized, sequenceCursor } from "../domain/values.js";
+import {
+  type EntryRef,
+  Failure,
+  gil,
+  MAX_GIL,
+  note,
+  normalized,
+  sequenceCursor,
+} from "../domain/values.js";
 import {
   GUEST_APPLICATIONS_CLOSED,
   guestApplicationInput,
@@ -1727,7 +1735,7 @@ export class Service {
     input: string | number,
     noteText: string,
     key: string,
-    correction: string | null = null,
+    correction: EntryRef | null = null,
   ): Promise<LedgerReceipt> {
     const guild = await this.guild(actor);
     noteText = note(noteText);
@@ -1818,7 +1826,9 @@ export class Service {
           ...context,
           entry: duplicate,
           status: "already_recorded",
-          correction: await this.correction(db, account.id, duplicate.correction_id),
+          correction: duplicate.correction_id
+            ? await this.correction(db, account.id, { id: duplicate.correction_id })
+            : null,
           post: post ?? null,
         };
       }
@@ -1833,9 +1843,13 @@ export class Service {
       if (correction && !corrected)
         throw new Failure(
           "not_found",
-          "That entry isn't in this FC's ledger. Copy the entry ID from /ledger history.",
+          "That entry isn't in this FC's ledger. Check its number or ID in /ledger history.",
           0,
-          { kind: "resource", resource: "entry", id: correction },
+          {
+            kind: "resource",
+            resource: "entry",
+            id: "id" in correction ? correction.id : `#${correction.sequence}`,
+          },
         );
       const before = account.balance ?? 0n;
       const balance =
@@ -1873,7 +1887,7 @@ export class Service {
           guild_id: actor.guildId,
           note: noteText,
           idempotency_key: key,
-          correction_id: correction,
+          correction_id: corrected?.id ?? null,
         })
         .returning();
       if (!entry) throw new Error("Missing entry");
@@ -1903,17 +1917,26 @@ export class Service {
       };
     });
   }
-  /** The entry number of a corrected entry in the same account, or null when there is none. */
+  /**
+   * A corrected entry in the same account, named by its ID or its entry number, or null when the
+   * account has no such entry.
+   */
   private async correction(
     db: Orm,
     account: string,
-    entry: string | null,
+    entry: EntryRef,
   ): Promise<CorrectionRef | null> {
-    if (!entry) return null;
     const [row] = await db
       .select({ id: t.ledgerEntries.id, sequence: t.ledgerEntries.sequence })
       .from(t.ledgerEntries)
-      .where(and(eq(t.ledgerEntries.id, entry), eq(t.ledgerEntries.account_id, account)));
+      .where(
+        and(
+          eq(t.ledgerEntries.account_id, account),
+          "id" in entry
+            ? eq(t.ledgerEntries.id, entry.id)
+            : eq(t.ledgerEntries.sequence, entry.sequence),
+        ),
+      );
     return row ?? null;
   }
   /**

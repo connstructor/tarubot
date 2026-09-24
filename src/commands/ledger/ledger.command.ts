@@ -7,7 +7,7 @@ import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
 import { balanceReply, historyReply, receiptReply } from "../../discord/presenters/ledger.js";
-import { cursor, uuid } from "../../discord/selectors.js";
+import { cursor, entryRef } from "../../discord/selectors.js";
 import { lodestoneId } from "../../domain/values.js";
 
 const data = command("ledger", "Exact, human-maintained FC gil ledger");
@@ -37,7 +37,11 @@ for (const name of ["initialize", "adjust"])
       )
       .addStringOption(string("balance", "Nonnegative exact decimal balance", true))
       .addStringOption(string("note", "Required explanation", true));
-    if (name === "adjust") sub.addStringOption(string("entry", "Optional corrected entry ID"));
+    // The entry number (5 or #5) or its ID, as /ledger history shows both (owner decision).
+    if (name === "adjust")
+      sub.addStringOption(
+        string("entry", "Entry this corrects: its number (e.g. 5) or ID from /ledger history"),
+      );
     return sub;
   });
 for (const name of ["balance", "history"])
@@ -85,7 +89,7 @@ export default defineCommand({
         amount,
         options.getString("note", true),
         interaction.id,
-        correction ? uuid(correction, "entry") : null,
+        correction ? entryRef(correction) : null,
       ),
       viewer,
     );
