@@ -23,7 +23,13 @@ import {
 } from "../../src/application/role-administration.js";
 import { rankAccess, desiredRankRole } from "../../src/application/rank-policy.js";
 import { Synchronization } from "../../src/application/synchronization.js";
-import type { ApplicationRecord, DiscordPort, MemberView } from "../../src/application/records.js";
+import type {
+  ApplicationRecord,
+  DirectMessage,
+  DiscordPort,
+  MemberView,
+  PostMessage,
+} from "../../src/application/records.js";
 import type { Configuration } from "../../src/config/env.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { desiredAccess } from "../../src/domain/policy.js";
@@ -38,6 +44,8 @@ import {
   layoutGuildRoles,
   Queue,
   reconcileUser,
+  requeueParked,
+  retryJob,
   STALE_WAIT_MS,
   type Job,
   type QueueEvent,
@@ -54,6 +62,7 @@ import applyCommand from "../../src/commands/guests/apply.command.js";
 import applyComponent from "../../src/components/guest-application.component.js";
 import reviewComponent from "../../src/components/guest-review.component.js";
 import { guestApplicationModal } from "../../src/discord/guest-application.js";
+import { ledgerPost } from "../../src/discord/presenters/ledger.js";
 import { GUEST_APPLICATIONS_CLOSED } from "../../src/domain/guest-application.js";
 import {
   activateGuild,
@@ -85,6 +94,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   let sendBlocked = false;
   let nicknameBlocked = false;
   let nicknameRace = false;
+  /** Posts and DMs the dispatcher handed over, so tests can check the data (not text) it passes. */
+  const sent: { guild: string; channel: string; message: PostMessage; key: string }[] = [];
+  const dms: { user: string; message: DirectMessage }[] = [];
   const discord: DiscordPort = {
     // Mutable observations and injected delivery failures model Discord races without credentials.
     async member(guild, user) {
@@ -130,14 +142,17 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       member.nickname = value;
       return true;
     },
-    async send() {
+    async send(guild, channel, message, key) {
       if (sendBlocked) throw new Failure("blocked", "Test channel delivery blocked.");
+      sent.push({ guild, channel, message, key });
       return "123456789";
     },
     async editReview(_application: ApplicationRecord) {
       return "123456789";
     },
-    async dm() {},
+    async dm(user, message) {
+      dms.push({ user, message });
+    },
   };
   class FakeNodestone extends Nodestone {
     // Explicit observation timestamps advance departure evidence without waiting a real minute.
@@ -318,6 +333,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       .from(t.guilds)
       .where(eq(t.guilds.id, guild));
     expect(launch).toEqual({ layout: false, grandfather: "pending", grandfatheredAt: null });
+    // Until activation, every queued Discord change of the imported guild is held.
+    expect((await service.validate(actor)).effectsMode).toBe("awaiting_activation");
     // Applications were imported closed (beforeAll reopens them); the audit and the stored
     // report keep the legacy review channel for a later explicit /config choice.
     const closed = {
@@ -405,8 +422,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         )
       )[0]?.count,
     ).toBe(1n);
-    await expect(service.unclaim(actor, "90003", identity.id, "Wrong owner")).rejects.toThrow(
-      "specified owner",
+    await expect(service.unclaim(actor, "90003", identity.id, "Wrong owner")).rejects.toMatchObject(
+      { code: "not_found", detail: { kind: "resource", resource: "link", id: identity.id } },
     );
   });
   test("hash-only verification survives a new service instance and concurrent completion", async () => {
@@ -574,7 +591,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         "Needs confirmed roster evidence",
         randomUUID(),
       ),
-    ).rejects.toThrow("membership");
+    ).rejects.toMatchObject({ code: "forbidden", detail: { scope: "membership" } });
     await publish(false, new Date(initial + 61000));
     expect(desiredAccess(await sync.facts(currentGuild, member))).toEqual({
       member: false,
@@ -846,6 +863,66 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         )
       )[0]?.count,
     ).toBe(1n);
+    // The dispatcher hands over the stored entry, not text, under the unchanged nonce key.
+    expect(sent.at(-1)).toMatchObject({
+      guild,
+      key: `ledger:${result.entry.id}`,
+      message: {
+        kind: "ledger",
+        view: { entry: { id: result.entry.id, operation: "deposit" }, correctionSequence: null },
+      },
+    });
+  });
+  test("a correction's post names the corrected entry by its number from one read", async () => {
+    await db.query("UPDATE jobs SET status='succeeded' WHERE kind='ledger.notify'");
+    const deposit = await service.ledger(actor, "deposit", 7, "Corrected below", randomUUID());
+    if (deposit.status !== "recorded") throw new Error("Missing deposit");
+    const correction = await service.ledger(
+      actor,
+      "adjust",
+      (deposit.entry.balance - 2n).toString(),
+      "The deposit was 5 gil",
+      randomUUID(),
+      deposit.entry.id,
+    );
+    if (correction.status !== "recorded") throw new Error("Missing correction");
+    // Posts go out in entry order, so the deposit's post is delivered first.
+    await db.query(
+      "UPDATE jobs SET status='succeeded' WHERE kind='ledger.notify' AND payload->>'entryId'=$1",
+      [deposit.entry.id],
+    );
+    const queued = (
+      await db.query<{ id: string }>(
+        "SELECT id FROM jobs WHERE kind='ledger.notify' AND payload->>'entryId'=$1",
+        [correction.entry.id],
+      )
+    )[0];
+    if (!queued) throw new Error("Missing correction notification");
+    await new Queue(db, dispatcher(service, sync, access), () => {}).perform(
+      await leased(queued.id),
+    );
+    expect(
+      (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [queued.id]))[0]
+        ?.status,
+    ).toBe("succeeded");
+    const post = sent.at(-1);
+    expect(post).toMatchObject({
+      key: `ledger:${correction.entry.id}`,
+      message: {
+        kind: "ledger",
+        view: {
+          entry: { id: correction.entry.id, operation: "adjust", delta: -2n },
+          correctionSequence: deposit.entry.sequence,
+        },
+      },
+    });
+    // The gateway renders that view as the approved correction post (ledger#32).
+    if (post?.message.kind !== "ledger") throw new Error("Expected a ledger post");
+    expect(ledgerPost(post.message.view).options.embeds[0]?.fields).toContainEqual({
+      name: "Corrects",
+      value: `#${deposit.entry.sequence}`,
+      inline: true,
+    });
   });
   test("PostgreSQL bigint maximum round-trips and overflow is rejected atomically", async () => {
     const unknown = source.companies.filter((row) => row.gil_balance === null)[1];
@@ -859,9 +936,10 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         "Exact bigint boundary",
         randomUUID(),
       );
+      // Passing the storable maximum is an input failure on the amount, not a funds refusal.
       await expect(
         service.ledger(actor, "deposit", 1, "Overflow must fail", randomUUID()),
-      ).rejects.toThrow("range");
+      ).rejects.toMatchObject({ code: "input", detail: { kind: "option", option: "amount" } });
       expect(
         (
           await db.query<{ balance: bigint }>(
@@ -906,7 +984,10 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     };
     const second = await service.guild(visitor);
     expect(await service.memberEligible(db.pool, second, owner)).toBe(false);
-    await expect(service.ledgerRead(visitor, null, null, false)).rejects.toThrow("membership");
+    await expect(service.ledgerRead(visitor, null, null, false)).rejects.toMatchObject({
+      code: "forbidden",
+      detail: { kind: "scope", scope: "membership" },
+    });
     expect(await service.characters(visitor, owner)).toEqual({ characters: [] });
     const balance = z
       .object({ account: z.object({ balance: z.bigint() }) })
@@ -921,8 +1002,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.query("UPDATE guest_applications SET message_id='112233' WHERE id=$1", [
       application.id,
     ]);
-    await expect(service.decide(actor, application.id, true, null, "445566")).rejects.toThrow(
-      "obsolete",
+    await expect(service.decide(actor, application.id, true, null, "445566")).rejects.toMatchObject(
+      { code: "stale", detail: { kind: "stale", what: "review" } },
     );
     absent.add(applicant.userId);
     await service.decide(actor, application.id, true);
@@ -1060,9 +1141,19 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     );
     try {
       await router.handle(interactions.slash());
+      // The approved closed card (guests#21): an expected state, so no Code · Ref footer.
       expect(interactions.requests.at(-1)?.body).toMatchObject({
         type: InteractionResponseType.ChannelMessageWithSource,
-        data: { content: GUEST_APPLICATIONS_CLOSED, flags: MessageFlags.Ephemeral },
+        data: {
+          content: "",
+          embeds: [
+            { title: "Guest applications are closed", description: GUEST_APPLICATIONS_CLOSED },
+          ],
+          flags: MessageFlags.Ephemeral,
+        },
+      });
+      expect(interactions.requests.at(-1)?.body).not.toMatchObject({
+        data: { embeds: [{ footer: expect.anything() }] },
       });
       // A form opened earlier, or a forged submission, is refused again at submission.
       const applicant: Actor = {
@@ -1237,24 +1328,30 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
   test("application operations enforce officer and target-owner authorization", async () => {
     const ordinary = { ...actor, officer: false, manageRoles: false };
+    // Each refusal names its rule in the scope detail; officer-only actions and another member's
+    // records are refused differently, and nothing matches on message text.
+    const officerOnly = { code: "forbidden", detail: { kind: "scope", scope: "officer" } };
+    const ownerOnly = { code: "forbidden", detail: { kind: "scope", scope: "owner" } };
     await expect(
       service.guestAction(ordinary, "90005", false, "Unauthorized", randomUUID()),
-    ).rejects.toThrow("not authorized");
+    ).rejects.toMatchObject(officerOnly);
     await expect(
       service.ledger(ordinary, "withdraw", 1, "Unauthorized", randomUUID()),
-    ).rejects.toThrow("not authorized");
-    await expect(service.unclaim(ordinary, "90005", "77777777", "Unauthorized")).rejects.toThrow(
-      "not authorized",
-    );
-    await expect(service.characters(ordinary, "90005")).rejects.toThrow("not authorized");
-    await expect(service.guestStatus(ordinary, "90005")).rejects.toThrow("not authorized");
+    ).rejects.toMatchObject(officerOnly);
     await expect(
-      service.autocomplete(ordinary, "application", ordinary.userId, ""),
-    ).rejects.toThrow("not authorized");
+      service.unclaim(ordinary, "90005", "77777777", "Unauthorized"),
+    ).rejects.toMatchObject(officerOnly);
+    await expect(service.characters(ordinary, "90005")).rejects.toMatchObject(ownerOnly);
+    await expect(service.guestStatus(ordinary, "90005")).rejects.toMatchObject(ownerOnly);
+    await expect(service.applicationChoices(ordinary)).rejects.toMatchObject(officerOnly);
   });
   test("sync status includes child delivery work and protects other requesters' runs", async () => {
     const requestor = { ...actor, userId: "90007", officer: false };
-    const requested = z.object({ runId: z.string() }).parse(await sync.refresh(requestor, false));
+    const requested = await sync.refresh(requestor, false);
+    expect(requested).toMatchObject({
+      forced: false,
+      intervalSeconds: config.ROSTER_INTERVAL_SECONDS,
+    });
     const run = (
       await db.query<{ job_id: string }>("SELECT job_id FROM sync_runs WHERE id=$1", [
         requested.runId,
@@ -1263,11 +1360,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     if (!run) throw new Error("Missing run");
     await sync.guild(guild, run.job_id);
     await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [run.job_id]);
-    const status = z
-      .object({ runs: z.array(z.object({ status: z.string(), work_total: z.number() })) })
-      .parse(await service.syncStatus(requestor, requested.runId));
+    const status = await service.syncStatus(requestor, requested.runId);
     expect(status.runs[0]?.status).toBe("queued");
     expect(status.runs[0]?.work_total).toBeGreaterThan(1);
+    // An unfinished run has no completion time; its requester is recorded.
+    expect(status.runs[0]).toMatchObject({ completed_at: null, requester_id: requestor.userId });
+    for (const row of status.work)
+      expect(Object.keys(row)).toEqual(expect.arrayContaining(["user_id", "created_at"]));
     const attachedLayout = () =>
       db.query(
         "SELECT j.id FROM jobs j JOIN sync_run_jobs r ON r.job_id=j.id WHERE r.run_id=$1 AND j.kind='roles.layout'",
@@ -1292,13 +1391,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       .parse(await service.syncStatus({ ...requestor, userId: "90008" }, requested.runId));
     expect(other.runs).toHaveLength(0);
     await db.query(
-      "UPDATE jobs SET status='succeeded' WHERE id IN (SELECT job_id FROM sync_run_jobs WHERE run_id=$1)",
+      "UPDATE jobs SET status='succeeded',completed_at=now() WHERE id IN (SELECT job_id FROM sync_run_jobs WHERE run_id=$1)",
       [requested.runId],
     );
-    const completed = z
-      .object({ runs: z.array(z.object({ status: z.string() })) })
-      .parse(await service.syncStatus(requestor, requested.runId));
+    const completed = await service.syncStatus(requestor, requested.runId);
     expect(completed.runs[0]?.status).toBe("completed");
+    // A completed run finished when its last child job did, decoded as a Date.
+    expect(completed.runs[0]?.completed_at).toBeInstanceOf(Date);
   });
   test("failed nickname writes do not invent a successful write; manual races are preserved", async () => {
     const owner = "90011";
@@ -1362,15 +1461,20 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       .object({ token: z.string(), challenge: z.string() })
       .parse(await service.claim(owner, identity));
     proof = first.token;
-    await expect(service.verify(owner, identity.id)).rejects.toThrow("not visible");
+    // A replaced token is not proof; the newest claim stays valid until it expires.
+    await expect(service.verify(owner, identity.id)).rejects.toMatchObject({
+      code: "pending_proof",
+      detail: { kind: "proof", character: { id: identity.id } },
+    });
     proof = second.token;
-    await expect(service.verify({ ...owner, userId: "90014" }, identity.id)).rejects.toThrow(
-      "unexpired challenge",
+    const noClaim = { code: "not_found", detail: { kind: "resource", resource: "challenge" } };
+    await expect(service.verify({ ...owner, userId: "90014" }, identity.id)).rejects.toMatchObject(
+      noClaim,
     );
     await db.query("UPDATE challenges SET expires_at=now()-interval '1 second' WHERE id=$1", [
       second.challenge,
     ]);
-    await expect(service.verify(owner, identity.id)).rejects.toThrow("unexpired challenge");
+    await expect(service.verify(owner, identity.id)).rejects.toMatchObject(noClaim);
     expect(
       await db.query("SELECT id FROM links WHERE guild_id=$1 AND character_id=$2 AND active", [
         guild,
@@ -1862,6 +1966,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(await app.configureRoleLayout(manager, true)).toEqual({
       status: "unchanged",
       roleLayout: "enabled",
+      effectsMode: "live",
     });
     expect(await state()).toEqual({ revision: 2n, layout: true });
     expect(await audits()).toHaveLength(1);
@@ -2057,10 +2162,17 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       app.configure(skipper, "officer_role_id", null, { adoptHolders: true }),
     ).rejects.toMatchObject({ code: "input" });
     // Default (true): every current human holder gets an audited manual officer grant.
-    expect(await app.configure(adopter, "officer_role_id", officerRole)).toEqual({
+    expect(await app.configure(adopter, "officer_role_id", officerRole)).toMatchObject({
       status: "saved",
       effects: "queued",
-      officerHolders: { adopt: true, adopted: 2 },
+      effectsMode: "live",
+      field: "officer_role_id",
+      value: officerRole,
+      previous: null,
+      rebound: false,
+      requeued: 0,
+      company: null,
+      officerHolders: { adopt: true, adopted: 2, sample: ["75101", "75102"] },
     });
     expect(enumerations).toBe(1);
     expect(await overrides(adopting)).toEqual([
@@ -2135,7 +2247,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // No role is bound, so the grant is only recorded; there is nothing to apply yet.
     expect(
       await administration.officer(manager, exception, true, "Owner-approved exception"),
-    ).toEqual({ status: "granted", effects: "recorded" });
+    ).toEqual({
+      status: "granted",
+      effects: "recorded",
+      effectsMode: "live",
+      user: exception,
+      reason: "Owner-approved exception",
+      present: true,
+      previous: null,
+    });
     const before = await service.guild(manager);
     expect(before.officer_role_id).toBeNull();
     // Without a bound role the override confers no authority (Service.enrichActor).
@@ -2189,9 +2309,14 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ).officer,
     ).toBe(true);
     // A later grant against the bound role is queued as before.
-    expect(await administration.officer(manager, holder, true, "Second exception")).toEqual({
+    expect(await administration.officer(manager, holder, true, "Second exception")).toMatchObject({
       status: "granted",
       effects: "queued",
+      effectsMode: "live",
+      user: holder,
+      reason: "Second exception",
+      present: true,
+      previous: null,
     });
   });
 
@@ -4277,8 +4402,15 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       const modalId = guestApplicationModal(interactions.slash()).toJSON().custom_id;
       // The router/service are new instances; no in-memory form session is needed after restart.
       await router.handle(interactions.submit(modalId, input));
+      // The receipt is the pending 'Application sent' card; it never echoes the answers.
       expect(interactions.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("awaiting officer review"),
+        content: "",
+        embeds: [
+          {
+            title: "Application sent",
+            description: expect.stringContaining("awaiting officer review"),
+          },
+        ],
       });
       const pending = await db.orm
         .select()
@@ -4329,9 +4461,16 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await deliver(await leased(job.id), async () => {});
       expect(review).toMatchObject({ introduction: input.introduction, interest: input.interest });
       // A visitor cannot approve their own application; the officer's fresh actor can.
-      await router.handle(interactions.button(`guest:approve:${application.id}`));
+      const refused = interactions.button(`guest:approve:${application.id}`);
+      await router.handle(refused);
       expect(interactions.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("not authorized"),
+        embeds: [
+          {
+            title: "Officers only",
+            description: "Only officers can decide guest access. Nothing was changed.",
+            footer: { text: `Code forbidden · Ref ${refused.id}` },
+          },
+        ],
       });
       interactions.member.userId = fixture.manager.userId;
       await router.handle(interactions.button(`guest:approve:${application.id}`));
@@ -4354,6 +4493,21 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         state: "approved",
         introduction: input.introduction,
         interest: input.interest,
+      });
+      // The decision DM carries the stored application and the configured reapply cooldown.
+      const [dm] = await db.orm
+        .select()
+        .from(t.jobs)
+        .where(eq(t.jobs.dedupe_key, `dm:${application.id}`));
+      if (!dm) throw new Error("Missing decision DM work");
+      await deliver(await leased(dm.id), async () => {});
+      expect(dms.at(-1)).toMatchObject({
+        user: applicant.userId,
+        message: {
+          kind: "decision",
+          application: { id: application.id, state: "approved" },
+          cooldownSeconds: config.GUEST_COOLDOWN_SECONDS,
+        },
       });
       expect(JSON.stringify(interactions.requests)).not.toContain(input.introduction);
     } finally {
@@ -4406,9 +4560,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const applicant = { ...fixture.manager, userId: "96021", officer: false, serverManager: false };
     const input = await applicationInput(applicant);
     const application = await service.apply(applicant, input);
+    // Another guild's application is simply not found here.
     await expect(
       service.decide({ ...fixture.manager, guildId: guild }, application.id, true),
-    ).rejects.toMatchObject({ code: "input" });
+    ).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "application", id: application.id },
+    });
     await service.decide(
       fixture.manager,
       application.id,
@@ -4504,6 +4662,884 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await db.query("DROP TRIGGER reject_test_guest_review ON jobs");
       await db.query("DROP FUNCTION reject_test_guest_review()");
     }
+  });
+
+  /**
+   * A configured guild of its own for the 2.14.0 display-data scenarios: a linked FC with a stored
+   * identity and a fresh roster read, four roles, ledger and review channels, and Discord effects
+   * on unless a scenario holds them.
+   */
+  async function displayGuild(guildId: string, fcId: string, effects = true): Promise<Actor> {
+    await db.orm
+      .insert(t.freeCompanies)
+      .values({
+        id: fcId,
+        name: "Display Company",
+        tag: "DISP",
+        world: "Diabolos",
+        last_successful_roster_at: new Date(),
+      })
+      .onConflictDoNothing();
+    await db.orm.insert(t.guilds).values({
+      id: guildId,
+      fc_id: fcId,
+      effects_enabled: effects,
+      member_role_id: "98101",
+      guest_role_id: "98102",
+      officer_role_id: "98103",
+      leader_role_id: "98104",
+      ledger_channel_id: "98201",
+      guest_application_channel_id: "98202",
+    });
+    await db.orm.insert(t.ledgerAccounts).values({ guild_id: guildId, fc_id: fcId });
+    return { ...actor, guildId, serverManager: true };
+  }
+  /** A Lodestone identity for scenarios that pass one straight to the service. */
+  const character = (id: string, name: string) => ({
+    id,
+    name,
+    world: "Diabolos",
+    dc: "Crystal",
+    fcId: null,
+  });
+
+  test("character results carry identity, main-character and roster evidence, and recoded failures", async () => {
+    const guildId = "888888888888888801";
+    const manager = await displayGuild(guildId, "9230000000000098001");
+    const self: Actor = { guildId, userId: "98001", officer: false, manageRoles: false };
+    const claimed = await service.claim(self, character("77980001", "Claimed Character"));
+    if (claimed.status !== "pending") throw new Error("Expected a new token");
+    proof = claimed.token;
+    // The fake profile publishes the token under its own stored name.
+    expect(await service.verify(self, "77980001")).toMatchObject({
+      status: "verified",
+      effects: "queued",
+      effectsMode: "live",
+      character: { id: "77980001", name: "Verified Character", world: "Diabolos" },
+      // The first link becomes the main character.
+      primary: true,
+      roster: { fcLinked: true, fresh: true, checkedAt: expect.any(Date), listed: false },
+    });
+    expect(await service.verify(self, "77980001")).toEqual({
+      status: "already_verified",
+      character: { id: "77980001", name: "Verified Character", world: "Diabolos" },
+    });
+    expect(await service.claim(self, character("77980001", "Verified Character"))).toEqual({
+      status: "already_linked",
+      effects: "queued",
+      effectsMode: "live",
+      character: { id: "77980001", name: "Verified Character", world: "Diabolos" },
+    });
+    const assigned = await service.assign(
+      manager,
+      self.userId,
+      character("77980002", "Assigned Character"),
+      "  Confirmed in game  ",
+    );
+    expect(assigned).toMatchObject({
+      status: "assigned",
+      owner: self.userId,
+      reason: "Confirmed in game",
+      character: { id: "77980002", name: "Assigned Character", world: "Diabolos" },
+      primary: false,
+      officerAuthority: true,
+      roster: { fresh: true },
+    });
+    // Assigning the same character to the same member again is the idempotent repeat.
+    expect(
+      await service.assign(
+        manager,
+        self.userId,
+        character("77980002", "Assigned Character"),
+        "Again",
+      ),
+    ).toMatchObject({ status: "already_assigned", link: assigned.link, primary: false });
+    // Another member's link: the detail names the character and its owner for both audiences
+    // (the reply shows the owner to officers only).
+    const conflict = {
+      code: "ownership_conflict",
+      detail: { kind: "ownership", character: { id: "77980002" }, owner: self.userId },
+    };
+    await expect(
+      service.assign(manager, "98002", character("77980002", "Assigned Character"), "Mistake"),
+    ).rejects.toMatchObject(conflict);
+    await expect(
+      service.claim({ ...self, userId: "98002" }, character("77980002", "Assigned Character")),
+    ).rejects.toMatchObject(conflict);
+    absent.add("98009");
+    await expect(
+      service.assign(manager, "98009", character("77980003", "Absent Owner"), "Departed"),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "member", id: "98009" },
+    });
+    // Preferences report the saved main character and nickname state.
+    expect(await service.preferences(self, "77980002", null)).toEqual({
+      status: "saved",
+      effects: "queued",
+      effectsMode: "live",
+      primary: { id: "77980002", name: "Assigned Character", world: "Diabolos" },
+      nickname: { enabled: true, suspended: false },
+    });
+    await expect(service.preferences(self, "77989999", null)).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "link", id: "77989999" },
+    });
+    // Turning nickname sync off for someone TaruBot never tracked is a no-op, not a refusal.
+    const untracked = { ...self, userId: "98010" };
+    expect(await service.preferences(untracked, null, false)).toEqual({
+      status: "unchanged",
+      effects: "unchanged",
+      effectsMode: "live",
+      primary: null,
+      nickname: { enabled: false, suspended: false },
+    });
+    await expect(service.preferences(untracked, null, true)).rejects.toMatchObject({
+      code: "input",
+      detail: { kind: "option", option: "enabled" },
+    });
+    // Unlinking the main character clears it; the owner keeps one active link.
+    expect(await service.unclaim(self, self.userId, "77980002")).toMatchObject({
+      status: "unlinked",
+      owner: self.userId,
+      character: { id: "77980002", name: "Assigned Character", world: "Diabolos" },
+      primaryCleared: true,
+      remainingActive: 1,
+      reason: null,
+    });
+    expect(
+      await service.unclaim(manager, self.userId, "77980001", "  Left the FC  "),
+    ).toMatchObject({ primaryCleared: false, remainingActive: 0, reason: "Left the FC" });
+    const history = await service.characters(self, self.userId);
+    expect(history.characters.map((row) => [row.character_id, row.active])).toEqual([
+      ["77980001", false],
+      ["77980002", false],
+    ]);
+    for (const row of history.characters) expect(row.ended_at).toBeInstanceOf(Date);
+  });
+
+  test("claim limits carry retry timing and which limit refused", async () => {
+    const guildId = "888888888888888802";
+    await displayGuild(guildId, "9230000000000098002");
+    const claimant: Actor = { guildId, userId: "98003", officer: false, manageRoles: false };
+    for (const index of [1, 2, 3, 4, 5])
+      await service.claim(claimant, character(`7798001${index}`, `Claim ${index}`));
+    let own: unknown;
+    try {
+      await service.claim(claimant, character("77980016", "Claim 6"));
+    } catch (error) {
+      own = error;
+    }
+    expect(own).toMatchObject({
+      code: "cooldown",
+      detail: { kind: "limit", limit: "claims_own", until: expect.any(Date) },
+    });
+    // The oldest token frees the next slot within the verification window.
+    const retry = own instanceof Failure ? own.retryAfter : 0;
+    expect(retry).toBeGreaterThan(0);
+    expect(retry).toBeLessThanOrEqual(config.VERIFICATION_SECONDS);
+    // The global cap: 1,000 unexpired tokens across the deployment refuse everyone else.
+    const users = "SELECT (9801000+g)::text AS id FROM generate_series(1,200) g";
+    await db.query(`INSERT INTO users(id) ${users} ON CONFLICT DO NOTHING`);
+    await db.query(`INSERT INTO guild_users(guild_id,user_id) SELECT $1,id FROM (${users}) u`, [
+      guildId,
+    ]);
+    try {
+      await db.query(
+        `INSERT INTO challenges(guild_id,user_id,character_id,token_hash,expires_at) SELECT $1,u.id,c.id,repeat('a',64),now()+interval '1 hour' FROM (${users}) u CROSS JOIN (SELECT id FROM characters WHERE id IN ('77980011','77980012','77980013','77980014','77980015')) c`,
+        [guildId],
+      );
+      await expect(
+        service.claim({ ...claimant, userId: "98004" }, character("77980017", "Claim 7")),
+      ).rejects.toMatchObject({
+        code: "cooldown",
+        detail: { kind: "limit", limit: "claims_all", until: expect.any(Date) },
+      });
+    } finally {
+      // Later scenarios claim too, so the synthetic tokens must not outlive this test.
+      await db.query(
+        `DELETE FROM challenges WHERE guild_id=$1 AND user_id IN (${users.replace(" AS id", "")})`,
+        [guildId],
+      );
+      await db.query(
+        `DELETE FROM guild_users WHERE guild_id=$1 AND user_id IN (${users.replace(" AS id", "")})`,
+        [guildId],
+      );
+    }
+  });
+
+  test("ledger receipts and views carry the FC, channel, corrections and exact paging", async () => {
+    const guildId = "888888888888888803";
+    const fcId = "9230000000000098003";
+    const officer = await displayGuild(guildId, fcId);
+    const company = { id: fcId, name: "Display Company", tag: "DISP", world: "Diabolos" };
+    expect(
+      await service.ledger(officer, "initialize", "0", "Opening balance", randomUUID()),
+    ).toMatchObject({
+      status: "recorded",
+      effectsMode: "live",
+      fc: company,
+      channelId: "98201",
+      correction: null,
+      entry: { sequence: 1n, balance: 0n },
+    });
+    // Entries #2–#42 are deposits of 1 gil each; #43 corrects #5.
+    const keys: string[] = [];
+    for (let index = 2; index <= 42; index++) {
+      const key = randomUUID();
+      keys.push(key);
+      await service.ledger(officer, "deposit", 1, `Deposit ${index}`, key);
+    }
+    const history = (before: string | null) => service.ledgerRead(officer, null, before, true);
+    const fifth = (await history("6")).entries[0];
+    if (fifth?.sequence !== 5n) throw new Error("Missing entry #5");
+    const corrected = await service.ledger(
+      officer,
+      "adjust",
+      "40",
+      "Recount after chest audit",
+      randomUUID(),
+      fifth.id,
+    );
+    expect(corrected).toMatchObject({
+      status: "recorded",
+      correction: { id: fifth.id, sequence: 5n },
+      entry: { sequence: 43n, balance: 40n },
+    });
+    // A replayed interaction reports the entry and its channel post's delivery state.
+    expect(await service.ledger(officer, "deposit", 1, "Deposit 2", keys[0] ?? "")).toMatchObject({
+      status: "already_recorded",
+      entry: { sequence: 2n },
+      fc: company,
+      channelId: "98201",
+      correction: null,
+      // A post not sent yet has no recorded channel.
+      post: { status: "queued", message_id: null, last_error: null, channel_id: null },
+    });
+    expect(
+      await service.ledger(officer, "adjust", "40", "Same balance", randomUUID()),
+    ).toMatchObject({ status: "unchanged", balance: 40n, fc: company, channelId: "98201" });
+    await expect(
+      service.ledger(officer, "adjust", "41", "Bad target", randomUUID(), randomUUID()),
+    ).rejects.toMatchObject({ code: "not_found", detail: { kind: "resource", resource: "entry" } });
+    await expect(
+      service.ledger(officer, "withdraw", 50, "Too much", randomUUID()),
+    ).rejects.toMatchObject({
+      code: "insufficient_funds",
+      detail: { kind: "funds", balance: 40n, amount: 50n },
+    });
+
+    const balance = await service.ledgerRead(officer, null, null, false);
+    expect(balance).toMatchObject({
+      view: "balance",
+      balanceState: "known",
+      fc: company,
+      current: true,
+      channelId: "98201",
+      effectsMode: "live",
+      latest: { sequence: 43n, operation: "adjust", event_at: expect.any(Date) },
+    });
+    expect(balance.delivery.map((row) => row.sequence)).toEqual([
+      43n,
+      42n,
+      41n,
+      40n,
+      39n,
+      38n,
+      37n,
+      36n,
+      35n,
+      34n,
+    ]);
+    for (const row of balance.delivery)
+      expect(row).toMatchObject({ attempts: 0, due_at: expect.any(Date) });
+
+    /** The page as entry numbers plus its cursors and counts. */
+    const page = async (before: string | null) => {
+      const view = await history(before);
+      return {
+        entries: view.entries.map((entry) => Number(entry.sequence)),
+        older: view.older,
+        newer: view.newer,
+        total: view.total,
+        above: view.above,
+      };
+    };
+    // The newest page: exactly ten entries and an exact older cursor.
+    expect(await page(null)).toEqual({
+      entries: [43, 42, 41, 40, 39, 38, 37, 36, 35, 34],
+      older: 34n,
+      newer: null,
+      total: 43,
+      above: 0,
+    });
+    // Page two: its posts are exactly its own entries, and the newer page is the newest one.
+    const second = await history("34");
+    expect(second.delivery.map((row) => row.entry_id).sort()).toEqual(
+      second.entries.map((entry) => entry.id).sort(),
+    );
+    expect(second).toMatchObject({ before: 34n, older: 24n, newer: "latest", above: 10 });
+    // A typed cursor that is not a multiple of ten (the approved example): nine newer entries.
+    expect(await page("35")).toEqual({
+      entries: [34, 33, 32, 31, 30, 29, 28, 27, 26, 25],
+      older: 25n,
+      newer: "latest",
+      total: 43,
+      above: 9,
+    });
+    // Deep enough that the newer page is itself a cursor: the ten entries just above #13.
+    expect(await page("14")).toMatchObject({
+      entries: [13, 12, 11, 10, 9, 8, 7, 6, 5, 4],
+      newer: 24n,
+      above: 30,
+    });
+    expect((await page("24")).entries).toEqual([23, 22, 21, 20, 19, 18, 17, 16, 15, 14]);
+    // Exactly ten left: no older cursor, so the last page is never empty.
+    expect(await page("11")).toMatchObject({
+      entries: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+      older: null,
+    });
+    // A cursor past the newest entry shows the newest page.
+    expect(await page("100")).toMatchObject({
+      entries: [43, 42, 41, 40, 39, 38, 37, 36, 35, 34],
+      newer: null,
+      above: 0,
+    });
+    // The page holding the correction maps its target's entry number.
+    expect((await history(null)).corrections).toEqual({ [fifth.id]: 5n });
+    // A malformed cursor is its own input failure, not a balance error.
+    let cursorFailure: unknown;
+    try {
+      await history("page 2");
+    } catch (error) {
+      cursorFailure = error;
+    }
+    expect(cursorFailure).toMatchObject({
+      code: "input",
+      detail: { kind: "option", option: "before" },
+    });
+    expect(cursorFailure instanceof Failure && cursorFailure.message).not.toContain("Balance");
+    // Unknown accounts, out-of-date pager controls and members reading a past FC.
+    await expect(
+      service.ledgerRead(officer, "9230000000000098999", null, true),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "account", id: "9230000000000098999" },
+    });
+    await expect(
+      service.ledgerRead(officer, "9230000000000098999", null, true, "current"),
+    ).rejects.toMatchObject({ code: "stale", detail: { kind: "stale", what: "control" } });
+    await expect(
+      service.ledgerRead(
+        { ...officer, userId: "98011", officer: false, serverManager: false },
+        "9230000000000098999",
+        null,
+        true,
+      ),
+    ).rejects.toMatchObject({ code: "forbidden", detail: { kind: "scope", scope: "officer" } });
+  });
+
+  test("configuration results carry what changed, the FC identity and the role order", async () => {
+    const guildId = "888888888888888804";
+    const fcId = "9230000000000098004";
+    const manager = await displayGuild(guildId, fcId);
+    const report = await service.validate(manager);
+    expect(report).toMatchObject({
+      effectsMode: "live",
+      guestApplicationsOpen: true,
+      fc: [
+        {
+          id: fcId,
+          name: "Display Company",
+          tag: "DISP",
+          world: "Diabolos",
+          fresh: true,
+          attemptFailed: false,
+        },
+      ],
+    });
+    // A held job is queued again by the change, and the result counts it.
+    const held = await enqueue(
+      db.pool,
+      "reconcile.user",
+      `user:${guildId}:98020`,
+      {},
+      guildId,
+      "98020",
+    );
+    await db.query(
+      "UPDATE jobs SET status='blocked', last_error='blocked: Missing Permissions' WHERE id=$1",
+      [held],
+    );
+    // Rows parked while paused can share a key with each other (a repeated refresh) or with the
+    // repair pass the change queues; the change requeues one row per key instead of violating
+    // the active-job index, and closes the rest as superseded.
+    const [repair, older, newer] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, status, last_error, created_at) VALUES
+         ('reconcile.guild', $1, '{}'::jsonb, $2, 'disabled', $4, now() - interval '3 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', $4, now() - interval '2 minutes'),
+         ('reconcile.user', $3, '{}'::jsonb, $2, 'disabled', $4, now() - interval '1 minute')
+       RETURNING id::text`,
+      [
+        `guild:${guildId}`,
+        guildId,
+        `user:${guildId}:98021`,
+        "disabled: Discord changes are off for this deployment (ENABLE_EFFECTS=false).",
+      ],
+    );
+    // Two /refresh runs made while paused: the earlier one started from the parked repair pass and
+    // tracks it and the older user row; the later one tracks the newer user row.
+    const [earlier, later] = await db.query<{ id: string }>(
+      `INSERT INTO sync_runs (guild_id, requester_id, job_id, created_at) VALUES
+         ($1, '98022', $2, now() - interval '3 minutes'),
+         ($1, '98022', $3, now() - interval '1 minute')
+       RETURNING id::text`,
+      [guildId, repair?.id, newer?.id],
+    );
+    await db.query(
+      `INSERT INTO sync_run_jobs (run_id, job_id) VALUES ($1, $2), ($1, $3), ($4, $5)`,
+      [earlier?.id, repair?.id, older?.id, later?.id, newer?.id],
+    );
+    expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
+      status: "saved",
+      field: "ledger_channel_id",
+      value: "98205",
+      previous: "98201",
+      rebound: false,
+      // The blocked row and the newest parked row of the shared key.
+      requeued: 2,
+      company: null,
+      guild: { id: guildId, ledger_channel_id: "98205" },
+    });
+    const states = new Map(
+      (
+        await db.query<{ id: string; status: string; last_error: string | null; result: unknown }>(
+          "SELECT id::text, status, last_error, result FROM jobs WHERE id = ANY($1::uuid[])",
+          [[held, repair?.id, older?.id, newer?.id]],
+        )
+      ).map((row) => [row.id, row]),
+    );
+    // Requeued work drops its stale diagnostic, so it reads `… QUEUED`, not a retry after an error.
+    for (const requeued of [held, newer?.id ?? ""])
+      expect(states.get(requeued)).toMatchObject({ status: "queued", last_error: null });
+    for (const closed of [repair, older])
+      expect(states.get(closed?.id ?? "")).toMatchObject({
+        status: "succeeded",
+        last_error: null,
+        result: { skipped: "superseded" },
+      });
+    const [current] = await db.query<{ id: string }>(
+      "SELECT id::text FROM jobs WHERE dedupe_key=$1 AND status='queued'",
+      [`guild:${guildId}`],
+    );
+    expect(current).toBeDefined();
+    // Each run now tracks the rows that carry its work (the change's own repair pass and the
+    // surviving user row), never a superseded row, so the earlier run isn't reported Completed
+    // before that work runs, and its work total is unchanged.
+    const tracked = async (run: string | undefined) =>
+      (
+        await db.query<{ job_id: string }>(
+          "SELECT job_id::text FROM sync_run_jobs WHERE run_id=$1 ORDER BY job_id",
+          [run],
+        )
+      ).map((row) => row.job_id);
+    expect(await tracked(earlier?.id)).toEqual([current?.id ?? "", newer?.id ?? ""].sort());
+    expect(await tracked(later?.id)).toEqual([newer?.id ?? ""]);
+    const runOf = async (run: string | undefined) =>
+      (await service.syncStatus(manager, run ?? null)).runs[0];
+    expect(await runOf(earlier?.id)).toMatchObject({
+      status: "queued",
+      work_total: 2,
+      work_completed: 0,
+    });
+    // Parked again (Discord changes paused once more), the run reads as held, not completed.
+    await db.query("UPDATE jobs SET status='disabled' WHERE id=$1", [newer?.id]);
+    expect((await runOf(earlier?.id))?.status).toBe("blocked");
+    expect((await runOf(later?.id))?.status).toBe("blocked");
+    await db.query("UPDATE jobs SET status='queued' WHERE id=$1", [newer?.id]);
+    expect(await service.configure(manager, "ledger_channel_id", "98205")).toMatchObject({
+      rebound: true,
+      requeued: 0,
+    });
+    // Linking a second FC needs an explicit unlink; the detail names the linked FC.
+    await expect(service.configure(manager, "fc_id", "9230000000000098005")).rejects.toMatchObject({
+      code: "fc_linked",
+      detail: { kind: "resource", resource: "freecompany", id: fcId },
+    });
+    expect(await service.configure(manager, "fc_id", fcId)).toEqual({
+      status: "unchanged",
+      field: "fc_id",
+      value: fcId,
+    });
+    await expect(service.unlinkCompany(manager, "9230000000000098005")).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "fc_link", id: "9230000000000098005" },
+    });
+    expect(await service.unlinkCompany(manager, fcId)).toMatchObject({
+      status: "unlinked",
+      effectsMode: "live",
+      company: { id: fcId, name: "Display Company", tag: "DISP", world: "Diabolos" },
+    });
+    // A new link reports the Lodestone identity it stored.
+    expect(await service.configure(manager, "fc_id", "9230000000000098005")).toMatchObject({
+      status: "saved",
+      previous: null,
+      company: { id: "9230000000000098005", name: "Setup FC", tag: "TEST", world: "Diabolos" },
+    });
+    expect(await service.configureOfficerRank(manager, "  Council  ")).toMatchObject({
+      status: "saved",
+      officerRank: "Council",
+      previous: null,
+      fcLinked: true,
+      officerRoleId: "98103",
+      effectsMode: "live",
+    });
+    await expect(service.configureOfficerRank(manager, " ")).rejects.toMatchObject({
+      code: "input",
+      detail: { kind: "option", option: "rank" },
+    });
+    // Enabling the layout reports the order a pass applies: FC Leader, Officer, Member, Guest.
+    expect(await service.configureRoleLayout(manager, false)).toMatchObject({ status: "saved" });
+    expect(await service.configureRoleLayout(manager, true)).toMatchObject({
+      status: "saved",
+      order: ["98104", "98103", "98101", "98102"],
+      layoutJob: expect.any(String),
+    });
+    // Applications need both the review channel and the Guest role, at the gate and at submission.
+    expect(await service.guestApplicationsOpen(guildId)).toBe(true);
+    await db.orm.update(t.guilds).set({ guest_role_id: null }).where(eq(t.guilds.id, guildId));
+    expect(await service.guestApplicationsOpen(guildId)).toBe(false);
+    const visitor: Actor = { guildId, userId: "98021", officer: false, manageRoles: false };
+    await expect(service.apply(visitor, await applicationInput(visitor))).rejects.toMatchObject({
+      code: "setup",
+      message: GUEST_APPLICATIONS_CLOSED,
+      detail: { kind: "setup", missing: "guest_role" },
+    });
+  });
+
+  test("guest results carry outcomes, decisions and the facts behind the status view", async () => {
+    const guildId = "888888888888888805";
+    const manager = await displayGuild(guildId, "9230000000000098006");
+    const applicant: Actor = { guildId, userId: "98030", officer: false, manageRoles: false };
+    const first = await service.apply(applicant, await applicationInput(applicant));
+    expect(first).toMatchObject({ outcome: "created", effectsMode: "live", state: "pending" });
+    expect(await service.apply(applicant, await applicationInput(applicant))).toMatchObject({
+      id: first.id,
+      outcome: "existing",
+    });
+    // A rejoin replaces the pending application from the earlier join.
+    const rejoined = members.get(applicant.userId);
+    if (!rejoined) throw new Error("Missing applicant");
+    rejoined.joinedAt = new Date("2026-02-01T00:00:00Z");
+    const replaced = await service.apply(applicant, await applicationInput(applicant));
+    expect(replaced).toMatchObject({ outcome: "replaced" });
+    expect(replaced.id).not.toBe(first.id);
+    // Officers see the pending application in autocomplete rows, and nothing more.
+    const choices = await service.applicationChoices(manager);
+    expect(choices.map((row) => Object.keys(row).sort())).toEqual([
+      ["created_at", "id", "user_id"],
+    ]);
+    expect(choices[0]).toMatchObject({ id: replaced.id, user_id: applicant.userId });
+    // The optional denial reason is validated like every officer reason.
+    await expect(service.decide(manager, replaced.id, false, "   ")).rejects.toMatchObject({
+      code: "input",
+      detail: { kind: "option", option: "reason" },
+    });
+    const denied = await service.decide(manager, replaced.id, false, "  Not a fit right now  ");
+    expect(denied).toMatchObject({
+      id: replaced.id,
+      status: "denied",
+      effects: "queued",
+      effectsMode: "live",
+      userId: applicant.userId,
+      reason: "Not a fit right now",
+      reviewerId: manager.userId,
+      decidedAt: expect.any(Date),
+      cooldownSeconds: config.GUEST_COOLDOWN_SECONDS,
+    });
+    expect(await service.decide(manager, replaced.id, true)).toMatchObject({
+      status: "denied",
+      effects: "unchanged",
+      reason: "Not a fit right now",
+      reviewerId: manager.userId,
+    });
+    // Reapplying waits for the cooldown and says until when.
+    let cooldown: unknown;
+    try {
+      await service.apply(applicant, await applicationInput(applicant));
+    } catch (error) {
+      cooldown = error;
+    }
+    expect(cooldown).toMatchObject({
+      code: "cooldown",
+      detail: { kind: "limit", limit: "apply", until: expect.any(Date) },
+    });
+    expect(cooldown instanceof Failure && cooldown.retryAfter).toBeGreaterThan(
+      config.GUEST_COOLDOWN_SECONDS - 60,
+    );
+    const status = await service.guestStatus(manager, applicant.userId);
+    expect(status).toMatchObject({
+      membership: "ineligible",
+      rosterFresh: true,
+      registered: false,
+      verifiedGuestEligible: false,
+      cooldownSeconds: config.GUEST_COOLDOWN_SECONDS,
+      effectsMode: "live",
+    });
+    for (const row of status.delivery)
+      expect(row).toMatchObject({
+        attempts: expect.any(Number),
+        due_at: expect.any(Date),
+        created_at: expect.any(Date),
+      });
+    // A grant reports the member, the trimmed reason and whether a revocation was lifted.
+    const guest = "98031";
+    const pending = await service.apply(
+      { ...applicant, userId: guest },
+      await applicationInput({ ...applicant, userId: guest }),
+    );
+    expect(
+      await service.guestAction(manager, guest, false, "  Vouched for  ", randomUUID()),
+    ).toMatchObject({
+      status: "granted",
+      user: guest,
+      reason: "Vouched for",
+      restored: false,
+      cancelledApplications: 0,
+      present: true,
+      guestRoleConfigured: true,
+    });
+    expect(
+      await service.guestAction(manager, guest, true, "Disruption", randomUUID()),
+    ).toMatchObject({ status: "revoked", cancelledApplications: 1 });
+    expect(
+      (
+        await db.query<{ state: string }>("SELECT state FROM guest_applications WHERE id=$1", [
+          pending.id,
+        ])
+      )[0]?.state,
+    ).toBe("cancelled");
+    expect(
+      await service.guestAction(manager, guest, false, "Second chance", randomUUID()),
+    ).toMatchObject({ status: "granted", restored: true });
+    // Grants read newest first.
+    const grants = (await service.guestStatus(manager, guest)).grants;
+    expect(grants.map((grant) => grant.reason)).toEqual(["Second chance", "Vouched for"]);
+    members.set("98032", {
+      id: "98032",
+      guildId,
+      joinedAt: new Date("2026-01-01T00:00:00Z"),
+      nickname: null,
+      roles: [],
+      bot: true,
+    });
+    await expect(
+      service.guestAction(manager, "98032", false, "Bot", randomUUID()),
+    ).rejects.toMatchObject({ code: "input", detail: { kind: "option", option: "member" } });
+  });
+
+  test("setup, officer overrides and refresh report what they did", async () => {
+    const guildId = "888888888888888806";
+    const manager: Actor = { ...actor, guildId, serverManager: true };
+    await db.orm.insert(t.guilds).values({ id: guildId, effects_enabled: true });
+    let serial = 98300;
+    const provisioner: RoleProvisioner = {
+      ...discord,
+      async ensureRole(_guild, _name, _actor, configured) {
+        return configured
+          ? { id: configured, created: false }
+          : { id: String(++serial), created: true };
+      },
+    };
+    const administration = new RoleAdministration(service, provisioner, access);
+    const created = await administration.setup(manager, "", "9230000000000098007", "  Council  ");
+    expect(created).toMatchObject({
+      status: "configured",
+      company: { id: "9230000000000098007", name: "Setup FC", tag: "TEST", world: "Diabolos" },
+      officerRank: "Council",
+      effectsMode: "live",
+      roleLayoutEnabled: true,
+      layoutJob: expect.any(String),
+      adopted: 0,
+      ledgerChannelId: null,
+      officerNotifications: { defaulted: true },
+      guestApplications: { defaulted: true },
+    });
+    expect(created.roles.every((role) => role.created)).toBe(true);
+    // A rerun reuses everything and leaves the settings /setup filled in the first time.
+    const again = await administration.setup(manager, "", null, null);
+    expect(again.roles.every((role) => !role.created)).toBe(true);
+    expect(again).toMatchObject({
+      officerNotifications: { id: created.officerNotifications.id, defaulted: false },
+      guestApplications: { defaulted: false },
+    });
+    await expect(
+      administration.setup(manager, "", "9230000000000098008", null),
+    ).rejects.toMatchObject({
+      code: "fc_linked",
+      detail: { kind: "resource", resource: "freecompany", id: "9230000000000098007" },
+    });
+    // Officer overrides report the member, the reason and the state they replaced.
+    expect(await administration.officer(manager, "98040", true, "  Trusted  ")).toMatchObject({
+      status: "granted",
+      user: "98040",
+      reason: "Trusted",
+      present: true,
+      previous: null,
+      effectsMode: "live",
+    });
+    expect(await administration.officer(manager, "98040", false, "Stepped down")).toMatchObject({
+      status: "revoked",
+      previous: "granted",
+    });
+    absent.add("98041");
+    await expect(administration.officer(manager, "98041", true, "Departed")).rejects.toMatchObject({
+      code: "not_found",
+      detail: { kind: "resource", resource: "member", id: "98041" },
+    });
+    // A departed user's grant can still be revoked; it applies if they rejoin.
+    expect(await administration.officer(manager, "98041", false, "Departed")).toMatchObject({
+      present: false,
+    });
+    // Refresh: force is officer-only, a missing FC is a setup gap, and a run is always recorded.
+    const member: Actor = { guildId, userId: "98042", officer: false, manageRoles: false };
+    await expect(sync.refresh(member, true)).rejects.toMatchObject({
+      code: "forbidden",
+      detail: { kind: "scope", scope: "officer" },
+    });
+    expect(await sync.refresh(manager, true)).toMatchObject({
+      runId: expect.any(String),
+      status: "queued",
+      forced: true,
+      cached: false,
+      intervalSeconds: config.ROSTER_INTERVAL_SECONDS,
+      effectsMode: "live",
+    });
+    await db.orm.update(t.guilds).set({ fc_id: null }).where(eq(t.guilds.id, guildId));
+    await expect(sync.refresh(member, false)).rejects.toMatchObject({
+      code: "setup",
+      detail: { kind: "setup", missing: "fc" },
+    });
+  });
+
+  test("effects mode says whether queued Discord work is held, and why", async () => {
+    // A guild not yet activated holds its work until activation.
+    const held = await displayGuild("888888888888888807", "9230000000000098009", false);
+    expect((await service.validate(held)).effectsMode).toBe("awaiting_activation");
+    expect(
+      await service.configure(held, "officer_notifications_channel_id", "98206"),
+    ).toMatchObject({ effectsMode: "awaiting_activation" });
+    // ENABLE_EFFECTS=false holds every guild's work, whatever its own activation state.
+    const disabled = new Service(db, discord, nodestone, { ...config, ENABLE_EFFECTS: false });
+    const live = await displayGuild("888888888888888808", "9230000000000098010");
+    expect((await disabled.validate(live)).effectsMode).toBe("deployment_disabled");
+    expect(
+      await disabled.ledger(live, "initialize", "5", "Opening balance", randomUUID()),
+    ).toMatchObject({ status: "recorded", effectsMode: "deployment_disabled" });
+    expect(
+      await disabled.apply(
+        { guildId: live.guildId, userId: "98050", officer: false, manageRoles: false },
+        await applicationInput({ ...live, userId: "98050" }),
+      ),
+    ).toMatchObject({ outcome: "created", effectsMode: "deployment_disabled" });
+  });
+
+  test("a requeue retries when an enqueue commits an active row for the same key mid-pass", async () => {
+    // A `disabled` row sits outside the active-job index, so nothing stops another session from
+    // enqueueing the same key while requeueParked runs (a gateway member update during startup).
+    const guildId = "888888888888888809";
+    await displayGuild(guildId, "9230000000000098011");
+    const key = `user:${guildId}:98060`;
+    const [parked] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, last_error)
+       VALUES ('reconcile.user', $1, '{}'::jsonb, $2, '98060', 'disabled',
+         'disabled: Discord effects are disabled pending activation.')
+       RETURNING id::text`,
+      [key, guildId],
+    );
+    // The other session's enqueue is in place but not committed: the requeue's supersede pass
+    // can't see it, so its requeue waits on that row in the unique index.
+    const other = await db.pool.connect();
+    let active = "";
+    try {
+      await other.query("BEGIN");
+      active = await reconcileUser(other, guildId, "98060");
+      let pid = 0;
+      const caller = db.transaction(async (client) => {
+        pid =
+          (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid ?? 0;
+        return requeueParked(client, [guildId], ["disabled"]);
+      });
+      // Commit the enqueue only once the caller is blocked on it, so the retry path is what runs.
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const [row] = pid
+          ? await db.query<{ waiting: boolean }>(
+              "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1",
+              [pid],
+            )
+          : [];
+        if (row?.waiting) break;
+        if (Date.now() > deadline) throw new Error("The requeue never waited on the enqueue");
+        await Bun.sleep(10);
+      }
+      await other.query("COMMIT");
+      // The unique violation rolled back to the savepoint; the retried pass saw the committed row
+      // and closed the parked one, so the caller's transaction commits with nothing requeued.
+      expect(await caller).toEqual([]);
+    } finally {
+      other.release();
+    }
+    const rows = await db.query<{ id: string; status: string; result: unknown }>(
+      "SELECT id::text, status, result FROM jobs WHERE dedupe_key=$1 ORDER BY created_at",
+      [key],
+    );
+    expect(rows).toEqual([
+      { id: parked?.id ?? "", status: "succeeded", result: { skipped: "superseded" } },
+      { id: active, status: "queued", result: null },
+    ]);
+  });
+
+  test("retry.js requeues a parked job unless a newer row already carries its work", async () => {
+    const guildId = "888888888888888810";
+    await displayGuild(guildId, "9230000000000098012");
+    const key = `user:${guildId}:98061`;
+    // A reconcile.user parked while paused, then a newer row for the same member queued by a
+    // later event: the older row is outside the active-job index, the newer one holds the key.
+    const [older, newer] = await db.query<{ id: string }>(
+      `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, attempts,
+         last_error, created_at) VALUES
+         ('reconcile.user', $1, '{}'::jsonb, $2, '98061', 'disabled', 2,
+           'disabled: Discord effects are disabled pending activation.', now() - interval '2 minutes'),
+         ('reconcile.user', $1, '{}'::jsonb, $2, '98061', 'queued', 0, NULL, now())
+       RETURNING id::text`,
+      [key, guildId],
+    );
+    const retry = (guild: string, job: string | undefined) =>
+      db.transaction((client) => retryJob(client, guild, job ?? ""));
+    const state = async (job: string | undefined) =>
+      (
+        await db.query<{ status: string; attempts: number; last_error: string | null }>(
+          "SELECT status, attempts, last_error FROM jobs WHERE id=$1",
+          [job],
+        )
+      )[0];
+    // Requeueing it would violate the index, so the tool refuses and names the row doing the work.
+    await expect(retry(guildId, older?.id)).rejects.toThrow(
+      `A newer job for this work is already queued: ${newer?.id}.`,
+    );
+    expect(await state(older?.id)).toMatchObject({ status: "disabled", attempts: 2 });
+    // Once the newer row has finished, the parked one retries with a fresh budget and no diagnostic.
+    await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [newer?.id]);
+    await retry(guildId, older?.id);
+    expect(await state(older?.id)).toEqual({ status: "queued", attempts: 0, last_error: null });
+    // A blocked row holds its own key, so it retries in place.
+    await db.query("UPDATE jobs SET status='blocked', attempts=3 WHERE id=$1", [older?.id]);
+    await retry(guildId, older?.id);
+    expect(await state(older?.id)).toMatchObject({ status: "queued", attempts: 0 });
+    // Another guild's job, or completed work, is never retried.
+    await expect(retry("888888888888888804", older?.id)).rejects.toThrow("No retryable job");
+    await expect(retry(guildId, newer?.id)).rejects.toThrow("No retryable job");
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {

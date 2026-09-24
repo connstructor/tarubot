@@ -36,8 +36,10 @@ import {
   grandfatherReport,
   overlayPlannedGrant,
 } from "../src/domain/grandfathering.js";
+import { classifyFailure } from "../src/domain/failures.js";
+import { guestApplicationsOpen } from "../src/domain/guest-application.js";
 import { managedRoleOrder } from "../src/domain/role-layout.js";
-import { Failure, id, json, message } from "../src/domain/values.js";
+import { Failure, id, json } from "../src/domain/values.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
 import { Nodestone } from "../src/infrastructure/nodestone/client.js";
 import { eq } from "drizzle-orm";
@@ -217,7 +219,10 @@ if (import.meta.main) {
       try {
         ifEnabled = await gateway.planRoleLayout(guild, managedRoleOrder(row));
       } catch (error) {
-        ifEnabled = { blocked: message(error) };
+        // An approved Failure explains itself; any other error is named by catalog code and class
+        // only, because raw SDK or transport text may carry request details.
+        const { code, failure, source } = classifyFailure(error);
+        ifEnabled = { blocked: failure?.message ?? `${code} (${source})` };
       }
       console.log(
         json({
@@ -225,7 +230,8 @@ if (import.meta.main) {
           previewedAt: new Date().toISOString(),
           enumeratedAt: enumeratedAt.toISOString(),
           enumerationComplete: true,
-          guestApplications: row.guest_application_channel_id ? "open" : "closed",
+          // The same rule /apply enforces: a review channel and a Guest role.
+          guestApplications: guestApplicationsOpen(row) ? "open" : "closed",
           onboarding: row.access_policy_enabled,
           roleLayout: {
             enabled: row.role_layout_enabled,

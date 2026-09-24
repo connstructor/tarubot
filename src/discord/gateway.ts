@@ -1,22 +1,30 @@
 /** Discord.js adapter: current permission checks, complete observations, and scoped effects. */
 import { createHash } from "node:crypto";
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ChannelType,
   Client,
   DiscordAPIError,
+  DiscordjsError,
+  DiscordjsErrorCodes,
   GatewayIntentBits,
+  GatewayRateLimitError,
   PermissionFlagsBits,
 } from "discord.js";
 import type { Collection, GuildMember, Role } from "discord.js";
 import { Failure, normalized } from "../domain/values.js";
 import type { Actor } from "../domain/policy.js";
-import type { ApplicationRecord, DiscordPort, MemberView } from "../application/records.js";
+import type {
+  ApplicationRecord,
+  DirectMessage,
+  DiscordPort,
+  MemberView,
+  PostMessage,
+} from "../application/records.js";
 import { roleLayoutPlan, rolePositionChanges, type RoleLayoutPlan } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
-import { guestApplicationEmbeds } from "./guest-application.js";
+import { decisionDm, guestReviewPost } from "./presenters/guests.js";
+import { ledgerPost } from "./presenters/ledger.js";
+import type { Presented } from "./presenters/reply.js";
 
 /**
  * Lowest role first. Discord can give new roles identical raw positions; the SDK comparison
@@ -35,9 +43,19 @@ export class DiscordGateway implements DiscordPort {
     allowedMentions: { parse: [] },
     rest: { timeout: 15000, retries: 3 },
   });
-  /** Copy mutable SDK state into the small snapshot consumed by application policy. */
+  /**
+   * Copy mutable SDK state into the small snapshot consumed by application policy. view() serves
+   * the actor, command targets and guild-wide reads alike, so a missing join time names the
+   * member it concerns (the text also reaches job diagnostics) instead of saying "your".
+   */
   private view(member: GuildMember): MemberView {
-    if (!member.joinedAt) throw new Failure("incomplete", "Guild join context is unavailable.");
+    if (!member.joinedAt)
+      throw new Failure(
+        "incomplete",
+        `Discord didn't include join details for <@${member.id}>. Try again in a moment.`,
+        0,
+        { kind: "discord", what: "join_context", user: member.id },
+      );
     return {
       id: member.id,
       guildId: member.guild.id,
@@ -53,7 +71,12 @@ export class DiscordGateway implements DiscordPort {
     await guild.roles.fetch();
     const member = await guild.members.fetch({ user: userId, force: true });
     if (member.user.bot)
-      throw new Failure("forbidden", "Bot accounts cannot invoke these operations.");
+      throw new Failure(
+        "forbidden",
+        "TaruBot commands work only inside the server, for human members.",
+        0,
+        { kind: "scope", scope: "human" },
+      );
     return {
       guildId,
       userId,
@@ -77,18 +100,51 @@ export class DiscordGateway implements DiscordPort {
   /** Require complete, count-consistent enumeration before snapshot or guild-wide reconciliation. */
   async members(guildId: string): Promise<MemberView[]> {
     const guild = await this.client.guilds.fetch(guildId);
+    // Every way the full list can't be read is the member-list failure, with its approved card.
+    const listFailure = (retryAfter = 0) =>
+      new Failure(
+        "incomplete",
+        "Discord didn't return the complete member list. Try again in a minute.",
+        retryAfter,
+        { kind: "discord", what: "member_list" },
+      );
     for (let attempt = 0; attempt < 3; attempt++) {
       const count = guild.memberCount;
-      const members = await guild.members.fetch({ time: 60000 });
-      if (members.size === count && count === guild.memberCount)
+      let members: Collection<string, GuildMember>;
+      try {
+        members = await guild.members.fetch({ time: 60000 });
+      } catch (error) {
+        // Discord allows one full member-list request per guild every 30 seconds (RATE_LIMITED),
+        // and chunks can stop arriving (GuildMembersTimeout); both mean the list couldn't be
+        // read. Retrying inside this loop would only be rate limited again, so stop here.
+        if (error instanceof GatewayRateLimitError)
+          throw listFailure(Math.ceil(error.data.retry_after));
+        if (
+          error instanceof DiscordjsError &&
+          error.code === DiscordjsErrorCodes.GuildMembersTimeout
+        )
+          throw listFailure();
+        throw error;
+      }
+      if (members.size === count && count === guild.memberCount) {
+        // A member without a join time makes the whole list unusable for a guild-wide read, so
+        // it is reported as the member-list failure (keeping that card's adopt_holders tip).
+        if (members.some((member) => !member.joinedAt))
+          throw new Failure(
+            "incomplete",
+            "Discord didn't include join details for every member. Try again later.",
+            0,
+            { kind: "discord", what: "member_list" },
+          );
         return [...members.values()].map((member) => this.view(member));
+      }
     }
-    throw new Failure(
-      "incomplete",
-      "Discord member enumeration changed or did not complete. Retry the snapshot.",
-    );
+    throw listFailure();
   }
-  /** Access roles must be assignable, nonadministrative, and below the applicable hierarchies. */
+  /**
+   * Access roles must be assignable, nonadministrative, and below the applicable hierarchies.
+   * Every refusal names the role in its detail, so replies and job diagnostics can point at it.
+   */
   async validateRole(
     guildId: string,
     roleId: string,
@@ -98,14 +154,23 @@ export class DiscordGateway implements DiscordPort {
     const guild = await this.client.guilds.fetch({ guild: guildId, force: true });
     const role = (await guild.roles.fetch()).get(roleId);
     const bot = await guild.members.fetchMe({ force: true });
-    if (
-      !role ||
-      role.guild.id !== guildId ||
-      role.id === guild.id ||
-      role.managed ||
-      bot.roles.botRole?.id === role.id
-    )
-      throw new Failure("blocked", "Select an existing, ordinary guild access role.");
+    const affected = { kind: "resource", resource: "role", id: roleId } as const;
+    // A configured role deleted from Discord (or one from another server) can't be fixed by
+    // changing its permissions: say so, so /config validate and job diagnostics point at the cause.
+    if (!role || role.guild.id !== guildId)
+      throw new Failure(
+        "blocked",
+        "That role no longer exists in this server. Choose another with /config roles, or run /setup to recreate it.",
+        0,
+        affected,
+      );
+    if (role.id === guild.id || role.managed || bot.roles.botRole?.id === role.id)
+      throw new Failure(
+        "blocked",
+        "Pick an ordinary role: not @everyone, not a bot or integration role, and not TaruBot's own role.",
+        0,
+        affected,
+      );
     if (
       role.permissions.has(PermissionFlagsBits.Administrator, false) ||
       role.permissions.has(PermissionFlagsBits.ManageGuild, false) ||
@@ -113,27 +178,42 @@ export class DiscordGateway implements DiscordPort {
     )
       throw new Failure(
         "blocked",
-        "Access roles must not grant Administrator, Manage Server, or Manage Roles.",
+        `Access roles can't have Administrator, Manage Server or Manage Roles. Remove those from <@&${roleId}> or pick another role.`,
+        0,
+        affected,
       );
     if (channelAccess && role.permissions.has(PermissionFlagsBits.ManageChannels, false))
-      throw new Failure("blocked", "Onboarding access roles must not grant Manage Channels.");
+      throw new Failure(
+        "blocked",
+        "With onboarding on, access roles can't have Manage Channels.",
+        0,
+        affected,
+      );
     if (
       !bot.permissions.has(PermissionFlagsBits.ManageRoles) ||
       bot.roles.highest.comparePositionTo(role) <= 0
     )
       throw new Failure(
         "blocked",
-        "Give the bot Manage Roles and place its role above the configured access role.",
+        `TaruBot can't manage <@&${roleId}>. Its own role must be above that role, and it needs Manage Roles.`,
+        0,
+        { ...affected, fix: "hierarchy" },
       );
     if (actorId) {
       const actor = await guild.members.fetch({ user: actorId, force: true });
-      if (
-        !actor.permissions.has(PermissionFlagsBits.ManageRoles) ||
-        (guild.ownerId !== actorId && actor.roles.highest.comparePositionTo(role) <= 0)
-      )
+      if (!actor.permissions.has(PermissionFlagsBits.ManageRoles))
         throw new Failure(
           "forbidden",
-          "Your highest role must be above the selected role, and Manage Roles is required.",
+          "Choosing access roles needs Discord's Manage Roles permission.",
+          0,
+          { kind: "scope", scope: "manage_roles" },
+        );
+      if (guild.ownerId !== actorId && actor.roles.highest.comparePositionTo(role) <= 0)
+        throw new Failure(
+          "forbidden",
+          `Your highest Discord role must be above <@&${roleId}> to select it (the server owner is exempt). Ask someone higher in the role list, or move the role lower.`,
+          0,
+          { kind: "scope", scope: "hierarchy" },
         );
     }
   }
@@ -183,7 +263,12 @@ export class DiscordGateway implements DiscordPort {
     const hoisted: string[] = [];
     for (const roleId of priority) {
       const role = roles.get(roleId);
-      if (!role) throw new Failure("blocked", "A configured role was deleted before layout.");
+      if (!role)
+        throw new Failure("blocked", "A configured role was deleted before layout.", 0, {
+          kind: "resource",
+          resource: "role",
+          id: roleId,
+        });
       if (!role.hoist) {
         await guard();
         await role.setHoist(true, "TaruBot managed-role member-list grouping");
@@ -229,22 +314,54 @@ export class DiscordGateway implements DiscordPort {
     }));
     return roleLayoutPlan(ascending, priority);
   }
-  /** Fetch the channel globally, then explicitly check guild ownership and current overwrites. */
+  /**
+   * Fetch the channel globally, then explicitly check guild ownership and current overwrites. A
+   * deleted, non-text or other-server channel is refused as unavailable, with no permissions
+   * remedy; a channel TaruBot can't use (or, 50001 Missing Access, can't even view) gets the
+   * permissions refusal with its channel-permissions fix.
+   */
   async validateChannel(guildId: string, channelId: string): Promise<void> {
     const guild = await this.client.guilds.fetch(guildId);
     await guild.roles.fetch();
+    const affected = { kind: "resource", resource: "channel", id: channelId } as const;
+    // Its wording ('View Channel') is also what ledger post states read as "missing channel
+    // permissions".
+    const permissionsRefusal = () =>
+      new Failure(
+        "blocked",
+        `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
+        0,
+        { ...affected, fix: "channel_permissions" },
+      );
     const channel = await this.client.channels
       .fetch(channelId, { force: true })
       .catch((error: unknown) => {
-        if (error instanceof DiscordAPIError && [10003, 50001].includes(Number(error.code)))
+        if (!(error instanceof DiscordAPIError)) throw error;
+        // 10003 Unknown Channel: the channel was deleted, so no permission change can fix it.
+        if (Number(error.code) === 10003) return null;
+        // 50001 Missing Access: Discord hides a channel TaruBot can't view. A text channel this
+        // server still lists (the guild's channel cache holds hidden channels too) is a
+        // permissions problem with a remedy; anything else, such as another server's channel, is
+        // unavailable.
+        if (Number(error.code) === 50001) {
+          if (guild.channels.cache.get(channelId)?.type === ChannelType.GuildText)
+            throw permissionsRefusal();
           return null;
+        }
         throw error;
       });
     const bot = await guild.members.fetchMe({ force: true });
+    // A deleted channel, a non-text channel or one in another server can't be fixed by changing
+    // permissions, so this refusal carries no permissions remedy. Its wording ('unavailable')
+    // is also what ledger post states read to say "channel unavailable".
+    if (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guildId)
+      throw new Failure(
+        "blocked",
+        `<#${channelId}> is unavailable: it no longer exists or isn't a text channel in this server. Choose another with /config.`,
+        0,
+        affected,
+      );
     if (
-      !channel ||
-      channel.type !== ChannelType.GuildText ||
-      channel.guildId !== guildId ||
       !channel
         .permissionsFor(bot)
         ?.has([
@@ -254,10 +371,7 @@ export class DiscordGateway implements DiscordPort {
           PermissionFlagsBits.ReadMessageHistory,
         ])
     )
-      throw new Failure(
-        "blocked",
-        "Choose a text channel in this guild where the bot can view, send, embed links, and read message history.",
-      );
+      throw permissionsRefusal();
   }
   /** REST deltas touch only requested role IDs; retry observes any partially applied transition. */
   async roles(guildId: string, userId: string, add: string[], remove: string[]): Promise<void> {
@@ -274,7 +388,12 @@ export class DiscordGateway implements DiscordPort {
         !bot.permissions.has(PermissionFlagsBits.ManageRoles) ||
         bot.roles.highest.comparePositionTo(role) <= 0
       )
-        throw new Failure("blocked", "A current or retired access role is above the bot's role.");
+        throw new Failure(
+          "blocked",
+          "A current or retired access role is above the bot's role.",
+          0,
+          { kind: "resource", resource: "role", id: roleId, fix: "hierarchy" },
+        );
       await member.roles.remove(roleId, "TaruBot access reconciliation");
     }
     for (const roleId of add) {
@@ -302,64 +421,70 @@ export class DiscordGateway implements DiscordPort {
     await member.setNickname(value, "TaruBot character nickname");
     return true;
   }
+  /**
+   * A presenter post's message options, mentions forced off. content is '' (which also clears a
+   * pre-2.14.0 message's text on edit), with one embed and the post's buttons.
+   */
+  private static sendable(presented: Presented) {
+    return { ...presented.options, allowedMentions: { parse: [] as [] } };
+  }
+  /**
+   * Render a post from its data through the reply presenters, so jobs never build message text.
+   * `text` is the documented plain-text exclusion (officer.notify, the DevBot smoke check): the
+   * caller has escaped it, and it is cut to fit Discord's content limit.
+   */
+  private static render(message: PostMessage) {
+    if (message.kind === "ledger") return DiscordGateway.sendable(ledgerPost(message.view));
+    if (message.kind === "review")
+      return DiscordGateway.sendable(guestReviewPost(message.application));
+    return {
+      content: message.text.slice(0, 1950),
+      allowedMentions: { parse: [] as [] },
+      embeds: [],
+      components: [],
+    };
+  }
   /** Use stable recent-message deduplication and explicit mention policy for outbox delivery. */
   async send(
     guildId: string,
     channelId: string,
-    content: string,
+    message: PostMessage,
     key: string,
-    application?: ApplicationRecord,
   ): Promise<string> {
     await this.validateChannel(guildId, channelId);
     const channel = await this.client.channels.fetch(channelId);
     if (!channel || channel.type !== ChannelType.GuildText)
-      throw new Failure("blocked", "Text channel unavailable.");
-    const components = application ? [this.controls(application)] : [];
+      throw new Failure("blocked", "Text channel unavailable.", 0, {
+        kind: "resource",
+        resource: "channel",
+        id: channelId,
+      });
     const nonce = BigInt(
       // A short decimal nonce fits Discord's limit while identifying the same durable effect.
       `0x${createHash("sha256").update(key).digest("hex").slice(0, 15)}`,
     ).toString();
-    return (
-      await channel.send({
-        content: content.slice(0, 1950),
-        allowedMentions: { parse: [] },
-        nonce,
-        enforceNonce: true,
-        components,
-        embeds: application ? guestApplicationEmbeds(application) : [],
-      })
-    ).id;
+    // Posts render deterministically from stored data, so a retry under this nonce is identical.
+    return (await channel.send({ ...DiscordGateway.render(message), nonce, enforceNonce: true }))
+      .id;
   }
-  /** Custom IDs route through the discovered guest component and durable application identity. */
-  private controls(application: ApplicationRecord): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`guest:approve:${application.id}`)
-        .setLabel("Approve")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(application.state !== "pending"),
-      new ButtonBuilder()
-        .setCustomId(`guest:deny:${application.id}`)
-        .setLabel("Deny")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(application.state !== "pending"),
-    );
-  }
-  /** Update completed controls, or recreate an explicitly missing review message. */
-  async editReview(application: ApplicationRecord, content: string): Promise<string> {
+  /**
+   * Redraw the review message for the application's current state (the decision, disabled
+   * controls), or recreate an explicitly missing one under the stable review:<id> nonce key. The
+   * edit sends content '' so a pre-2.14.0 message's text is cleared in favour of the embed.
+   */
+  async editReview(application: ApplicationRecord): Promise<string> {
     await this.validateChannel(application.guild_id, application.channel_id);
     const channel = await this.client.channels.fetch(application.channel_id);
     if (!channel || channel.type !== ChannelType.GuildText)
-      throw new Failure("blocked", "Review channel unavailable.");
+      throw new Failure("blocked", "Review channel unavailable.", 0, {
+        kind: "resource",
+        resource: "channel",
+        id: application.channel_id,
+      });
     if (application.message_id) {
       try {
         const message = await channel.messages.fetch(application.message_id);
-        await message.edit({
-          content: content.slice(0, 1950),
-          allowedMentions: { parse: [] },
-          components: [this.controls(application)],
-          embeds: guestApplicationEmbeds(application),
-        });
+        await message.edit(DiscordGateway.sendable(guestReviewPost(application)));
         return message.id;
       } catch (error) {
         if (!(error instanceof DiscordAPIError && Number(error.code) === 10008)) throw error;
@@ -368,18 +493,23 @@ export class DiscordGateway implements DiscordPort {
     return this.send(
       application.guild_id,
       application.channel_id,
-      content,
+      { kind: "review", application },
       `review:${application.id}`,
-      application,
     );
   }
-  /** A disabled inbox is a terminal delivery result, never a rollback of the guest decision. */
-  async dm(user: string, content: string): Promise<void> {
+  /**
+   * A disabled inbox is a terminal delivery result, never a rollback of the guest decision. The
+   * DM names the server from the client cache (no extra request); without it the presenter says
+   * 'the server where you applied'.
+   */
+  async dm(user: string, message: DirectMessage): Promise<void> {
+    const serverName = this.client.guilds.cache.get(message.application.guild_id)?.name ?? null;
+    const presented = decisionDm(message.application, {
+      cooldownSeconds: message.cooldownSeconds,
+      serverName,
+    });
     try {
-      await (await this.client.users.fetch(user)).send({
-        content: content.slice(0, 1950),
-        allowedMentions: { parse: [] },
-      });
+      await (await this.client.users.fetch(user)).send(DiscordGateway.sendable(presented));
     } catch (error) {
       if (error instanceof DiscordAPIError && Number(error.code) === 50007)
         throw new Failure("dm_blocked", "The recipient has disabled DMs.");

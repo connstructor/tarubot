@@ -1,6 +1,7 @@
 /** Pure queue outcome classification: expected waits stay quiet; stalls and terminal failures surface. */
 import { expect, test } from "bun:test";
 import { DiscordAPIError } from "discord.js";
+import { type FailureCode, WAITING_CODES } from "../../src/domain/failures.js";
 import { Failure } from "../../src/domain/values.js";
 import { jobOutcome, STALE_WAIT_MS } from "../../src/jobs/queue.js";
 
@@ -16,7 +17,7 @@ const discordError = (code: number, status: number): DiscordAPIError =>
   );
 
 test("expected waits stay queued at debug level without consuming attempts", () => {
-  for (const code of ["ordered", "busy", "cooldown", "superseded"]) {
+  for (const code of ["ordered", "busy", "cooldown", "superseded"] as const) {
     // Even at the attempt limit a wait is not a failed delivery, and perform returns its attempt.
     expect(jobOutcome(new Failure(code, "Waiting fixture."), 8)).toMatchObject({
       code,
@@ -33,7 +34,7 @@ test("expected waits stay queued at debug level without consuming attempts", () 
 });
 
 test("a continuous wait streak beyond the stale threshold escalates to warn", () => {
-  for (const code of ["ordered", "busy", "cooldown", "superseded"]) {
+  for (const code of ["ordered", "busy", "cooldown", "superseded"] as const) {
     const wait = new Failure(code, "Still waiting.");
     // The third argument is how long this row has kept waiting, not the row's age.
     expect(jobOutcome(wait, 1, STALE_WAIT_MS).level).toBe("debug");
@@ -126,4 +127,57 @@ test("a recipient with DMs disabled ends failed but only at info", () => {
   expect(jobOutcome(new Failure("dm_blocked", "The recipient has disabled DMs."), 1)).toMatchObject(
     { code: "dm_blocked", status: "failed", category: "failed", level: "info" },
   );
+});
+
+test("the catalog's waiting codes keep their 2.12.3 job outcomes", () => {
+  // Moving the set into failures.ts must not change which codes wait: the same five, no others.
+  expect([...WAITING_CODES].sort()).toEqual([
+    "busy",
+    "cooldown",
+    "lease_lost",
+    "ordered",
+    "superseded",
+  ]);
+  for (const code of ["ordered", "busy", "cooldown", "superseded"] as const)
+    expect(jobOutcome(new Failure(code, "Waiting fixture."), 8)).toMatchObject({
+      status: "queued",
+      waiting: true,
+      category: "wait",
+    });
+  expect(jobOutcome(new Failure("lease_lost", "Reclaimed."), 8)).toMatchObject({
+    status: "unchanged",
+    waiting: true,
+    category: "lease",
+  });
+});
+
+test("renamed interactive codes retry or fail inside a job exactly like the codes they replace", () => {
+  // Interactive refinements should never be thrown by a job, but if one is, the queue must treat
+  // it as the code it replaced: an ordinary retry, then a terminal failure at the attempt limit.
+  // The retired codes funds and pending were ordinary codes too, so input stands in for them.
+  const renamed: readonly (readonly [FailureCode, FailureCode])[] = [
+    ["insufficient_funds", "input"],
+    ["pending_proof", "input"],
+    ["not_found", "input"],
+    ["ambiguous", "conflict"],
+    ["stale", "input"],
+    ["idempotency_conflict", "conflict"],
+  ];
+  const shape = (code: FailureCode, attempts: number) => {
+    const { status, waiting, category, level } = jobOutcome(
+      new Failure(code, "Rename fixture."),
+      attempts,
+    );
+    return { status, waiting, category, level };
+  };
+  for (const [current, previous] of renamed)
+    for (const attempts of [1, 8])
+      expect(shape(current, attempts)).toEqual(shape(previous, attempts));
+  expect(shape("insufficient_funds", 1)).toEqual({
+    status: "queued",
+    waiting: false,
+    category: "retry",
+    level: "warn",
+  });
+  expect(shape("insufficient_funds", 8)).toMatchObject({ status: "failed", level: "error" });
 });

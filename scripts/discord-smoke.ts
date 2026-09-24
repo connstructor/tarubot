@@ -88,10 +88,11 @@ try {
   const destination = option("--channel");
   if (destination) {
     const channelId = id(destination);
+    // A plain-text post, the same path officer notices use; embeds are covered by unit tests.
     const messageId = await gateway.send(
       guildId,
       channelId,
-      "DevBot live smoke check: validating message delivery.",
+      { kind: "text", text: "DevBot live smoke check: validating message delivery." },
       `devbot-smoke:${crypto.randomUUID()}`,
     );
     const channel = await gateway.client.channels.fetch(channelId);

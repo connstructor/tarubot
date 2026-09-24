@@ -2,7 +2,7 @@
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { charactersReply } from "../../discord/presenters/characters.js";
 import { userId } from "../../discord/selectors.js";
 import { authorize } from "../../domain/policy.js";
 
@@ -11,9 +11,14 @@ export default defineCommand({
     string("member", "Discord user ID; officers may inspect another user"),
   ),
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
-    const owner = userId(interaction.options.getString("member") ?? actor.userId);
+  async execute({ actor, viewer, interaction, services }) {
+    const option = interaction.options.getString("member");
+    const owner = userId(option ?? actor.userId);
     authorize(actor, actor.guildId, "user", owner);
-    return dataReply(await services.get(applicationKey).characters(actor, owner));
+    // The officer layout needs the member option, so an officer's own /characters stays personal.
+    return charactersReply(await services.get(applicationKey).characters(actor, owner), viewer, {
+      owner,
+      memberOption: option !== null,
+    });
   },
 });

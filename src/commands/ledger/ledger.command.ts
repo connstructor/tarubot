@@ -1,10 +1,14 @@
-/** Ledger presentation and selection; exact accounting and authorization stay transactional. */
-import { z } from "zod";
+/**
+ * /ledger: deposits, withdrawals, the opening balance and corrections, the balance and the paged
+ * history. Options are parsed here into input failures that name the option; exact accounting and
+ * authorization stay transactional in the service, and the ledger presenters render its results.
+ */
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
-import { id } from "../../domain/values.js";
+import { balanceReply, historyReply, receiptReply } from "../../discord/presenters/ledger.js";
+import { cursor, uuid } from "../../discord/selectors.js";
+import { lodestoneId } from "../../domain/values.js";
 
 const data = command("ledger", "Exact, human-maintained FC gil ledger");
 for (const name of ["deposit", "withdraw"])
@@ -43,41 +47,47 @@ for (const name of ["balance", "history"])
       .setDescription(`Inspect ledger ${name}`)
       .addStringOption(string("fc_id", "Officers may select a historical FC account"));
     if (name === "history")
-      sub.addStringOption(string("before", "Sequence cursor from the preceding page"));
+      // Entry numbers read '#34' on history pages; the pager buttons carry the same cursor.
+      sub.addStringOption(string("before", "Entry number from a previous page (e.g. 34)"));
     return sub;
   });
 
 export default defineCommand({
   data,
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     const app = services.get(applicationKey);
     const options = interaction.options;
     const sub = options.getSubcommand(true);
-    if (sub === "balance" || sub === "history")
-      return dataReply(
-        await app.ledgerRead(
-          actor,
-          options.getString("fc_id") ? id(options.getString("fc_id", true)) : null,
-          options.getString("before"),
-          sub === "history",
-        ),
+    // Free text, so an FC ID or Lodestone link is accepted and a typo is an input failure that
+    // names the fc_id option.
+    const fcId = options.getString("fc_id")
+      ? lodestoneId(options.getString("fc_id", true), "freecompany")
+      : null;
+    if (sub === "balance")
+      return balanceReply(await app.ledgerRead(actor, fcId, null, false), viewer);
+    if (sub === "history")
+      return historyReply(
+        await app.ledgerRead(actor, fcId, cursor(options.getString("before")), true),
+        viewer,
       );
     const amount =
       sub === "deposit" || sub === "withdraw"
         ? options.getInteger("amount", true)
         : options.getString("balance", true);
     const correction = options.getString("entry");
-    // Discord's interaction ID is the stable financial idempotency key for retries.
-    return dataReply(
+    // Discord's interaction ID is the stable financial idempotency key for retries, and the Ref
+    // an officer's receipt shows.
+    return receiptReply(
       await app.ledger(
         actor,
         sub,
         amount,
         options.getString("note", true),
         interaction.id,
-        correction ? z.uuid().parse(correction) : null,
+        correction ? uuid(correction, "entry") : null,
       ),
+      viewer,
     );
   },
 });

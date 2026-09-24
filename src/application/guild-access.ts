@@ -8,6 +8,7 @@ import {
   type AccessSnapshot,
   type ChannelAudience,
 } from "../domain/channel-access.js";
+import { effectsPaused } from "../domain/failures.js";
 import { Failure } from "../domain/values.js";
 import { audit, orm, type Connection } from "../infrastructure/postgres/database.js";
 import { and, eq } from "drizzle-orm";
@@ -104,7 +105,7 @@ export class GuildAccess {
         .where(and(eq(t.guilds.id, guildId), eq(t.guilds.active, true)));
       if (!guild?.access_policy_enabled) return { skipped: "onboarding policy inactive" };
       if (!this.app.config.ENABLE_EFFECTS || !guild.effects_enabled)
-        throw new Failure("disabled", "Discord effects are disabled pending activation.");
+        throw effectsPaused(this.app.config.ENABLE_EFFECTS);
       const lobby = guild.lobby_channel_id,
         officers = guild.officer_channel_id;
       if (!lobby || !officers || lobby === officers)
@@ -133,23 +134,28 @@ export class GuildAccess {
       await currentGuard();
       const session = await this.discord.begin(guildId, roles);
       const snapshot = session.snapshot;
+      // Each refusal names the room it concerns, so a reply can point at the channel.
       const validateRooms = (value: AccessSnapshot): void => {
-        if (value.excludedChannelIds.includes(lobby) || value.excludedChannelIds.includes(officers))
+        const reserved = [lobby, officers].find((id) => value.excludedChannelIds.includes(id));
+        if (reserved)
           throw new Failure(
             "blocked",
             "An onboarding binding now targets a reserved community channel. Run /setup with a separate officer-chat channel.",
+            0,
+            { kind: "resource", resource: "channel", id: reserved },
           );
-        if (
-          !value.channels.some(
-            (channel) => channel.id === lobby && channel.type === ChannelType.GuildText,
-          ) ||
-          !value.channels.some(
-            (channel) => channel.id === officers && channel.type === ChannelType.GuildText,
-          )
-        )
+        const missing = [lobby, officers].find(
+          (id) =>
+            !value.channels.some(
+              (channel) => channel.id === id && channel.type === ChannelType.GuildText,
+            ),
+        );
+        if (missing)
           throw new Failure(
             "blocked",
             "An onboarding room is missing. Run /setup to recreate or select it.",
+            0,
+            { kind: "resource", resource: "channel", id: missing },
           );
       };
       validateRooms(snapshot);

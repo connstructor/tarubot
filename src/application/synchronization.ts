@@ -7,6 +7,7 @@ import {
   type AccessFacts,
   type Actor,
 } from "../domain/policy.js";
+import { effectsPaused } from "../domain/failures.js";
 import { Failure, json, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
 import { ensureUser, orm } from "../infrastructure/postgres/database.js";
@@ -35,6 +36,7 @@ import {
   type Job,
 } from "../jobs/queue.js";
 import type { GuildRecord, MemberView } from "./records.js";
+import type { RefreshResult } from "./results.js";
 import type { Service } from "./service.js";
 import { accessFacts } from "./access-facts.js";
 
@@ -63,11 +65,30 @@ function appliedHistory(entry: AppliedDelta | null): SQL {
 export class Synchronization {
   /** The application facade supplies persistence, external ports, and validated timing settings. */
   constructor(readonly app: Service) {}
-  /** Coalesce shared acquisition or cached reconciliation and record an inspectable request run. */
-  async refresh(actor: Actor, force: boolean): Promise<unknown> {
-    if (force) authorize(actor, actor.guildId, "officer");
+  /**
+   * Coalesce shared acquisition or cached reconciliation and record an inspectable request run.
+   * The result says whether the cached roster was used, the roster interval behind that choice,
+   * and whether Discord changes are paused.
+   */
+  async refresh(actor: Actor, force: boolean): Promise<RefreshResult> {
+    if (force) {
+      if (!actor.officer)
+        throw new Failure(
+          "forbidden",
+          "Only officers can force a refresh. Run /refresh without force: it refreshes when the roster is due and otherwise uses recent data.",
+          0,
+          { kind: "scope", scope: "officer" },
+        );
+      authorize(actor, actor.guildId, "officer");
+    }
     const guild = await this.app.guild(actor);
-    if (!guild.fc_id) throw new Failure("setup", "Link an FC first.");
+    if (!guild.fc_id)
+      throw new Failure(
+        "setup",
+        "There's no FC roster to refresh until an officer links the Free Company.",
+        0,
+        { kind: "setup", missing: "fc" },
+      );
     const [fc] = await this.app.db.orm
       .select({
         last_successful_roster_at: t.freeCompanies.last_successful_roster_at,
@@ -98,13 +119,17 @@ export class Synchronization {
         .insert(t.syncRuns)
         .values({ guild_id: guild.id, requester_id: actor.userId, job_id: job })
         .returning({ id: t.syncRuns.id });
-      if (run) await db.insert(t.syncRunJobs).values({ run_id: run.id, job_id: job });
+      if (!run) throw new Error("Missing sync run");
+      await db.insert(t.syncRunJobs).values({ run_id: run.id, job_id: job });
       return {
-        runId: run?.id,
+        runId: run.id,
         status: "queued",
         cached: !force && !!fresh,
+        forced: force,
         cooldownSeconds: Math.ceil(cooldown),
+        intervalSeconds: this.app.config.ROSTER_INTERVAL_SECONDS,
         lastSuccessfulRosterAt: fc?.last_successful_roster_at ?? null,
+        effectsMode: this.app.effectsMode(guild),
       };
     });
   }
@@ -643,7 +668,7 @@ export class Synchronization {
         };
       }
       if (!guild.effects_enabled || !this.app.config.ENABLE_EFFECTS)
-        throw new Failure("disabled", "Effects are disabled pending activation.");
+        throw effectsPaused(this.app.config.ENABLE_EFFECTS);
       await guard();
       const [current] = await db
         .select({ revision: t.guilds.revision })

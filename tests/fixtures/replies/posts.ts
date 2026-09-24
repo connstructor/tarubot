@@ -1,0 +1,188 @@
+/**
+ * The channel post and DM catalog: one case per ledger post kind (approved ledger#29 and #32,
+ * reply specs ledger#30 and #31) and per review message and decision DM kind (reply specs
+ * guests#29–#32 and the legacy review gap). Each renders a stored record the way the gateway
+ * renders it for the ledger.notify, guest.review and guest.dm jobs. The samples are exported so
+ * the gateway tests send the same posts through the REST recorder.
+ */
+import type { ApplicationRecord, LedgerPostView } from "../../../src/application/records.js";
+import {
+  decisionDm,
+  guestReviewPost,
+  type GuestPostKind,
+} from "../../../src/discord/presenters/guests.js";
+import { ledgerPost, type LedgerPostKind } from "../../../src/discord/presenters/ledger.js";
+import { GUEST_ID, GUILD_ID, OFFICER_ID } from "../results.js";
+import { APPLICATION_ID } from "./guests.js";
+import { E41, E42, E43, ENTRY_IDS, entry } from "./ledger.js";
+import type { ReplyCatalog } from "./index.js";
+
+/** The approved deposit post (ledger#29): entry #41, recorded by a member. */
+export const DEPOSIT_POST: LedgerPostView = { entry: E41, correctionSequence: null };
+/** The withdrawal post (reply spec ledger#30): entry #42, recorded by an officer. */
+export const WITHDRAW_POST: LedgerPostView = { entry: E42, correctionSequence: null };
+/** The opening balance post (reply spec ledger#31): entry #1, unsigned and without a Balance. */
+export const OPENING_POST: LedgerPostView = {
+  entry: entry({
+    id: ENTRY_IDS.opening,
+    sequence: 1n,
+    operation: "initialize",
+    delta: 95_000_000n,
+    balance: 95_000_000n,
+    actor_id: OFFICER_ID,
+    note: "Counted the FC chest after the weekly reset",
+    event_at: new Date(1_790_139_600_000),
+  }),
+  correctionSequence: null,
+};
+/** The approved correction post (ledger#32): entry #43 corrects #42. */
+export const CORRECTION_POST: LedgerPostView = { entry: E43, correctionSequence: 42n };
+
+/** A time as the reply specs' <t:…> values write it. */
+const unix = (seconds: number): Date => new Date(seconds * 1_000);
+
+/** The review channel the reply specs' review message is posted in. */
+export const REVIEW_CHANNEL = "678901234567890123";
+
+/** The reply specs' application (guests#29–#32); overrides state only what a case varies. */
+export const application = (overrides: Partial<ApplicationRecord> = {}): ApplicationRecord => ({
+  id: APPLICATION_ID,
+  guild_id: GUILD_ID,
+  user_id: GUEST_ID,
+  joined_at: unix(1_789_905_600),
+  created_at: unix(1_790_150_400),
+  state: "pending",
+  channel_id: REVIEW_CHANNEL,
+  message_id: null,
+  reviewer_id: null,
+  decided_at: null,
+  reason: null,
+  introduction:
+    "Hi! I play Example Character on Diabolos and met a few of you in a raid party last week.",
+  interest:
+    "I'm looking for a friendly group for weekly content, and an FC member suggested I apply here.",
+  ...overrides,
+});
+
+/** The reply specs' decision time and denial reason. */
+const DECIDED_AT = unix(1_790_164_800);
+const DENIAL = "Please tell us a little more about how you found the Free Company.";
+
+/** Each review state the catalog renders. */
+export const APPLICATIONS = {
+  pending: application(),
+  legacy: application({ introduction: null, interest: null }),
+  approved: application({ state: "approved", reviewer_id: OFFICER_ID, decided_at: DECIDED_AT }),
+  denied: application({
+    state: "denied",
+    reviewer_id: OFFICER_ID,
+    decided_at: DECIDED_AT,
+    reason: DENIAL,
+  }),
+  cancelled: application({ state: "cancelled", decided_at: DECIDED_AT }),
+  superseded: application({ state: "superseded", decided_at: DECIDED_AT }),
+} as const;
+
+/** The default reapply cooldown (GUEST_COOLDOWN_SECONDS), 24 hours. */
+export const COOLDOWN = 86_400;
+
+/** Every post and DM kind, rendered as the gateway renders it. */
+export const POST_CASES = {
+  "post.deposit": {
+    spec: "ledger#29",
+    audience: "channel",
+    tone: "success",
+    title: "Deposit · +10,005,000 gil",
+    timestamp: true,
+    render: () => ledgerPost(DEPOSIT_POST),
+  },
+  "post.withdraw": {
+    spec: "ledger#30 delivered-withdraw",
+    audience: "channel",
+    tone: "info",
+    title: "Withdrawal · −2,500,000 gil",
+    timestamp: true,
+    render: () => ledgerPost(WITHDRAW_POST),
+  },
+  "post.opening": {
+    spec: "ledger#31 delivered-initialize",
+    audience: "channel",
+    tone: "info",
+    title: "Opening balance · 95,000,000 gil",
+    timestamp: true,
+    render: () => ledgerPost(OPENING_POST),
+  },
+  "post.correction": {
+    spec: "ledger#32",
+    audience: "channel",
+    tone: "warning",
+    title: "Correction · −50,000 gil",
+    timestamp: true,
+    render: () => ledgerPost(CORRECTION_POST),
+  },
+  "review.pending": {
+    spec: "guests#29 pending",
+    audience: "channel",
+    tone: "pending",
+    title: "Guest application",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.pending),
+  },
+  "review.legacy": {
+    spec: null,
+    audience: "channel",
+    tone: "pending",
+    title: "Guest application",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.legacy),
+  },
+  "review.approved": {
+    spec: "guests#30 decided",
+    audience: "channel",
+    tone: "success",
+    title: "Guest application · approved",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.approved),
+  },
+  "review.denied": {
+    spec: "guests#30 decided",
+    audience: "channel",
+    tone: "warning",
+    title: "Guest application · denied",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.denied),
+  },
+  "review.cancelled": {
+    spec: "guests#30 decided",
+    audience: "channel",
+    tone: "neutral",
+    title: "Guest application · cancelled",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.cancelled),
+  },
+  "review.superseded": {
+    spec: "guests#30 decided",
+    audience: "channel",
+    tone: "info",
+    title: "Guest application · no longer needed",
+    timestamp: true,
+    render: () => guestReviewPost(APPLICATIONS.superseded),
+  },
+  "dm.approved": {
+    spec: "guests#31 approved",
+    audience: "member",
+    tone: "success",
+    title: "Your guest application was approved",
+    timestamp: true,
+    render: () =>
+      decisionDm(APPLICATIONS.approved, { cooldownSeconds: COOLDOWN, serverName: null }),
+  },
+  "dm.denied": {
+    spec: "guests#32 denied",
+    audience: "member",
+    tone: "warning",
+    title: "Your guest application was not approved",
+    timestamp: true,
+    render: () => decisionDm(APPLICATIONS.denied, { cooldownSeconds: COOLDOWN, serverName: null }),
+  },
+} as const satisfies ReplyCatalog<LedgerPostKind | GuestPostKind>;

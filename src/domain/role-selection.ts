@@ -11,10 +11,18 @@ export function existingRoleId(
   if (configured && roles.some((role) => role.id === configured)) return configured;
   const names = new Set([normalized(desiredName), normalized(canonicalName)]);
   const matches = roles.filter((role) => names.has(normalized(role.name)));
+  // Guessing between same-named roles could hand access to the wrong one, so the officer picks.
   if (matches.length > 1)
     throw new Failure(
-      "conflict",
-      `Several roles match ${canonicalName}. Select the intended role through /config roles first.`,
+      "ambiguous",
+      `Several roles are named ${canonicalName}. Choose the one to use with /config roles, then run /setup again.`,
+      0,
+      {
+        kind: "matches",
+        resource: "role",
+        name: canonicalName,
+        ids: matches.map((role) => role.id),
+      },
     );
   return matches[0]?.id ?? null;
 }

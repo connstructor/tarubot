@@ -1,16 +1,17 @@
 /** Read-only metadata for the invoking channel. */
-import { ChannelType } from "discord.js";
 import { defineCommand } from "../../bot/command.js";
 import { command } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { channelReply } from "../../discord/presenters/utility.js";
 
 export default defineCommand({
   data: command("channel", "Show this channel's ID, name, and type"),
   execute({ interaction }) {
-    return dataReply({
+    // The channel is resolved from the client cache; an uncached one still has its ID.
+    const channel = interaction.channel;
+    return channelReply({
       id: interaction.channelId,
-      name: interaction.channel && "name" in interaction.channel ? interaction.channel.name : null,
-      type: interaction.channel ? ChannelType[interaction.channel.type] : null,
+      name: channel && "name" in channel && typeof channel.name === "string" ? channel.name : null,
+      type: channel ? channel.type : null,
     });
   },
 });

@@ -8,6 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { type LifecycleOptions, WRITER_LEASE_LOCK } from "../../src/application/lifecycle.js";
+import type { Configuration } from "../../src/config/env.js";
 import { Database, SESSION_OPTIONS } from "../../src/infrastructure/postgres/database.js";
 import {
   eventually,
@@ -41,8 +42,9 @@ describe.skipIf(!url)("database writer lease", () => {
   function writer(
     options: Partial<LifecycleOptions> = {},
     guilds: readonly string[] = [],
+    config: Partial<Configuration> = {},
   ): LifecycleHarness {
-    const created = lifecycleHarness(new Database(confined.toString()), options, guilds);
+    const created = lifecycleHarness(new Database(confined.toString()), options, guilds, config);
     running.push(created);
     return created;
   }
@@ -215,5 +217,113 @@ describe.skipIf(!url)("database writer lease", () => {
       { guild_id: on, kind: "roles.layout", dedupe_key: `role-layout:${on}` },
       { guild_id: off, kind: "reconcile.guild", dedupe_key: `guild:${off}` },
     ]);
+  });
+
+  test("a restart with effects on requeues work parked while they were off, once per dedupe key", async () => {
+    // `live` is activated (its own effects flag on); `waiting` is an imported guild awaiting
+    // activation, whose parked work must keep waiting.
+    const live = "7310000000000000021";
+    const waiting = "7310000000000000022";
+    await admin.query(
+      `INSERT INTO ${SCHEMA}.guilds (id, effects_enabled, role_layout_enabled, access_policy_enabled)
+       VALUES ($1, true, false, false), ($2, false, false, false)`,
+      [live, waiting],
+    );
+    /** Park a job as the dispatcher does while effects are off, created `age` minutes ago. */
+    const park = async (
+      guild: string,
+      kind: string,
+      key: string,
+      age: number,
+      status = "disabled",
+    ) =>
+      (
+        await admin.query<{ id: string }>(
+          `INSERT INTO ${SCHEMA}.jobs (kind, dedupe_key, payload, guild_id, status, attempts,
+             last_error, created_at)
+           VALUES ($1, $2, '{}'::jsonb, $3, $4, 2, 'disabled: Discord effects are disabled pending activation.',
+             now() - $5 * interval '1 minute')
+           RETURNING id::text`,
+          [kind, key, guild, status, age],
+        )
+      )[0]?.id ?? "";
+    // Two parked rows share a key (a repeated /refresh while paused); the newer one survives.
+    const older = await park(live, "reconcile.user", `user:${live}:1`, 30);
+    const newer = await park(live, "reconcile.user", `user:${live}:1`, 10);
+    // The older pass had already applied roles before it was parked (for example, its nickname was
+    // blocked): that `applied` evidence is the only record of what Discord received.
+    const applied = [
+      {
+        generation: 1,
+        add: ["7310000000000000031"],
+        remove: [],
+        status: "applied",
+        at: "2026-09-20T00:00:00.000Z",
+      },
+    ];
+    await admin.query(`UPDATE ${SCHEMA}.jobs SET result = $2::jsonb WHERE id = $1`, [
+      older,
+      JSON.stringify({ applied }),
+    ]);
+    const post = await park(live, "ledger.notify", `ledger:${live}:1`, 20);
+    // Startup's own repair pass replaces a parked one instead of colliding with it.
+    const repair = await park(live, "reconcile.guild", `guild:${live}`, 40);
+    // Blocked work still needs its fix first; the unactivated guild keeps waiting.
+    const blocked = await park(live, "roles.layout", `role-layout:${live}`, 5, "blocked");
+    const held = await park(waiting, "reconcile.user", `user:${waiting}:1`, 5);
+    const state = async () =>
+      new Map(
+        (
+          await admin.query<{
+            id: string;
+            status: string;
+            attempts: number;
+            last_error: string | null;
+            result: unknown;
+          }>(
+            `SELECT id::text, status, attempts, last_error, result FROM ${SCHEMA}.jobs
+             WHERE guild_id IN ($1, $2)`,
+            [live, waiting],
+          )
+        ).map((row) => [row.id, row]),
+      );
+
+    // With effects still off, a restart leaves every parked row alone.
+    const paused = writer({}, [live, waiting]);
+    await paused.lifecycle.prepare();
+    await paused.lifecycle.start();
+    await paused.lifecycle.stop();
+    for (const id of [older, newer, post, repair, held])
+      expect((await state()).get(id)?.status).toBe("disabled");
+
+    const resumed = writer({}, [live, waiting], { ENABLE_EFFECTS: true });
+    await resumed.lifecycle.prepare();
+    await resumed.lifecycle.start();
+    const after = await state();
+    // The newest row per key runs now with a fresh attempt budget and without the stale paused
+    // diagnostic, so it reads `… QUEUED` rather than a retry after a Discord error.
+    for (const id of [newer, post])
+      expect(after.get(id)).toMatchObject({ status: "queued", attempts: 0, last_error: null });
+    // The rows it replaces close as superseded, never as delivered work; a closed reconcile.user
+    // keeps its `applied` list (OPERATIONS.md), and a row without one gains nothing else.
+    expect(after.get(older)).toMatchObject({ status: "succeeded", last_error: null });
+    expect(after.get(older)?.result).toEqual({ skipped: "superseded", applied });
+    expect(after.get(repair)).toMatchObject({ status: "succeeded", last_error: null });
+    expect(after.get(repair)?.result).toEqual({ skipped: "superseded" });
+    expect(after.get(blocked)?.status).toBe("blocked");
+    expect(after.get(held)?.status).toBe("disabled");
+    // Exactly one active repair pass for the guild, and the count (not payloads) is logged.
+    expect(
+      await admin.query(
+        `SELECT status FROM ${SCHEMA}.jobs WHERE dedupe_key = $1 AND status = 'queued'`,
+        [`guild:${live}`],
+      ),
+    ).toEqual([{ status: "queued" }]);
+    expect(resumed.logs).toContainEqual(
+      expect.objectContaining({
+        msg: "Requeued work held while Discord changes were off",
+        requeued: 2,
+      }),
+    );
   });
 });

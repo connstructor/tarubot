@@ -8,7 +8,8 @@ import * as t from "../infrastructure/postgres/schema.js";
 import type { DiscordPort } from "./records.js";
 import { enqueue, layoutGuildRoles, reconcileUser, secureGuildChannels } from "../jobs/queue.js";
 import type { GuildAccess } from "./guild-access.js";
-import type { Service } from "./service.js";
+import type { OfficerOverrideResult, SetupResult } from "./results.js";
+import { fcLinked, type Service } from "./service.js";
 
 /** Extra provisioning capability, separate from the reconciliation/test port. */
 export interface RoleProvisioner extends DiscordPort {
@@ -38,12 +39,15 @@ export class RoleAdministration {
     fcId: string | null,
     officerRank: string | null,
     channels: { lobby: string | null; officers: string | null } = { lobby: null, officers: null },
-  ): Promise<unknown> {
+  ): Promise<SetupResult> {
     authorizeRoleManager(actor);
     prefix = prefix.trim();
     if (prefix.length > 50)
-      throw new Failure("input", "Role prefix must be at most 50 characters.");
-    if (officerRank !== null) officerRank = note(officerRank);
+      throw new Failure("input", "The role prefix can be at most 50 characters.", 0, {
+        kind: "option",
+        option: "prefix",
+      });
+    if (officerRank !== null) officerRank = note(officerRank, "rank");
     const connection = await this.app.db.pool.connect();
     let locked = false;
     try {
@@ -55,16 +59,15 @@ export class RoleAdministration {
           )
         ).rows[0]?.locked ?? false;
       if (!locked)
-        throw new Failure("busy", "Setup is already running for this guild. Retry shortly.");
+        throw new Failure(
+          "busy",
+          "Another /setup for this server is in progress. Try again in a few seconds.",
+        );
       const [previous] = await this.app.db.orm
         .select()
         .from(t.guilds)
         .where(eq(t.guilds.id, actor.guildId));
-      if (fcId && previous?.fc_id && previous.fc_id !== fcId)
-        throw new Failure(
-          "input",
-          "Unlink the current FC explicitly before selecting a different one.",
-        );
+      if (fcId && previous?.fc_id && previous.fc_id !== fcId) throw fcLinked(previous.fc_id);
       await this.access.discord.check(actor.guildId, actor.userId);
       // Setup never changes the role-layout switch. An existing guild keeps its value (an imported
       // guild stays off); a guild first created here gets the column default, which is on. A
@@ -100,7 +103,10 @@ export class RoleAdministration {
         });
       }
       if (new Set(roles.map((role) => role.id)).size !== 4)
-        throw new Failure("input", "The four managed roles must be distinct.");
+        throw new Failure(
+          "input",
+          "Member, Guest, Officer and FC Leader must be four different roles.",
+        );
       const [member, guest, staff, leader] = roles;
       if (!member || !guest || !staff || !leader)
         throw new Error("Incomplete setup role selection");
@@ -140,7 +146,7 @@ export class RoleAdministration {
         )
           throw new Failure(
             "conflict",
-            "Configuration changed during setup. Retry to reuse the created roles.",
+            "Server settings changed during setup, so nothing was saved. Run /setup again; anything already created is reused.",
           );
         const targetFc = fcId ?? current.fc_id;
         for (const role of roles) {
@@ -212,7 +218,9 @@ export class RoleAdministration {
         }
         await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
         // Presentation is opt-in per guild; with the switch off no hoist/position work is queued.
-        if (current.role_layout_enabled) await layoutGuildRoles(client, actor.guildId);
+        const layoutJob = current.role_layout_enabled
+          ? await layoutGuildRoles(client, actor.guildId)
+          : null;
         const accessJob = await secureGuildChannels(client, actor.guildId);
         await audit(client, actor.guildId, actor.userId, "setup", actor.guildId, {
           roles,
@@ -225,15 +233,30 @@ export class RoleAdministration {
           status: "configured",
           roles,
           fcId: targetFc,
+          company: await this.app.company(db, targetFc),
           officerRank: officerRank ?? current.officer_rank_name,
           effects: "queued",
+          effectsMode: this.app.effectsMode(current),
           roleLayout: current.role_layout_enabled
             ? "FC Leader > Officer > Member > Guest; consecutive block; display separately"
             : "disabled: role display and order are left unchanged; enable with /config role_layout enabled:true",
+          roleLayoutEnabled: current.role_layout_enabled,
+          layoutJob,
           lobby: prepared.lobby,
           officerChannel: prepared.officers,
           accessPolicy: "queued",
           accessJob,
+          adopted: adopted.length,
+          // /setup fills these two settings with the officer room only when they were unset.
+          officerNotifications: {
+            id: current.officer_notifications_channel_id ?? prepared.officers.id,
+            defaulted: current.officer_notifications_channel_id === null,
+          },
+          guestApplications: {
+            id: current.guest_application_channel_id ?? prepared.officers.id,
+            defaulted: current.guest_application_channel_id === null,
+          },
+          ledgerChannelId: current.ledger_channel_id,
           instructions:
             "Channel enforcement is queued; inspect /sync status until secured. Configure a ledger channel if needed, then run /config validate.",
         };
@@ -256,9 +279,14 @@ export class RoleAdministration {
    * until its grant arrived. Without a bound role the override confers nothing yet: officer
    * authority needs the bound role (Service.enrichActor), and reconciliation skips an unbound role.
    */
-  async officer(actor: Actor, user: string, grant: boolean, reason: string): Promise<unknown> {
+  async officer(
+    actor: Actor,
+    user: string,
+    grant: boolean,
+    reason: string,
+  ): Promise<OfficerOverrideResult> {
     authorizeRoleManager(actor);
-    reason = note(reason);
+    reason = note(reason, "reason");
     const guild = await this.app.guild(actor);
     // The bound role must still be one this manager and the bot may assign.
     if (guild.officer_role_id)
@@ -269,12 +297,24 @@ export class RoleAdministration {
         grant && guild.access_policy_enabled,
       );
     const member = await this.discord.member(guild.id, user);
+    // Revoking a departed user is allowed (it applies if they rejoin); granting needs a member.
     if (member?.bot || (grant && !member))
-      throw new Failure("input", "Officer grants require a current human guild member.");
+      throw new Failure(
+        "not_found",
+        "That user isn't a current member of this server, or is a bot.",
+        0,
+        { kind: "resource", resource: "member", id: user },
+      );
     return this.app.db.transaction(async (client) => {
       await ensureUser(client, guild.id, user, member?.joinedAt);
+      const db = orm(client);
+      const [previous] = await db
+        .select({ state: t.officerOverrides.state })
+        .from(t.officerOverrides)
+        .where(and(eq(t.officerOverrides.guild_id, guild.id), eq(t.officerOverrides.user_id, user)))
+        .for("update");
       const data = { state: grant ? "granted" : "revoked", actor_id: actor.userId, reason };
-      await orm(client)
+      await db
         .insert(t.officerOverrides)
         .values({ guild_id: guild.id, user_id: user, ...data })
         .onConflictDoUpdate({
@@ -294,6 +334,12 @@ export class RoleAdministration {
       return {
         status: grant ? "granted" : "revoked",
         effects: guild.officer_role_id ? "queued" : "recorded",
+        effectsMode: this.app.effectsMode(guild),
+        user,
+        reason,
+        present: member !== null,
+        previous:
+          previous?.state === "granted" || previous?.state === "revoked" ? previous.state : null,
       };
     });
   }

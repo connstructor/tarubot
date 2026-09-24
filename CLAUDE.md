@@ -54,7 +54,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 
    Record the evidence in docs/VERIFICATION.md, and state changes in docs/OPEN_ITEMS.md and docs/DEV_GUILD.md.
 4. In `test-plans/current.json`, each actor's list must fit in one 1,024-character embed field (`tests/unit/test-session.test.ts`).
-5. Run the checks above, then commit with GPG signing (the key unlocks through the macOS keychain). Push or open PRs only when the owner asks.
+5. Run the checks above, then commit with the configured SSH signing key (`~/.ssh/id_git`, `gpg.format=ssh`; see docs/SESSION_HANDOFF.md). If signing fails, ask the owner; never create an unsigned commit. Push or open PRs only when the owner asks.
 6. Merging to `main` requires a PR, a strict up-to-date `CI result`, signed commits, and the CodeQL gate (no new high-severity security alerts or error-level results). Only merge and squash are allowed. Actions must be pinned to full commit SHAs.
 
 ## DevBot operations

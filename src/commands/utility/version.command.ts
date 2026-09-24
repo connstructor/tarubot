@@ -2,7 +2,7 @@
 import { versionInformationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command } from "../../discord/options.js";
-import { versionReply } from "../../discord/version.js";
+import { versionReply } from "../../discord/presenters/version.js";
 import { DEFAULT_COMMIT_COUNT, MAX_COMMIT_COUNT } from "../../infrastructure/github/client.js";
 
 export default defineCommand({

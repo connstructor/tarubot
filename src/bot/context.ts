@@ -1,5 +1,6 @@
 /** Shared Discord infrastructure supplied to every module, independent of its feature. */
 import type { Client } from "discord.js";
+import type { ReportOptions } from "../domain/failures.js";
 import type { Actor } from "../domain/policy.js";
 import type { Services } from "./services.js";
 
@@ -14,5 +15,9 @@ export interface BotContext {
   readonly resolveActor: (guildId: string, userId: string) => Promise<Actor>;
   /** Optional application authorization for payload-authenticated autocomplete actors. */
   readonly enrichActor?: (actor: Actor) => Promise<Actor>;
-  readonly report: (error: unknown, operation: string) => void;
+  /**
+   * Log a caught error under an operation ID. The router passes the classified level (routine
+   * refusals at info, dependency trouble at warn); other callers keep the error default.
+   */
+  readonly report: (error: unknown, operation: string, options?: ReportOptions) => void;
 }

@@ -51,10 +51,32 @@ export interface MemberView {
   roles: string[];
   bot: boolean;
 }
-/** Presentation input for a persisted review outcome. */
-export interface ReviewMessage {
-  application: ApplicationRecord;
-  content: string;
+/**
+ * What a ledger channel post shows: the immutable entry, and the entry number of the entry an
+ * adjustment corrects (null when it names none). Only persisted values, so every retry of the
+ * same job renders byte-identical JSON and the nonce deduplicates it.
+ */
+export interface LedgerPostView {
+  readonly entry: Pick<
+    EntryRecord,
+    "id" | "sequence" | "operation" | "delta" | "balance" | "actor_id" | "note" | "event_at"
+  >;
+  readonly correctionSequence: bigint | null;
+}
+/**
+ * A channel post as data; the gateway renders it through the reply presenters, so jobs never
+ * build message text. `text` is the documented plain-text exclusion (officer.notify, and the
+ * DevBot smoke check): already escaped by its caller and sent as content.
+ */
+export type PostMessage =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "ledger"; readonly view: LedgerPostView }
+  | { readonly kind: "review"; readonly application: ApplicationRecord };
+/** A direct message as data: the applicant's approval or denial, with the reapply cooldown. */
+export interface DirectMessage {
+  readonly kind: "decision";
+  readonly application: ApplicationRecord;
+  readonly cooldownSeconds: number;
 }
 /** Effect boundary implemented by DiscordGateway and controlled integration-test fixtures. */
 export interface DiscordPort {
@@ -82,15 +104,9 @@ export interface DiscordPort {
     expected: string | null,
   ): Promise<boolean>;
   /** Stable keys identify retries of the same logical notification. */
-  send(
-    guild: string,
-    channel: string,
-    content: string,
-    key: string,
-    application?: ApplicationRecord,
-  ): Promise<string>;
-  /** Repair a deleted review message from its durable application record. */
-  editReview(application: ApplicationRecord, content: string): Promise<string>;
+  send(guild: string, channel: string, message: PostMessage, key: string): Promise<string>;
+  /** Redraw a review message from its durable application record, recreating a deleted one. */
+  editReview(application: ApplicationRecord): Promise<string>;
   /** Best-effort delivery is tracked independently from approval/denial. */
-  dm(user: string, content: string): Promise<void>;
+  dm(user: string, message: DirectMessage): Promise<void>;
 }

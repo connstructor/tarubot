@@ -7,6 +7,7 @@ import {
   type ParseRequest,
 } from "../../src/infrastructure/nodestone/protocol.js";
 import { Failure } from "../../src/domain/values.js";
+import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
 
 // Real bundled workers have slower cold starts in cross-architecture image builds.
 const workerTestTimeout = 30000;
@@ -145,4 +146,58 @@ describe("pinned source-built Nodestone under Bun", () => {
     },
     workerTestTimeout,
   );
+});
+
+describe("Lodestone failures name the page they concern", () => {
+  test("missing profiles and FCs are not_found with their resource; a missing biography keeps invalid_response", async () => {
+    // The sidecar answers every operation with its failure envelope; profiles with a body but no
+    // biography model a selector the parser could not find.
+    let failing = true;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const input = requestSchema.parse(await request.json());
+        if (failing) return Response.json({ ok: false, code: "not_found", retryAfter: 0 });
+        return Response.json({
+          ok: true,
+          data: {
+            ID: input.operation === "profile" ? input.id : "1",
+            Name: "Example Character",
+            World: "Diabolos",
+            DC: "Crystal",
+            FreeCompany: null,
+          },
+        });
+      },
+    });
+    const adapter = new Nodestone(`http://localhost:${server.port}`);
+    try {
+      await expect(adapter.profile("99000001")).rejects.toMatchObject({
+        code: "not_found",
+        detail: { kind: "resource", resource: "character", id: "99000001" },
+      });
+      await expect(adapter.company(fcId)).rejects.toMatchObject({
+        code: "not_found",
+        detail: { kind: "resource", resource: "freecompany", id: fcId },
+      });
+      await expect(adapter.search("Example Character", "Diabolos")).rejects.toMatchObject({
+        code: "not_found",
+        detail: {
+          kind: "resource",
+          resource: "character",
+          name: "Example Character",
+          world: "Diabolos",
+        },
+      });
+      failing = false;
+      // The claim stays valid, so this is still the retryable invalid_response code.
+      await expect(adapter.profile("99000001", true)).rejects.toMatchObject({
+        code: "invalid_response",
+        detail: { kind: "resource", resource: "biography", id: "99000001" },
+      });
+    } finally {
+      adapter.stop();
+      await server.stop(true);
+    }
+  });
 });

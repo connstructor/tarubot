@@ -7,6 +7,7 @@ import * as t from "../infrastructure/postgres/schema.js";
 import type { Service } from "../application/service.js";
 import type { Synchronization } from "../application/synchronization.js";
 import type { GuildAccess } from "../application/guild-access.js";
+import { effectsPaused } from "../domain/failures.js";
 import { Failure } from "../domain/values.js";
 import { managedRoleOrder } from "../domain/role-layout.js";
 import { enqueue, reconcileUser, type Job } from "./queue.js";
@@ -104,7 +105,7 @@ export function dispatcher(
     if (job.kind === "roles.layout" && !guild.role_layout_enabled)
       return { skipped: "layout disabled" };
     if (!app.config.ENABLE_EFFECTS || !guild.effects_enabled)
-      throw new Failure("disabled", "Discord effects are disabled pending activation.");
+      throw effectsPaused(app.config.ENABLE_EFFECTS);
     if (job.kind === "roles.layout") {
       // Setup and layout share a session lock, keeping network operations outside transactions.
       const client = await app.db.pool.connect();
@@ -158,6 +159,9 @@ export function dispatcher(
     await guard();
     await app.db.orm.insert(t.deliveryAttempts).values({ job_id: job.id, status: "started" });
     let messageId: string | undefined;
+    // The channel a ledger post went to, kept in the job result: the ledger channel can be rebound
+    // later, and a jump link must pair the message with the channel it was actually sent to.
+    let channelId: string | undefined;
     try {
       if (job.kind === "ledger.notify") {
         // The immutable entry is authoritative; retrying this job never changes money again.
@@ -188,11 +192,27 @@ export function dispatcher(
           throw new Failure("ordered", "An earlier ledger notification is still pending.", 30);
         if (!guild.ledger_channel_id)
           throw new Failure("blocked", "Configure a ledger notification channel.");
-        const content = `Ledger ${entry.operation} • #${entry.sequence}\nEntry: ${entry.id}\nActor: ${entry.actor_id ?? "legacy import"}\nDelta: ${entry.delta} gil • Balance: ${entry.balance} gil\nTime: ${entry.event_at.toISOString()}\n${escapeMarkdown(entry.note).slice(0, 1300)}`;
+        // A correction names the entry it fixes by number ('Corrects #42'): one read on the same
+        // account, so an entry ID from elsewhere can never be shown.
+        let correctionSequence: bigint | null = null;
+        if (entry.correction_id) {
+          const [corrected] = await app.db.orm
+            .select({ sequence: t.ledgerEntries.sequence })
+            .from(t.ledgerEntries)
+            .where(
+              and(
+                eq(t.ledgerEntries.id, entry.correction_id),
+                eq(t.ledgerEntries.account_id, entry.account_id),
+              ),
+            );
+          correctionSequence = corrected?.sequence ?? null;
+        }
+        // The gateway renders the post from this stored data; the nonce key is unchanged.
+        channelId = guild.ledger_channel_id;
         messageId = await app.discord.send(
           guild.id,
           guild.ledger_channel_id,
-          content,
+          { kind: "ledger", view: { entry, correctionSequence } },
           `ledger:${entry.id}`,
         );
       } else if (job.kind === "guest.review" || job.kind === "guest.dm") {
@@ -208,10 +228,19 @@ export function dispatcher(
             ),
           );
         if (!application) throw new Failure("invalid_job", "Application unavailable.");
-        const content = `Guest application ${application.id}\nGuild: ${guild.id}\nApplicant: ${application.user_id}\nSubmitted: ${application.created_at.toISOString()}\nOutcome: ${application.state}${application.reason ? `\nReason: ${escapeMarkdown(application.reason).slice(0, 1200)}` : ""}`;
-        if (job.kind === "guest.dm") await app.discord.dm(application.user_id, content);
-        else {
-          messageId = await app.discord.editReview(application, content);
+        // The gateway renders the review message and the DM from the stored application.
+        if (job.kind === "guest.dm") {
+          // Only a decision sends a DM (decide() queues it for approvals and denials, which are
+          // final), so any other state is a corrupt job rather than something to announce.
+          if (application.state !== "approved" && application.state !== "denied")
+            throw new Failure("invalid_job", "Only approved or denied applications send a DM.");
+          await app.discord.dm(application.user_id, {
+            kind: "decision",
+            application,
+            cooldownSeconds: app.config.GUEST_COOLDOWN_SECONDS,
+          });
+        } else {
+          messageId = await app.discord.editReview(application);
           await guard();
           await app.db.orm
             .update(t.guestApplications)
@@ -227,10 +256,13 @@ export function dispatcher(
         if (!guild.officer_notifications_channel_id)
           return { skipped: "officer notifications unconfigured" };
         const { message } = z.object({ message: z.string() }).parse(job.payload);
+        // Officer notices stay escaped plain text in 2.14.0, a documented exclusion from the
+        // embed posts: 2.15.0 (OPS-11) redesigns them. That is a deferral, not a limitation, since
+        // payload_version 1 can gain optional structured fields that this parser ignores today.
         messageId = await app.discord.send(
           guild.id,
           guild.officer_notifications_channel_id,
-          escapeMarkdown(message),
+          { kind: "text", text: escapeMarkdown(message) },
           `${job.id}:${job.generation}`,
         );
       } else throw new Failure("invalid_job", "Unknown job kind.");
@@ -243,7 +275,12 @@ export function dispatcher(
       await app.db.orm
         .insert(t.deliveryAttempts)
         .values({ job_id: job.id, status: "delivered", message_id: messageId ?? null });
-      return { status: "delivered", messageId: messageId ?? null };
+      // The queue stores this object as jobs.result, so no column is needed for the channel.
+      return {
+        status: "delivered",
+        messageId: messageId ?? null,
+        ...(channelId ? { channelId } : {}),
+      };
     } catch (error) {
       // Delivery failure is operational history; the application decision remains committed.
       await app.db.orm.insert(t.deliveryAttempts).values({

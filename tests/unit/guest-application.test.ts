@@ -1,4 +1,5 @@
 /** Real SDK form acknowledgements and boundary validation need no Discord credentials. */
+import { createHash } from "node:crypto";
 import { expect, spyOn, test } from "bun:test";
 import {
   ClientUser,
@@ -6,12 +7,15 @@ import {
   DiscordAPIError,
   InteractionResponseType,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
 } from "discord.js";
+import type { APIEmbed } from "discord.js";
 import { applicationKey } from "../../src/application/keys.js";
 import { Service } from "../../src/application/service.js";
 import { defineCommand } from "../../src/bot/command.js";
 import type { BotContext } from "../../src/bot/context.js";
+import type { ReportOptions } from "../../src/domain/failures.js";
 import { defineComponent } from "../../src/bot/component.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
@@ -21,8 +25,8 @@ import {
   guestApplicationInput,
 } from "../../src/domain/guest-application.js";
 import { Failure } from "../../src/domain/values.js";
+import { reply, type Presented } from "../../src/discord/presenters/reply.js";
 import {
-  guestApplicationEmbeds,
   guestApplicationModal,
   guestApplicationSubmission,
 } from "../../src/discord/guest-application.js";
@@ -59,6 +63,16 @@ function context(
       return { guildId, userId, officer: false, manageRoles: false };
     },
   };
+}
+
+/** The single embed a recorded response (a callback's data or a webhook edit) carries. */
+function embedOf(body: unknown): APIEmbed {
+  const data =
+    typeof body === "object" && body !== null && "data" in body && body.data ? body.data : body;
+  const embeds =
+    typeof data === "object" && data !== null && "embeds" in data ? data.embeds : undefined;
+  if (!Array.isArray(embeds) || embeds.length !== 1) throw new Error("Expected one embed");
+  return embeds[0] as APIEmbed;
 }
 
 test("apply opens labeled inputs as the first acknowledgement for raw and cached guilds", async () => {
@@ -123,7 +137,7 @@ test("apply opens labeled inputs as the first acknowledgement for raw and cached
   }
 });
 
-test("apply refuses a closed server before the form opens, with one ephemeral reply", async () => {
+test("apply refuses a closed server before the form opens, with one ephemeral embed", async () => {
   const fixture = interactionFixture();
   const checked: string[] = [];
   const reports: unknown[] = [];
@@ -143,20 +157,44 @@ test("apply refuses a closed server before the form opens, with one ephemeral re
     const interaction = fixture.slash();
     await router.handle(interaction);
     expect(checked).toEqual(["100"]);
-    // The refusal is the only acknowledgement: no modal, no defer, and no operation suffix.
+    // The refusal is the only acknowledgement: no modal, no defer, and no Code · Ref footer.
     expect(interaction.deferred).toBe(false);
     expect(interaction.replied).toBe(true);
     expect(fixture.requests).toHaveLength(1);
     expect(fixture.requests[0]?.body).toMatchObject({
       type: InteractionResponseType.ChannelMessageWithSource,
       data: {
-        content: GUEST_APPLICATIONS_CLOSED,
+        content: "",
+        components: [],
         flags: MessageFlags.Ephemeral,
         allowed_mentions: { parse: [] },
       },
     });
+    // The approved guests#21 card: info tone, the shared text and the player hint, no footer.
+    const card = embedOf(fixture.requests[0]?.body);
+    expect(card).toMatchObject({
+      title: "Guest applications are closed",
+      description: GUEST_APPLICATIONS_CLOSED,
+      fields: [
+        {
+          name: "Already play FFXIV?",
+          value:
+            "Register your character with /claim. Registered players get Guest access automatically.",
+        },
+      ],
+    });
+    expect(card.footer).toBeUndefined();
+    expect(card.timestamp).toBeUndefined();
     // A closed server is an expected state, not an operation failure to report.
     expect(reports).toHaveLength(0);
+    // Someone with Manage Server also sees the commands that open applications.
+    fixture.member.permissions = PermissionFlagsBits.ManageGuild.toString();
+    await router.handle(fixture.slash());
+    expect(embedOf(fixture.requests.at(-1)?.body).fields?.map((field) => field.name)).toEqual([
+      "Already play FFXIV?",
+      "Open applications",
+    ]);
+    fixture.member.permissions = "0";
     // The observed test guild's public-response override applies to the refusal as to any reply.
     const observed = new InteractionRouter(
       { ...runtime, publicResponseGuildId: "100" },
@@ -166,7 +204,7 @@ test("apply refuses a closed server before the form opens, with one ephemeral re
     await observed.handle(fixture.slash());
     expect(fixture.requests.at(-1)?.body).toMatchObject({
       type: InteractionResponseType.ChannelMessageWithSource,
-      data: { content: GUEST_APPLICATIONS_CLOSED },
+      data: { embeds: [{ title: "Guest applications are closed" }] },
     });
     expect(fixture.requests.at(-1)?.body).not.toMatchObject({
       data: { flags: MessageFlags.Ephemeral },
@@ -176,10 +214,10 @@ test("apply refuses a closed server before the form opens, with one ephemeral re
   }
 });
 
-test("a failing, slow or late-rejecting pre-modal check still opens the form and is reported", async () => {
+test("a failing, slow, invalid or late-rejecting pre-modal check still opens the form and warns", async () => {
   const fixture = interactionFixture();
-  const reports: unknown[] = [];
-  let check: () => Promise<string | null> = async () => {
+  const reports: { error: unknown; options: ReportOptions | undefined }[] = [];
+  let check: () => Promise<Presented | null> = async () => {
     throw new Error("Injected availability read failure");
   };
   // A generic modal command exercises the router contract independently of /apply.
@@ -190,7 +228,11 @@ test("a failing, slow or late-rejecting pre-modal check still opens the form and
   });
   // A 20 ms budget stands in for the production acknowledgement budget.
   const router = new InteractionRouter(
-    { ...context(fixture), report: (error: unknown) => reports.push(error) },
+    {
+      ...context(fixture),
+      report: (error: unknown, _operation: string, options?: ReportOptions) =>
+        reports.push({ error, options }),
+    },
     new Map([[gated.name, gated]]),
     new Map(),
     20,
@@ -206,17 +248,24 @@ test("a failing, slow or late-rejecting pre-modal check still opens the form and
       );
     await router.handle(fixture.slash("gated-form"));
     await Bun.sleep(60);
+    // An untyped module returning plain text (the pre-2.14.0 contract) also fails open.
+    check = async () => "closed" as unknown as Presented;
+    await router.handle(fixture.slash("gated-form"));
     expect(fixture.requests.map((request) => request.body)).toMatchObject([
       { type: InteractionResponseType.Modal },
       { type: InteractionResponseType.Modal },
       { type: InteractionResponseType.Modal },
+      { type: InteractionResponseType.Modal },
     ]);
-    expect(reports).toHaveLength(3);
-    expect(reports[0]).toMatchObject({ message: "Injected availability read failure" });
-    for (const overrun of reports.slice(1)) {
-      expect(overrun).toBeInstanceOf(Failure);
-      expect(overrun).toMatchObject({ code: "unavailable" });
+    expect(reports).toHaveLength(4);
+    expect(reports[0]?.error).toMatchObject({ message: "Injected availability read failure" });
+    for (const overrun of reports.slice(1, 3)) {
+      expect(overrun.error).toBeInstanceOf(Failure);
+      expect(overrun.error).toMatchObject({ code: "unavailable" });
     }
+    // Every gate problem is dependency trouble, reported at warn with the command's scope.
+    for (const report of reports)
+      expect(report.options).toEqual({ level: "warn", scope: "/gated-form" });
   } finally {
     await fixture.close();
   }
@@ -239,10 +288,22 @@ test("form opening rejects bots, DMs, restricted guilds and missing join data wi
         new Map([[apply.name, apply]]),
         new Map(),
       );
-      await router.handle(fixture.slash());
+      const interaction = fixture.slash();
+      await router.handle(interaction);
       expect(fixture.requests.at(-1)?.body).toMatchObject({
         type: InteractionResponseType.ChannelMessageWithSource,
         data: { flags: MessageFlags.Ephemeral, allowed_mentions: { parse: [] } },
+      });
+      // Member-safe cards, each ending with its code and the interaction reference.
+      const expected = {
+        bot: ["Not available here", "forbidden"],
+        dm: ["Not available here", "forbidden"],
+        scope: ["Test instance", "forbidden"],
+        join: ["Please reopen /apply", "stale"],
+      }[failure];
+      expect(embedOf(fixture.requests.at(-1)?.body)).toMatchObject({
+        title: expected?.[0],
+        footer: { text: `Code ${expected?.[1]} · Ref ${interaction.id}` },
       });
     }
     expect(fixture.requests).toHaveLength(4);
@@ -264,7 +325,7 @@ test("modal submissions defer, resolve a fresh actor and enforce user/guild/type
       const input = guestApplicationInput.parse(guestApplicationSubmission(interaction, actor));
       expect(input.joinedAt.toISOString()).toBe(fixture.member.joinedAt);
       executions++;
-      return { content: "Accepted" };
+      return reply({ tone: "success", title: "Accepted" });
     },
   });
   try {
@@ -286,9 +347,12 @@ test("modal submissions defer, resolve a fresh actor and enforce user/guild/type
       `${id}:extra`,
       "guest-apply:bad",
     ]) {
-      await router.handle(fixture.submit(forged));
-      expect(fixture.requests.at(-1)?.body).toMatchObject({
-        content: expect.stringContaining("Reopen /apply"),
+      const interaction = fixture.submit(forged);
+      await router.handle(interaction);
+      expect(embedOf(fixture.requests.at(-1)?.body)).toMatchObject({
+        title: "Please reopen /apply",
+        description: expect.stringContaining("This form belongs to someone else"),
+        footer: { text: `Code stale · Ref ${interaction.id}` },
       });
     }
     expect(executions).toBe(1);
@@ -305,7 +369,7 @@ test("officer component authorization still happens after fresh lookup, before a
     access: "officer",
     execute: () => {
       executions++;
-      return { content: "Unexpected" };
+      return reply({ tone: "info", title: "Unexpected" });
     },
   });
   try {
@@ -314,11 +378,15 @@ test("officer component authorization still happens after fresh lookup, before a
       new Map(),
       new Map([[review.prefix, review]]),
     );
-    await router.handle(fixture.button("guest:approve:fixture"));
+    const press = fixture.button("guest:approve:fixture");
+    await router.handle(press);
     expect(executions).toBe(0);
     expect(fixture.requests[0]?.body).toMatchObject({ data: { flags: MessageFlags.Ephemeral } });
-    expect(fixture.requests.at(-1)?.body).toMatchObject({
-      content: expect.stringContaining("not authorized"),
+    // The guest-decision wording names what the member tried, in the officer-refusal card.
+    expect(embedOf(fixture.requests.at(-1)?.body)).toMatchObject({
+      title: "Officers only",
+      description: "Only officers can decide guest access. Nothing was changed.",
+      footer: { text: `Code forbidden · Ref ${press.id}` },
     });
   } finally {
     await fixture.close();
@@ -345,37 +413,11 @@ test("answer limits reject blank, oversized and PostgreSQL-incompatible text", (
   );
 });
 
-test("review embeds escape full answers and identify legacy applications without fabricated text", () => {
-  const application: ApplicationRecord = {
-    id: "ca875e74-d944-4ff7-aab9-970314715306",
-    guild_id: "100",
-    user_id: "400",
-    joined_at: new Date(),
-    created_at: new Date(),
-    state: "pending",
-    channel_id: "200",
-    message_id: null,
-    reviewer_id: null,
-    decided_at: null,
-    reason: null,
-    introduction: "*visitor* ".repeat(30),
-    interest: "_friends_ ".repeat(30),
-  };
-  const review = guestApplicationEmbeds(application)[0]?.toJSON();
-  expect(review?.fields).toEqual([
-    { name: "Introduce yourself", value: "\\*visitor\\* ".repeat(30) },
-    { name: "Why join this server?", value: "\\_friends\\_ ".repeat(30) },
-  ]);
-  const legacy = guestApplicationEmbeds({
-    ...application,
-    introduction: null,
-    interest: null,
-  })[0]?.toJSON();
-  expect(legacy?.description).toContain("before application forms");
-  expect(legacy?.fields ?? []).toHaveLength(0);
-});
+/** The gateway's nonce for a durable post key: a short decimal from the key's SHA-256. */
+const nonceOf = (key: string): string =>
+  BigInt(`0x${createHash("sha256").update(key).digest("hex").slice(0, 15)}`).toString();
 
-test("deleted review repair and later edits keep answer embeds and current decision controls", async () => {
+test("deleted review repair and later edits send one review embed, clear content and keep controls", async () => {
   const gateway = new DiscordGateway();
   const writes: unknown[] = [];
   const application: ApplicationRecord = {
@@ -447,23 +489,37 @@ test("deleted review repair and later edits keep answer embeds and current decis
   });
   try {
     await gateway.client.guilds.fetch("100");
-    expect(await gateway.editReview(application, "Pending review")).toBe("222");
+    // The stored message is gone (10008), so the repair posts a new one; the later decision
+    // redraws that message in place.
+    expect(await gateway.editReview(application)).toBe("222");
     expect(
-      await gateway.editReview(
-        { ...application, message_id: "222", state: "approved" },
-        "Approved review",
-      ),
+      await gateway.editReview({
+        ...application,
+        message_id: "222",
+        state: "approved",
+        reviewer_id: "300",
+        decided_at: new Date(),
+      }),
     ).toBe("222");
     expect(writes).toHaveLength(2);
-    for (const [index, body] of writes.entries())
+    // The repair keeps the stable review:<id> nonce key, so a retried repair deduplicates.
+    expect(writes[0]).toMatchObject({
+      nonce: nonceOf(`review:${application.id}`),
+      enforce_nonce: true,
+    });
+    for (const [index, body] of writes.entries()) {
+      // One embed, and content '' so a pre-2.14.0 message's text is cleared on edit.
       expect(body).toMatchObject({
+        content: "",
         allowed_mentions: { parse: [] },
         embeds: [
           {
-            fields: [
+            title: index === 0 ? "Guest application" : "Guest application · approved",
+            footer: { text: `Application ${application.id}` },
+            fields: expect.arrayContaining([
               { name: "Introduce yourself", value: application.introduction },
               { name: "Why join this server?", value: application.interest },
-            ],
+            ]),
           },
         ],
         components: [
@@ -475,6 +531,8 @@ test("deleted review repair and later edits keep answer embeds and current decis
           },
         ],
       });
+      expect(embedOf(body)).toBeDefined();
+    }
   } finally {
     permission.mockRestore();
     get.mockRestore();

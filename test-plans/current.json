@@ -1,23 +1,27 @@
 {
-  "title": "Session: 2.13.0 launch policy on DevBot",
-  "objective": "Validate version 2.13.0 on schema 005: the role-layout switch, the multi-character union with onboarding-independent registered Guest, closed guest applications, officer grants before binding, and the deployment-guard refusals, while keeping DevBot's existing roles, layout and access.",
+  "title": "Session: 2.14.0 embed replies instead of JSON",
+  "objective": "Validate 2.14.0 on DevBot: every command, button and notice answers with one house-style embed instead of a JSON dump. Errors end with Code · Ref matching the bot log, member views hide job and entry IDs, officer views add delivery detail, and nothing pings anyone. A second pass with Discord changes paused checks what imported guilds show at launch. Replies are public here to compare with the approved mockups.",
   "user": [
-    "Deploy 2.13.0: stopped-writer backup, restore rehearsal with `migrate.js --restore-rehearsal`, migration 005, guild command registration.",
-    "Run `/config show` and `/config validate`; role layout should read on.",
-    "As a non-manager officer, try `/config role_layout enabled:false` (refused); as owner, turn it off, `/refresh`, confirm roles keep order, then turn it back on.",
-    "With `/assign` (numeric IDs), link an FC and a non-FC character to one test user (Member only), then unassign the FC one (Guest).",
-    "`/config guest_applications clear:true`, then `/apply` as a visitor: refused before the form opens.",
-    "`/guest revoke` then `/guest grant` the test user; revocation must survive `/refresh`."
+    "Deploy 2.14.0 (no migration) and register commands; run `/version`, `/ping`, `/channel`, `/config show` and `/config validate`.",
+    "`/claim` a test character, `/verify` before and after publishing the token, then `/characters`, `/main`, `/nickname enabled:true` and `/unclaim`.",
+    "`/ledger deposit` as a member; as an officer, an oversized then a valid `/ledger withdraw`; then `/ledger balance` and `/ledger history` with Older.",
+    "`/guest status` as member and as officer with member:, `/guest grant`, `/guest revoke`; clear guest_applications, try `/apply`, then restore it.",
+    "As a non-officer try `/config show`, `/ledger withdraw` and `/characters member:` for someone else; send a blank note and a bad run_id.",
+    "`/refresh`, then `/sync status` as member and officer; as officer open Full details (JSON).",
+    "Paused pass: restart with `ENABLE_EFFECTS=false`, repeat `/nickname`, `/guest grant` and `/refresh`, run `/sync status` and `/config validate`, then restore effects."
   ],
   "assistant": [
-    "Verify schema 005 rows (layout on, grandfather marker empty), command inventory via `commands.js list`, and startup layout convergence.",
-    "Confirm guard refusals: `register.js --global`, and `preview.js`/`activate.js` for the production guild under the DevBot env.",
-    "Record backup, migration time, job and audit IDs, and readbacks."
+    "Compare each reply with the approved mockups: title, tone color, fields, footer and buttons. Flag any JSON, raw UUID in a member view, ISO time or parsed mention.",
+    "Match every error's Ref to the log `operation` and its Code to the logged `code`; confirm no stack, SQL or token text reached Discord.",
+    "Read back the ledger channel posts and the officer-chat review message: one embed, no mentions, full entry ID present.",
+    "Paused pass: receipts are the pending \"Saved, Discord changes paused\" card with `‖ PAUSED`, never QUEUED or \"shortly\"; sync views show paused work (none once effects return); /config validate warns \"[WARN] Disabled for this deployment\" (ENABLE_EFFECTS=false is deployment_disabled; DevBot has no unactivated guild and no worker may use tarubot_rehearsal, so the \"ready for activation\" verdict of configuration#9 is covered by the unit case configuration/validate.ready).",
+    "Record deviations with command, audience and message ID in docs/DEV_GUILD.md, fix them, and re-run the affected step."
   ],
   "bot": [
-    "Run compiled version 2.13.0 behind the single-writer database lease on schema 005.",
-    "Grant Guest to linked non-FC users in every guild and Member for any FC character; gate role layout per guild.",
-    "Refuse /apply before the modal when applications are closed; keep channel visibility tied to onboarding.",
-    "Post this responsibility-separated session plan in the configured development channel."
+    "Run compiled 2.14.0 on schema 005 with the same decisions as 2.13.0; held work now resumes when the bot restarts with effects on.",
+    "Answer each interaction with one house-style embed, public in this test guild and ephemeral elsewhere, with no parsed mentions.",
+    "Post ledger entries and decision DMs as embeds and move review messages to one embed on their next update; officer notices stay plain text until 2.15.0.",
+    "Hold Discord changes during the paused pass, then requeue the held work and reconcile the guild again when it restarts with effects on.",
+    "Post this responsibility-separated session plan in #chat."
   ]
 }

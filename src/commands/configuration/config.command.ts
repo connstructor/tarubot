@@ -1,8 +1,20 @@
-/** Configuration command group: its schema and dispatch remain together as one feature. */
+/**
+ * Configuration command group: its schema and dispatch remain together as one feature. Every
+ * subcommand answers with its configuration presenter; failures reach the router's failure
+ * presenter unchanged.
+ */
+import { ChannelType } from "discord.js";
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import {
+  changeReply,
+  fcUnlinkReply,
+  healthReply,
+  officerRankReply,
+  roleLayoutReply,
+  showReply,
+} from "../../discord/presenters/configuration.js";
 import { authorize } from "../../domain/policy.js";
 import { Failure, lodestoneId } from "../../domain/values.js";
 
@@ -79,7 +91,13 @@ for (const name of ["ledger", "officer_notifications", "guest_applications"])
     sub
       .setName(name)
       .setDescription(`Set or clear the ${name.replaceAll("_", " ")} channel`)
-      .addChannelOption((option) => option.setName("channel").setDescription("Guild text channel"))
+      // Discord offers only text channels, as /setup's rooms do; the gateway still refuses others.
+      .addChannelOption((option) =>
+        option
+          .setName("channel")
+          .setDescription("Guild text channel")
+          .addChannelTypes(ChannelType.GuildText),
+      )
       .addBooleanOption((option) =>
         option.setName("clear").setDescription("Clear this channel configuration"),
       ),
@@ -99,7 +117,7 @@ export default defineCommand({
   data,
   access: "officer",
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     authorize(actor, actor.guildId, "officer");
     const app = services.get(applicationKey);
     const options = interaction.options;
@@ -107,24 +125,39 @@ export default defineCommand({
     const group = options.getSubcommandGroup(false);
     if (group === "fc") {
       const fc = lodestoneId(options.getString("fc_id", true), "freecompany");
-      return dataReply(
-        await (sub === "link" ? app.configure(actor, "fc_id", fc) : app.unlinkCompany(actor, fc)),
-      );
+      if (sub === "link") return changeReply(await app.configure(actor, "fc_id", fc), viewer);
+      // The typed ID names the FC when the result can't (its record was never read).
+      return fcUnlinkReply(await app.unlinkCompany(actor, fc), viewer, { fcId: fc });
     }
-    if (sub === "show" || sub === "validate") return dataReply(await app.validate(actor));
+    // Both read the same report; show summarizes it, validate lists every check.
+    if (sub === "show") return showReply(await app.validate(actor), viewer);
+    if (sub === "validate") return healthReply(await app.validate(actor), viewer);
     if (sub === "officer_rank") {
       const rank = options.getString("rank");
       const clear = options.getBoolean("clear") === true;
       if ((rank !== null) === clear)
-        throw new Failure("input", "Supply exactly one rank or clear:true.");
-      return dataReply(await app.configureOfficerRank(actor, rank));
+        throw new Failure("input", "Give a rank name or set clear:true, not both.", 0, {
+          kind: "option",
+          option: "rank",
+        });
+      return officerRankReply(await app.configureOfficerRank(actor, rank), viewer);
     }
     if (sub === "role_layout")
-      return dataReply(await app.configureRoleLayout(actor, options.getBoolean("enabled", true)));
+      return roleLayoutReply(
+        await app.configureRoleLayout(actor, options.getBoolean("enabled", true)),
+        viewer,
+      );
     const value =
       group === "roles" ? options.getRole("role")?.id : options.getChannel("channel")?.id;
     const clear = options.getBoolean("clear") === true;
-    if (!!value === clear) throw new Failure("input", "Supply exactly one value or clear:true.");
+    // Exactly one of the resource and clear:true; the wording names the resource kind.
+    if (!!value === clear)
+      throw new Failure(
+        "input",
+        `Choose a ${group === "roles" ? "role" : "channel"} or set clear:true, not both.`,
+        0,
+        { kind: "option", option: group === "roles" ? "role" : "channel" },
+      );
     const field =
       group === "roles"
         ? `${sub}_role_id`
@@ -135,13 +168,14 @@ export default defineCommand({
     const adoptHolders = group === "roles" ? options.getBoolean("adopt_holders") : null;
     // The service independently validates the field allowlist, ManageRoles, hierarchy, and that
     // adopt_holders accompanies an Officer role binding.
-    return dataReply(
+    return changeReply(
       await app.configure(
         actor,
         field,
         value ?? null,
         adoptHolders === null ? {} : { adoptHolders },
       ),
+      viewer,
     );
   },
 });

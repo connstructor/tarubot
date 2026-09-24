@@ -1,6 +1,13 @@
 /** Pure policy/value regression tests: precision, role precedence, evidence timing, and Unicode. */
 import { expect, test } from "bun:test";
-import { departure, desiredAccess, membershipClass } from "../../src/domain/policy.js";
+import {
+  type Actor,
+  authorize,
+  authorizeRoleManager,
+  departure,
+  desiredAccess,
+  membershipClass,
+} from "../../src/domain/policy.js";
 import { gil, id, lodestoneId, nickname } from "../../src/domain/values.js";
 
 test("IDs preserve unsigned 64-bit values and reject unsafe numbers", () => {
@@ -140,4 +147,34 @@ test("registered users are Guest whatever their other links, and Member wins", (
     member: false,
     guest: false,
   });
+});
+
+test("authorization refusals name their rule in a scope detail; the decisions are unchanged", () => {
+  const member: Actor = { guildId: "100", userId: "400", officer: false, manageRoles: false };
+  const officer: Actor = { ...member, userId: "401", officer: true };
+  const manager: Actor = { ...officer, serverManager: true, manageRoles: true };
+  /** The scope a refusal carries, or null when the call is allowed. */
+  const scope = (run: () => void): string | null => {
+    try {
+      run();
+      return null;
+    } catch (error) {
+      expect(error).toMatchObject({ code: "forbidden", detail: { kind: "scope" } });
+      return (error as { detail: { scope: string } }).detail.scope;
+    }
+  };
+  // Allowed exactly as before: own records, officer reads of others, officer-level actions.
+  expect(scope(() => authorize(member, "100", "user"))).toBeNull();
+  expect(scope(() => authorize(member, "100", "user", "400"))).toBeNull();
+  expect(scope(() => authorize(officer, "100", "user", "999"))).toBeNull();
+  expect(scope(() => authorize(officer, "100", "officer"))).toBeNull();
+  expect(scope(() => authorizeRoleManager(manager))).toBeNull();
+  // Refused, each by its own rule.
+  expect(scope(() => authorize(member, "100", "officer"))).toBe("officer");
+  expect(scope(() => authorize(member, "100", "user", "999"))).toBe("owner");
+  expect(scope(() => authorize(officer, "101", "user"))).toBe("test_guild");
+  // Bot officer access alone never authorizes authority changes, and neither does Manage Server
+  // without Manage Roles.
+  expect(scope(() => authorizeRoleManager({ ...officer, serverManager: false }))).toBe("manager");
+  expect(scope(() => authorizeRoleManager({ ...manager, manageRoles: false }))).toBe("manager");
 });

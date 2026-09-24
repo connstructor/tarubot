@@ -2,7 +2,7 @@
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
+import { preferencesReply } from "../../discord/presenters/characters.js";
 
 export default defineCommand({
   data: command(
@@ -12,11 +12,14 @@ export default defineCommand({
     option.setName("enabled").setDescription("Enable character nicknames").setRequired(true),
   ),
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
-    return dataReply(
+  async execute({ actor, viewer, interaction, services }) {
+    return preferencesReply(
       await services
         .get(applicationKey)
         .preferences(actor, null, interaction.options.getBoolean("enabled", true)),
+      viewer,
+      // The cached guild names its owner, whose nickname Discord never lets a bot change.
+      { command: "nickname", guildOwner: interaction.guild?.ownerId === actor.userId },
     );
   },
 });

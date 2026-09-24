@@ -1,0 +1,100 @@
+/**
+ * Guard against JSON replies: the officer details path (presenters/reply.ts, where dataReply is
+ * defined, and the details component that calls it) is the only place allowed to send a result as
+ * JSON. The pre-2.14.0 JSON dump (src/discord/replies.ts) is deleted and every command, button and
+ * form now returns a presenter reply, so any other reference, and any JSON.stringify or json()
+ * where replies are built, fails here.
+ */
+import { expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+/** Where dataReply belongs for good: its definition and the officer details component. */
+const ALLOWED = new Set(["src/discord/presenters/reply.ts", "src/components/details.component.ts"]);
+
+/** Every first-party source file, keyed by its repository-relative path. */
+async function sources(): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  for await (const path of new Bun.Glob("src/**/*.ts").scan({ cwd: ROOT }))
+    files.set(path, await Bun.file(`${ROOT}${path}`).text());
+  return files;
+}
+
+/** Names a file imports from the domain values module, type-only imports included. */
+function valuesImports(source: string): string[] {
+  const names: string[] = [];
+  for (const match of source.matchAll(
+    /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"[^"]*\/domain\/values\.js"/gu,
+  ))
+    for (const specifier of (match[1] ?? "").split(","))
+      names.push(
+        specifier
+          .trim()
+          .replace(/^type\s+/u, "")
+          .split(/\s+as\s+/u)[0] ?? "",
+      );
+  return names;
+}
+
+test("dataReply is referenced only by its definition and the officer details component", async () => {
+  const files = await sources();
+  const users = [...files].filter(([, text]) => /\bdataReply\b/u.test(text)).map(([path]) => path);
+  expect(users.sort()).toEqual([...ALLOWED].sort());
+});
+
+test("the legacy JSON dump module stays deleted", async () => {
+  // Nothing may bring back src/discord/replies.ts or import it under its old path.
+  const files = await sources();
+  expect(files.has("src/discord/replies.ts")).toBe(false);
+  for (const [path, text] of files)
+    expect({ path, imports: /from\s*"[^"]*\/discord\/replies\.js"/u.test(text) }).toEqual({
+      path,
+      imports: false,
+    });
+});
+
+test("no source builds an inline JSON code block", async () => {
+  for (const [path, text] of await sources()) {
+    expect({ path, fenced: text.includes("```json") }).toEqual({ path, fenced: false });
+    // The escaped template form the deleted dump used (\`\`\`json) is banned as well.
+    expect({ path, escaped: text.includes("\\`\\`\\`json") }).toEqual({ path, escaped: false });
+  }
+});
+
+test("commands and components never serialize results with json()", async () => {
+  for (const [path, text] of await sources())
+    if (path.startsWith("src/commands/") || path.startsWith("src/components/"))
+      expect({ path, json: valuesImports(text).includes("json") }).toEqual({ path, json: false });
+});
+
+test("handlers and presenters never serialize a result outside dataReply", async () => {
+  // JSON.stringify or json() anywhere a reply is built (commands, components, the bot runtime,
+  // presenters) could put a JSON dump in a description or field; only reply.ts, where dataReply
+  // attaches the officer file, may serialize.
+  for (const [path, text] of await sources()) {
+    if (path === "src/discord/presenters/reply.ts") continue;
+    if (!/^src\/(commands|components|bot|discord)\//u.test(path)) continue;
+    expect({
+      path,
+      serializes: /JSON\.stringify\s*\(|(?<![\w.])json\s*\(|\bvalues\.json\b/u.test(text),
+    }).toEqual({ path, serializes: false });
+  }
+});
+
+test("presenters import application data as types only and never reach persistence", async () => {
+  for (const [path, text] of await sources()) {
+    if (!path.startsWith("src/discord/presenters/")) continue;
+    // Runtime imports of the application layer, Drizzle or infrastructure would let a presenter
+    // read or write state; presenters format typed results and nothing else.
+    const runtime = [...text.matchAll(/^import\s+(?!type\b)[^;]*?from\s*"([^"]+)"/gmu)].map(
+      (match) => match[1] ?? "",
+    );
+    expect({
+      path,
+      forbidden: runtime.filter((from) =>
+        /\/application\/|\/infrastructure\/|drizzle-orm|\/jobs\//u.test(from),
+      ),
+    }).toEqual({ path, forbidden: [] });
+  }
+});

@@ -1,10 +1,14 @@
 /** Mixed-permission guest operations; each private operation reauthorizes its actor. */
-import { z } from "zod";
 import { applicationKey } from "../../application/keys.js";
 import { defineCommand } from "../../bot/command.js";
 import { command, string } from "../../discord/options.js";
-import { dataReply } from "../../discord/replies.js";
-import { userId } from "../../discord/selectors.js";
+import {
+  applicationChoice,
+  decisionReply,
+  guestActionReply,
+  guestStatusReply,
+} from "../../discord/presenters/guests.js";
+import { userId, uuid } from "../../discord/selectors.js";
 import { authorize } from "../../domain/policy.js";
 
 const data = command("guest", "Guest applications, grants, and revocations");
@@ -35,22 +39,26 @@ data.addSubcommand((sub) =>
 export default defineCommand({
   data,
   requires: [applicationKey],
-  async execute({ actor, interaction, services }) {
+  async execute({ actor, viewer, interaction, services }) {
     const app = services.get(applicationKey);
     const options = interaction.options;
     const sub = options.getSubcommand(true);
     if (sub === "approve" || sub === "deny")
-      return dataReply(
+      // The service validates the optional denial reason with note(), since the applicant sees it.
+      return decisionReply(
         await app.decide(
           actor,
-          z.uuid().parse(options.getString("application", true)),
+          uuid(options.getString("application", true), "application"),
           sub === "approve",
           options.getString("reason"),
         ),
+        viewer,
+        { via: "command" },
       );
-    const owner = userId(options.getString("member") ?? actor.userId);
+    const memberOption = options.getString("member");
+    const owner = userId(memberOption ?? actor.userId, "member");
     if (sub === "grant" || sub === "revoke")
-      return dataReply(
+      return guestActionReply(
         await app.guestAction(
           actor,
           owner,
@@ -58,15 +66,33 @@ export default defineCommand({
           options.getString("reason", true),
           interaction.id,
         ),
+        viewer,
       );
+    // A member naming someone else is refused here ('Only your own records'), before any read.
     authorize(actor, actor.guildId, "user", owner);
-    return dataReply(await app.guestStatus(actor, owner));
+    return guestStatusReply(await app.guestStatus(actor, owner), viewer, {
+      owner,
+      memberOption: memberOption !== null,
+    });
   },
-  autocomplete({ actor, interaction, services }) {
+  async autocomplete({ actor, interaction, services }) {
     // Mixed permission groups cannot rely on root command defaults to protect completion.
     authorize(actor, actor.guildId, "officer");
-    return services
-      .get(applicationKey)
-      .autocomplete(actor, "application", actor.userId, String(interaction.options.getFocused()));
+    const rows = await services.get(applicationKey).applicationChoices(actor);
+    // Filter in-process on what the label shows (C12): the applicant's cached display name (no
+    // network call inside Discord's autocomplete window), their user ID, and the application ID,
+    // whose first eight characters are the label's short ID.
+    const query = String(interaction.options.getFocused()).trim().toLocaleLowerCase("en-US");
+    const members = interaction.guild?.members.cache;
+    return rows
+      .map((row) => ({ row, name: members?.get(row.user_id)?.displayName ?? null }))
+      .filter(
+        ({ row, name }) =>
+          !query ||
+          (name?.toLocaleLowerCase("en-US").includes(query) ?? false) ||
+          row.user_id.includes(query) ||
+          row.id.includes(query),
+      )
+      .map(({ row, name }) => applicationChoice(row, name));
   },
 });

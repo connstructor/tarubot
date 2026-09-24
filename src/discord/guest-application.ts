@@ -1,14 +1,10 @@
-/** Discord form presentation is separate from durable eligibility and approval decisions. */
-import {
-  EmbedBuilder,
-  escapeMarkdown,
-  LabelBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-} from "discord.js";
+/**
+ * The /apply form and its submission parsing. Discord form presentation is separate from durable
+ * eligibility and approval decisions; the review message it leads to is rendered by
+ * presenters/guests.ts (guestReviewPost).
+ */
+import { LabelBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from "discord.js";
 import type { ChatInputCommandInteraction, ModalSubmitInteraction } from "discord.js";
-import type { ApplicationRecord } from "../application/records.js";
 import type { Actor } from "../domain/policy.js";
 import {
   GUEST_ANSWER_MAX,
@@ -24,8 +20,14 @@ export function guestApplicationModal(interaction: ChatInputCommandInteraction):
     : interaction.inRawGuild()
       ? Date.parse(interaction.member.joined_at ?? "")
       : null;
+  // Without the join time the form cannot be bound to this join; reopening /apply retries it.
   if (!interaction.guildId || !joined || !Number.isSafeInteger(joined))
-    throw new Failure("input", "Your join context is unavailable. Reopen /apply in the server.");
+    throw new Failure(
+      "stale",
+      "Discord didn't send your join details. Run /apply again from inside the server.",
+      0,
+      { kind: "stale", what: "join" },
+    );
   const field = (name: string, label: string, description: string) =>
     new LabelBuilder()
       .setLabel(label)
@@ -72,31 +74,15 @@ export function guestApplicationSubmission(
     interaction.guildId !== actor.guildId ||
     interaction.user.id !== actor.userId
   )
-    throw new Failure("input", "This form belongs to another user or server. Reopen /apply.");
+    throw new Failure(
+      "stale",
+      "This form belongs to someone else or to another server. Run /apply yourself.",
+      0,
+      { kind: "stale", what: "form" },
+    );
   return {
     joinedAt: new Date(Number(match[3])),
     introduction: interaction.fields.getTextInputValue("introduction"),
     interest: interaction.fields.getTextInputValue("interest"),
   };
-}
-
-/** Named embed fields isolate applicant text from decision metadata and fit without truncating answers. */
-export function guestApplicationEmbeds(application: ApplicationRecord): EmbedBuilder[] {
-  return [
-    new EmbedBuilder()
-      .setTitle("Applicant answers")
-      .setDescription(
-        application.introduction === null
-          ? "Submitted before application forms were introduced."
-          : "Officer review is required; submitting this form does not grant access.",
-      )
-      .addFields(
-        ...(application.introduction !== null && application.interest !== null
-          ? [
-              { name: "Introduce yourself", value: escapeMarkdown(application.introduction) },
-              { name: "Why join this server?", value: escapeMarkdown(application.interest) },
-            ]
-          : []),
-      ),
-  ];
 }

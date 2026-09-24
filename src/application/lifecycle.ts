@@ -7,7 +7,13 @@ import { Failure } from "../domain/values.js";
 import { orm, type Database } from "../infrastructure/postgres/database.js";
 import { and, eq, notInArray } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
-import { enqueue, layoutGuildRoles, secureGuildChannels, type Queue } from "../jobs/queue.js";
+import {
+  enqueue,
+  layoutGuildRoles,
+  requeueParked,
+  secureGuildChannels,
+  type Queue,
+} from "../jobs/queue.js";
 import type { Service } from "./service.js";
 import type { Synchronization } from "./synchronization.js";
 import { capabilityMetrics } from "./metrics.js";
@@ -307,11 +313,13 @@ export class ApplicationLifecycle {
           "DISCORD_APPLICATION_ID does not match the logged-in bot application.",
         );
       }
-      await this.db.transaction(async (client) => {
+      const resumed = await this.db.transaction(async (client) => {
         const db = orm(client);
         const present = [...this.gateway.client.guilds.cache.keys()].filter((guild) =>
           this.allowsGuild(guild),
         );
+        /** Present guilds whose own effects flag is on (activated, or never imported). */
+        const live: string[] = [];
         await db
           .update(t.guilds)
           .set({ active: false })
@@ -330,15 +338,28 @@ export class ApplicationLifecycle {
               id: t.guilds.id,
               access_policy_enabled: t.guilds.access_policy_enabled,
               role_layout_enabled: t.guilds.role_layout_enabled,
+              effects_enabled: t.guilds.effects_enabled,
             });
           if (configured.length) {
             await enqueue(client, "reconcile.guild", `guild:${guild}`, {}, guild);
             // Layout-disabled guilds (for example an imported server) get no presentation work.
             if (configured[0]?.role_layout_enabled) await layoutGuildRoles(client, guild);
             if (configured[0]?.access_policy_enabled) await secureGuildChannels(client, guild);
+            if (configured[0]?.effects_enabled) live.push(guild);
           }
         }
+        // Work the dispatcher parked `disabled` while ENABLE_EFFECTS was off resumes once the
+        // deployment runs with effects on again, as receipts promise ("once Discord changes are
+        // turned back on"). An unactivated guild's parked work keeps waiting for activation, and
+        // blocked work still needs its fix first (a /config change or retry.js requeues it).
+        return this.config.ENABLE_EFFECTS ? requeueParked(client, live, ["disabled"]) : [];
       });
+      // A count only: job payloads never reach the log.
+      if (resumed.length)
+        this.log.info(
+          { requeued: resumed.length },
+          "Requeued work held while Discord changes were off",
+        );
       this.queue.start();
       this.monitor = setInterval(() => {
         void this.observe().catch((error: unknown) => this.report(error, "scheduler"));

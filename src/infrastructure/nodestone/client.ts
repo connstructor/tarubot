@@ -2,8 +2,50 @@
 import { decode } from "html-entities";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import type { FailureDetail } from "../../domain/failures.js";
 import { Failure, id, normalized } from "../../domain/values.js";
 import { responseSchema, type ParseRequest } from "./protocol.js";
+
+/**
+ * Which Lodestone page an operation reads, so a failure's reply can say "Character not found"
+ * rather than "Free Company not found". Searches look for characters; members pages belong to an FC.
+ */
+function resourceOf(input: ParseRequest): FailureDetail {
+  return {
+    kind: "resource",
+    resource:
+      input.operation === "profile" || input.operation === "search" ? "character" : "freecompany",
+    ...(input.operation === "search" ? { name: input.name, world: input.world } : { id: input.id }),
+  };
+}
+/** Codes that describe the requested Lodestone page and so carry its resource detail. */
+const RESOURCE_CODES: ReadonlySet<string> = new Set([
+  "not_found",
+  "unavailable",
+  "incomplete",
+  "invalid_response",
+]);
+/**
+ * The approved not-found wording per page. It names only public Lodestone IDs, never a typed
+ * search name, because the message also reaches logs and job diagnostics.
+ */
+function notFoundMessage(input: ParseRequest): string {
+  if (input.operation === "search")
+    return "The Lodestone has no character with that exact name on that world.";
+  return input.operation === "profile"
+    ? `The Lodestone has no character with ID ${input.id}.`
+    : `The Lodestone has no Free Company with ID ${input.id}.`;
+}
+/**
+ * Attach the operation's resource to a detail-less failure; retry timing is unchanged. The
+ * sidecar's generic not-found text becomes the page-specific wording; other messages are kept,
+ * because officers see them as the diagnostic.
+ */
+function withResource(failure: Failure, input: ParseRequest): Failure {
+  if (failure.detail || !RESOURCE_CODES.has(failure.code)) return failure;
+  const message = failure.code === "not_found" ? notFoundMessage(input) : failure.message;
+  return new Failure(failure.code, message, failure.retryAfter, resourceOf(input));
+}
 
 const object = z.record(z.string(), z.unknown());
 const limitsSchema = z
@@ -25,6 +67,18 @@ function validate<T>(schema: z.ZodType<T>, value: unknown): T {
   if (!result.success)
     throw new Failure("invalid_response", "Nodestone returned missing or invalid required fields.");
   return result.data;
+}
+/**
+ * A malformed ID in sidecar output is unexpected Lodestone data, never the user's input: id()'s own
+ * failure is the input card that advises the user, so parse sites reclassify it as an unreadable
+ * upstream response (warn level, 'Unexpected Lodestone page', a neutral job diagnostic).
+ */
+function upstreamId(value: unknown): string {
+  try {
+    return id(value);
+  } catch {
+    throw new Failure("invalid_response", "Nodestone returned an invalid Lodestone ID.");
+  }
 }
 /** Canonical public identity; fcId is a profile hint and never roster authority. */
 export interface CharacterIdentity {
@@ -100,7 +154,7 @@ export function count(value: unknown): number {
 /** Profiles can inherit the validated requested ID; any returned ID must agree losslessly. */
 export function character(raw: unknown, requested?: string): CharacterIdentity {
   const row = validate(object, raw);
-  const resolved = row.ID === undefined && requested ? requested : id(row.ID);
+  const resolved = row.ID === undefined && requested ? requested : upstreamId(row.ID);
   if (requested && requested !== resolved)
     throw new Failure("invalid_response", "Character ID mismatch.");
   if (requested && !Object.hasOwn(row, "FreeCompany"))
@@ -112,7 +166,7 @@ export function character(raw: unknown, requested?: string): CharacterIdentity {
     name: requiredText(row.Name),
     world: requiredText(row.World),
     dc: requiredText(row.DC),
-    fcId: fc?.ID == null ? null : id(fc.ID),
+    fcId: fc?.ID == null ? null : upstreamId(fc.ID),
   };
   if (typeof row.Bio === "string") result.biography = display(row.Bio);
   if (typeof row.FcRank === "string" && display(row.FcRank))
@@ -133,7 +187,7 @@ export function markRosterLeader(members: CharacterIdentity[]): void {
 /** Identity and advertised count are checked at both boundaries of a roster crawl. */
 export function company(raw: unknown, requested: string): CompanyIdentity {
   const row = validate(object, raw);
-  if (id(row.ID) !== requested) throw new Failure("invalid_response", "FC ID mismatch.");
+  if (upstreamId(row.ID) !== requested) throw new Failure("invalid_response", "FC ID mismatch.");
   return {
     id: requested,
     name: requiredText(row.Name),
@@ -209,11 +263,22 @@ export class Nodestone {
   stop(): void {
     this.shutdown.abort();
   }
-  /** Stream-bound responses and retry only transport/rate-limit failures with shared cancellation. */
+  /**
+   * Stream-bound responses and retry only transport/rate-limit failures with shared cancellation.
+   * A not-found, outage, incomplete or invalid failure names the page the operation read.
+   */
   async request(
     input: ParseRequest,
     signal: AbortSignal = AbortSignal.timeout(this.limits.LODESTONE_JOB_TIMEOUT_MS),
   ): Promise<unknown> {
+    try {
+      return await this.attempts(input, signal);
+    } catch (error) {
+      throw error instanceof Failure ? withResource(error, input) : error;
+    }
+  }
+  /** The retry loop behind request(); its failures gain their resource detail there. */
+  private async attempts(input: ParseRequest, signal: AbortSignal): Promise<unknown> {
     signal = AbortSignal.any([signal, this.shutdown.signal]);
     for (let attempt = 0; attempt < this.limits.LODESTONE_ATTEMPTS; attempt++) {
       try {
@@ -291,14 +356,20 @@ export class Nodestone {
     const existing = this.profiles.get(key);
     if (existing) return existing;
     if (this.profiles.size >= 1000)
-      throw new Failure("rate_limited", "Too many pending profile requests. Retry shortly.", 1);
+      throw new Failure(
+        "rate_limited",
+        "TaruBot is handling many Lodestone lookups. Try again in a few seconds.",
+        1,
+      );
     const pending = this.request({ operation: "profile", id: id(characterId), biography }).then(
       (raw) => {
         const result = character(raw, characterId);
         if (biography && result.biography === undefined)
           throw new Failure(
             "invalid_response",
-            "The biography selector was unavailable. Your challenge remains pending.",
+            "TaruBot couldn't read the biography section of the Lodestone page. Your token is still valid; try again in a few minutes.",
+            0,
+            { kind: "resource", resource: "biography", id: characterId },
           );
         return result;
       },

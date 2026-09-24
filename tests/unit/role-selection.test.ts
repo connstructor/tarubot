@@ -1,9 +1,13 @@
 /** Setup must reuse existing identities across prefixes, while rejecting ambiguous selections. */
 import { expect, spyOn, test } from "bun:test";
+import { Collection } from "discord.js";
 import { z } from "zod";
 import { DiscordGateway } from "../../src/discord/gateway.js";
+import { failureReply } from "../../src/discord/presenters/failure.js";
 import { existingRoleId } from "../../src/domain/role-selection.js";
 import { Failure } from "../../src/domain/values.js";
+import { onlyEmbed } from "../fixtures/replies.js";
+import { REF, VIEWERS } from "../fixtures/results.js";
 
 test("a prefix does not hide existing canonical Member and Guest roles", () => {
   const roles = [
@@ -154,4 +158,54 @@ test("setup creates missing roles with the guild's role-layout display setting",
     validate.mockRestore();
     await gateway.client.destroy();
   }
+});
+
+test("an ambiguous role selection is code ambiguous and lists every matching role", () => {
+  // The reply builds its "Choose which role to use" card from the detail, not the message text.
+  const roles = [
+    { id: "201", name: "Member" },
+    { id: "202", name: "DevBot Member" },
+  ];
+  let thrown: unknown;
+  try {
+    existingRoleId(roles, "DevBot Member", "Member", null);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(Failure);
+  expect(thrown).toMatchObject({
+    code: "ambiguous",
+    detail: { kind: "matches", resource: "role", name: "Member", ids: ["201", "202"] },
+  });
+});
+
+test("a configured role that was deleted says so, instead of asking for an ordinary role", async () => {
+  const gateway = new DiscordGateway();
+  // The guild's role list no longer contains the configured role.
+  const guild = {
+    id: "100",
+    roles: { fetch: async () => new Collection() },
+    members: { fetchMe: async () => ({ roles: { botRole: null } }) },
+  };
+  const fetch = spyOn(gateway.client.guilds, "fetch").mockImplementation(
+    async () => guild as never,
+  );
+  const error = await gateway.validateRole("100", "201").then(
+    () => new Error("Expected validateRole to fail"),
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(Failure);
+  expect(error).toMatchObject({
+    code: "blocked",
+    message:
+      "That role no longer exists in this server. Choose another with /config roles, or run /setup to recreate it.",
+    detail: { kind: "resource", resource: "role", id: "201" },
+  });
+  // The officer card names the role, with no hierarchy remedy that can't apply to a deleted role.
+  const embed = onlyEmbed(
+    failureReply(error, { ref: REF, viewer: VIEWERS.officer, scope: "/config validate" }),
+  );
+  expect(embed.fields?.map((item) => item.name)).toEqual(["Affected", "Then"]);
+  fetch.mockRestore();
+  await gateway.client.destroy();
 });

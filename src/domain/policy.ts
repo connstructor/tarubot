@@ -12,30 +12,57 @@ export interface Actor {
   roleIds?: readonly string[];
 }
 
-/** Sensitive authority configuration cannot be delegated through the Officer role itself. */
+/**
+ * Sensitive authority configuration cannot be delegated through the Officer role itself. The
+ * refusal carries scope 'manager', so the reply can name the missing Discord permissions.
+ */
 export function authorizeRoleManager(actor: Actor): void {
   if (!(actor.serverManager ?? actor.officer) || !actor.manageRoles) {
     throw new Failure(
       "forbidden",
-      "Manage Server and Manage Roles are required for this operation.",
+      "Changing who has officer authority needs Discord's Manage Server and Manage Roles permissions. Bot officer access isn't enough.",
+      0,
+      { kind: "scope", scope: "manager" },
     );
   }
 }
 
-/** Recheck guild ownership and privilege at the application boundary, including private reads. */
+/**
+ * The generic officer-level refusal. The reply presenter recognises exactly this text and names the
+ * command instead ("Only FC officers can use /config."); refusals with their own approved wording
+ * (withdrawals, a past FC's ledger, forced refreshes) are shown as written.
+ */
+export const OFFICERS_ONLY = "Only FC officers can do that.";
+
+/**
+ * Recheck guild ownership and privilege at the application boundary, including private reads.
+ * Each refusal names its rule in the scope detail (another guild, the officer level, or another
+ * member's record), so replies never match on message text. The decisions themselves are
+ * unchanged.
+ */
 export function authorize(
   actor: Actor,
   guildId: string,
   level: "user" | "officer",
   owner?: string,
 ): void {
-  if (
-    actor.guildId !== guildId ||
-    (level === "officer" && !actor.officer) ||
-    (owner !== undefined && owner !== actor.userId && !actor.officer)
-  ) {
-    throw new Failure("forbidden", "You are not authorized to access this record.");
-  }
+  if (actor.guildId !== guildId)
+    throw new Failure("forbidden", "That record belongs to another server.", 0, {
+      kind: "scope",
+      scope: "test_guild",
+    });
+  if (level === "officer" && !actor.officer)
+    throw new Failure("forbidden", OFFICERS_ONLY, 0, {
+      kind: "scope",
+      scope: "officer",
+    });
+  if (owner !== undefined && owner !== actor.userId && !actor.officer)
+    throw new Failure(
+      "forbidden",
+      "You can view only your own records. Officers can look up other members.",
+      0,
+      { kind: "scope", scope: "owner" },
+    );
 }
 
 /** Confirmed policy facts plus observed roles; uncertainty must not masquerade as absence. */

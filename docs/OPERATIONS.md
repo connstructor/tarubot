@@ -31,15 +31,17 @@ App Platform uses [`.do/app.yaml`](../.do/app.yaml), which attaches the owner-pr
 
 ## Inspect and repair
 
-- `/config show` and `/config validate`: resource existence, permissions/hierarchy, linked FC, freshness, and whether the role layout is enabled.
-- `/config role_layout enabled:<true|false>`: a server manager with Manage Server and Manage Roles turns managed-role display and ordering on or off. Disabling leaves the current display as it is; a queued `roles.layout` job then completes as `skipped: layout disabled`.
-- `/sync status`: run outcomes and queued/running/blocked/failed work. Officers see guild-wide work; other users see their authorized requests and effects.
-- `/guest status`: durable decisions, grants with their provenance (`approved`, `manual`, `imported_guest`, or `grandfathered`), revocations, derived `verifiedGuestEligible`, and separate delivery work. `/guest revoke` is the lasting removal for every kind of Guest access; a later `/guest grant` restores it as a manual grant.
-- `/ledger balance` / `/ledger history`: committed balances/entries and delivery status.
+Every reply is one embed in the house style of [REPLIES.md](REPLIES.md). Officer read views that summarize or cut records offer **Full details (JSON)**, which re-runs the read for the officer who clicked and attaches the complete result as `tarubot-<view>.json`.
+
+- `/config show` and `/config validate`: every setting, and a read-only checklist of `[OK]`, `[WARN]`, `[FAIL]`, `[OFF]` and `[WAIT]` lines for resource existence, permissions and hierarchy, the linked FC and its roster freshness, onboarding, Discord changes, the role layout and pending grandfathering. The title gives the verdict (problems, warnings, ready for activation, or all checks passed); **Run health check** and **Re-check** re-run it in place.
+- `/config role_layout enabled:<true|false>`: a server manager with Manage Server and Manage Roles turns managed-role display and ordering on or off. Disabling leaves the current display as it is; a queued `roles.layout` job then completes as `skipped: layout disabled` (`– SKIPPED`).
+- `/sync status`: run outcomes and queued, running, blocked, paused and failed work as [status markers](#status-markers). Officers see guild-wide runs, outstanding work, what runs next and what needs attention, with raw job kinds, short job IDs, attempts and diagnostics, plus Full details; other users see their own requests and pending work in plain words. `/sync status run_id:<uuid>` shows one run.
+- `/guest status`: durable decisions, grants with their provenance (Application approved, Granted by an officer, Imported from the previous bot, Granted at launch), revocations, and the member's own delivery work. An officer who names a member gets the record view with the latest three deliveries and Full details. `/guest revoke` is the lasting removal for every kind of Guest access; a later `/guest grant` restores it as a manual grant.
+- `/ledger balance` / `/ledger history`: committed balances and entries. Members see how many recent entries are waiting to be posted; officers see each recent post's state, entry UUIDs in history, and Full details.
 - `commands.js list`: reads back the application's global and guild command scopes and exits 0 only when the declared scope matches exactly and every other scope is empty; `commands.js clear-guild` removes leftover guild-scoped commands after a fingerprint-confirmed dry run.
 - `preview.js GUILD_ID --late-joiners`: a database-only list of humans who joined after an imported guild's first-activation enumeration and hold neither a guest grant nor an active link, for an officer `/guest grant` decision.
 
-Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded.
+Job attempt outcomes are logged by severity, with job ID, kind, generation, attempts, code, status, category, the stored diagnostic, and duration/queue-wait/age timings; payloads are never logged. Expected waits (`ordered`, `busy`, `cooldown`, and `superseded` when reconciliation inputs changed) log at debug and return their attempt, escalating to warn once a job has waited continuously for 10 minutes. A lost lease (`lease_lost`) logs at warn and writes nothing, because another worker owns or will reclaim the row. Blocked, disabled, and retrying work logs at warn, gone work at info, and terminal failures at error. `reconcile.user` results keep an `applied` list of role changes (newest 20), including those made by a pass that was later superseded, or closed as `skipped: superseded` when parked work was requeued.
 
 Job diagnostics are scoped. Repair the configured resource or permissions, then let reconciliation/backoff resume. For a terminal delivery failure, an operator can explicitly retry the job using database credentials:
 
@@ -48,6 +50,8 @@ bun run jobs:retry GUILD_ID JOB_ID
 ```
 
 Against production, run the compiled tool with the production env file instead, as `prod dist/scripts/retry.js GUILD_ID JOB_ID` ([MIGRATION.md](MIGRATION.md) E0).
+
+The tool retries a blocked, failed or disabled job of that guild, clearing its diagnostic. It refuses, changing nothing, when a newer queued, running or blocked job for the same work already exists (the active-job index allows one), and prints that job's ID: retry the newer job instead if it is blocked; otherwise it runs on its own.
 
 Retries recompute current desired roles/nicknames. Ledger notifications refer to their original immutable entry and preserve account order. An ambiguous Discord acknowledgement can produce a duplicate visible message; the stable entry ID identifies the same financial mutation. PostgreSQL remains authoritative.
 
@@ -69,6 +73,89 @@ FROM ledger_entries ORDER BY account_id, sequence;
 Readiness uses database/schema initialization, the database writer lease (below), and Discord connectivity; liveness is local. Probes do not acquire Lodestone pages. Logs periodically include queue counts, blocked work, oldest accepted-roster age, and degraded FC counts.
 
 Expired challenges are pruned after seven days. Active links/grants, membership evidence, audits, ledger entries, imports, and work history are retained. Operators can establish a bounded diagnostic-retention policy while retaining financial and access-policy evidence.
+
+## Interaction logs
+
+Every interaction failure is logged once, under the interaction ID, at the level its catalog category sets (`src/domain/failures.ts`):
+
+| Level | Message | Categories |
+| --- | --- | --- |
+| info | `Interaction refused with an approved reason.` | input, forbidden, setup, not found, ambiguous, conflict, stale, wait, eligible |
+| warn | `Operation could not complete; a dependency or setting needs attention.` | upstream (Lodestone, Discord), blocked, paused; also an interaction that can no longer be answered (expired token, already acknowledged), a failure while sending a reply, and a pre-form check that errored or overran (the form opened anyway) |
+| error | `Operation failed; inspect scoped work status.` | unexpected, and every lifecycle, gateway-event, queue-worker and shutdown report |
+
+Each entry carries these fields; payloads, option values, tokens and SDK error text are never logged:
+
+| Field | Content |
+| --- | --- |
+| `operation` | The interaction ID, which replies show as **Ref** (a job ID or named task for non-interaction reports) |
+| `code` | The catalog code: the `Failure`'s own, a mapped raw Discord error's (`blocked`, `forbidden`, `unavailable`), or `unexpected` for anything else |
+| `category` | The code's presentation category |
+| `source` | The error class: `Failure`, `DiscordAPIError[50013]`, `ZodError`, or `unknown` |
+| `scope` | The interaction path, such as `/ledger withdraw`, `/config roles officer`, `button ledger` or `modal guest-apply`, never option values |
+| `diagnostic` | The approved `Failure` message only |
+
+Routine refusals log at info so a Ref stays findable at the default `LOG_LEVEL`. Autocomplete failures log with scope `autocomplete /<command>` and return an empty list; one that can no longer be answered (Discord's three-second window passed, or it was already answered) logs at warn and sends nothing.
+
+## Reply references and error codes
+
+Every failure reply ends with `Code <code> · Ref <interaction ID>`. **Ref is the interaction ID, and the log's `operation` field holds the same value**, so a member's screenshot leads straight to the log entry and its `code`, `source`, `scope` and `diagnostic`:
+
+```sh
+# Compose (add -f docker-compose.devbot.yml for DevBot)
+docker compose logs tarubot | grep '"operation":"1290000000000000001"'
+```
+
+On App Platform, search the `tarubot` worker's runtime logs for the same string (control panel, or `doctl apps logs <app-id> tarubot --type run`).
+
+| Code | Members see | Cause | Operator action |
+| --- | --- | --- | --- |
+| `input`, `invalid_data` | Check your input | A malformed option: a typed name where an ID belongs, a blank note, a bad cursor | None; the reply names the option and shows an example |
+| `forbidden` | Officers only, Server managers only, Only your own records, FC membership needed, That role is above yours, Not available here, Test instance | The actor lacks the access the command needs, or used a DM, a bot or another guild | None, unless the member should have access: check `/config officer_rank`, the Officer role and `/officer` overrides |
+| `setup` | TaruBot isn't set up here yet, No Free Company linked, Ledger isn't set up, Guest applications are closed (officers: Finish setup first) | A guild, FC, ledger channel, Officer role, review channel or Guest role isn't configured | Run the command the officer reply names, then `/config validate` |
+| `not_found` | Character not found, Link not found, Entry not found, … | The record or Lodestone page does not exist | None; check the ID the user gave |
+| `ambiguous` | Several characters match, Choose which role/channel to use | A search or `/setup` name matched several candidates | Rerun with an ID, or bind the resource explicitly with `/config` |
+| `ownership_conflict` | Linked to another member | The character is linked to someone else | An officer runs `/unassign` first if the link is wrong |
+| `fc_linked` | Another FC is linked | `/config fc link` while a different FC is linked | Unlink the current FC first |
+| `initialized`, `uninitialized` | Opening balance already set / not set | The ledger's opening balance state | An officer runs `/ledger initialize` once, or `/ledger adjust` |
+| `insufficient_funds` | Not enough recorded gil | A withdrawal below zero | None; check `/ledger balance` |
+| `conflict`, `superseded` | Settings changed — try again | A configuration revision changed while the command ran | None; run it again |
+| `stale` | This control is out of date, Please reopen /apply, This review message is out of date | A button, form or review message from an older state or release | Re-register commands after a deploy if it persists |
+| `expired` | Token expired during verification | The claim token expired while being checked | None; `/claim` again |
+| `pending_proof` | Token not on the Lodestone yet | The Lodestone has not published the biography token yet | None; wait and use Check again |
+| `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim and apply limits) | A limit, contention, a temporary Discord change or shutdown | None; the reply gives the retry time |
+| `eligible` | No application needed | The visitor already qualifies for access | None |
+| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
+| `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
+| `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key, and clears its paused diagnostic. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` (which refuses a job a newer active job already covers) are the fallbacks |
+| `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
+
+**Renamed codes.** Queries that span releases before 2.14.0 must match both names:
+
+- `funds` became `insufficient_funds` (below zero only); passing the storable maximum is now `input`.
+- `pending` became `pending_proof`.
+- Missing links, members, applications, ledger entries and accounts, claims and FC links became `not_found` (they were `input` or `expired`).
+- Ambiguous role and channel choices became `ambiguous`, a second FC link `fc_linked`, and idempotency-key collisions `idempotency_conflict` (they were `conflict` or `input`).
+- An obsolete command, button, form, review message or join context became `stale` (it was `input` or `forbidden`).
+- An error that is not an approved `Failure` logs `code: "unexpected"` with its class in `source`; 2.13.0 and earlier logged the class name as the code, and a reply ended with `Operation: <id>` instead of `Code · Ref`. Raw Discord permission, unknown-channel or unknown-role errors (50001, 50013, 10003, 10011) now log as `blocked`, unknown member or user (10007, 10013) as `forbidden`, and rate limits and server errors as `unavailable`.
+
+## Status markers
+
+Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#status-markers)). They map from the stored job row:
+
+| Job row | Marker | Member wording |
+| --- | --- | --- |
+| `succeeded` | `✓ DONE` | The kind's completion phrase, such as "Roles and nickname updated" |
+| `succeeded` with a `skipped` result | `– SKIPPED` | "nothing to do" |
+| `running` | `… IN PROGRESS` | The kind's label |
+| `queued`, no `last_error` | `… QUEUED` | The kind's label |
+| `queued` with `ordered`, `busy`, `cooldown`, `superseded` or `lease_lost` | `↻ WAITING` | "next" and the due time |
+| `queued` with any other `last_error` | `↻ WAITING` | "retrying" and the due time |
+| `blocked` | `! BLOCKED` | "an officer needs to fix permissions" |
+| `disabled` | `‖ PAUSED` | "waiting for activation" or "Discord changes are off for this deployment" |
+| `failed` | `✗ FAILED` | "stopped and won't retry"; a closed-DM decision DM says the decision still stands |
+
+Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
 
 ## Single database writer
 
