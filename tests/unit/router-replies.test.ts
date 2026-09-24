@@ -11,7 +11,7 @@ import { Component, defineComponent, type ComponentOptions } from "../../src/bot
 import type { BotContext } from "../../src/bot/context.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
-import { dataReply, reply } from "../../src/discord/presenters/reply.js";
+import { dataReply, reply, type Presented } from "../../src/discord/presenters/reply.js";
 import type { ReportOptions } from "../../src/domain/failures.js";
 import type { Actor } from "../../src/domain/policy.js";
 import { Failure } from "../../src/domain/values.js";
@@ -45,6 +45,15 @@ const failing = defineCommand({
 const working = defineCommand({
   data: new SlashCommandBuilder().setName("fine").setDescription("Working fixture"),
   execute: () => reply({ tone: "info", title: "Fine" }),
+});
+
+/**
+ * A discovered module compiled without the type check, still returning pre-2.14.0 edit options:
+ * the cast stands in for untyped JavaScript. The router must never send them.
+ */
+const legacy = defineCommand({
+  data: new SlashCommandBuilder().setName("legacy").setDescription("Legacy fixture"),
+  execute: () => ({ content: '```json\n{"secret":1}\n```' }) as unknown as Presented,
 });
 
 /** Counts executions of the officer-only component. */
@@ -103,6 +112,7 @@ function harness(overrides: Partial<BotContext> = {}, actor: Actor = MEMBER) {
     new Map([
       [failing.name, failing],
       [working.name, working],
+      [legacy.name, legacy],
     ]),
     new Map(components.map((component) => [component.prefix, component])),
   );
@@ -331,6 +341,25 @@ test("a failure after execute says the request may have been saved", async () =>
       title: "Something went wrong",
       description: "Your request may have been saved, but TaruBot couldn't show the result.",
     });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a handler result that is not a presenter reply is never sent", async () => {
+  const { fixture, reports, router } = harness();
+  try {
+    const interaction = fixture.slash("legacy");
+    await router.handle(interaction);
+    // The work ran, so the card says it may have been saved; the legacy text never leaves.
+    expect(embedOf(fixture.requests.at(-1))).toMatchObject({
+      title: "Something went wrong",
+      description: "Your request may have been saved, but TaruBot couldn't show the result.",
+      footer: { text: `Code unexpected · Ref ${interaction.id}` },
+    });
+    expect(JSON.stringify(fixture.requests)).not.toMatch(/secret|```json/u);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.options).toEqual({ level: "error", scope: "/legacy" });
   } finally {
     await fixture.close();
   }

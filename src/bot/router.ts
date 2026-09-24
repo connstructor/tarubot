@@ -14,7 +14,7 @@ import { Presented } from "../discord/presenters/reply.js";
 import { classifyFailure } from "../domain/failures.js";
 import { authorize, type Actor } from "../domain/policy.js";
 import { Failure } from "../domain/values.js";
-import type { Command, HandlerResult } from "./command.js";
+import type { Command } from "./command.js";
 import type { AcknowledgeMode, Component } from "./component.js";
 import type { BotContext } from "./context.js";
 import { ServiceKey } from "./services.js";
@@ -67,30 +67,33 @@ export function interactionScope(interaction: Answerable): string {
 }
 
 /**
- * Message options for a handler result. A Presented already carries content, embeds and
- * components; a legacy result is passed through until its group migrates. Mentions are forced off
- * last, so no result can re-enable pings.
- */
-function options(result: HandlerResult): InteractionEditReplyOptions {
-  const base = result instanceof Presented ? result.options : result;
-  return { ...base, allowedMentions: { parse: [] } };
-}
-
-/**
- * A presenter reply's options with mentions forced off, valid for a first reply, a follow-up and an
- * edit alike (failure cards and pre-modal refusals are always presenter replies).
+ * A presenter reply's options with mentions forced off last, so no reply can re-enable pings. They
+ * are valid for a first reply, a follow-up and an edit alike: handler results, failure cards and
+ * pre-modal refusals are all presenter replies, which always carry content, embeds and components.
  */
 function sendable(presented: Presented) {
   return { ...presented.options, allowedMentions: { parse: [] as [] } };
 }
 
 /**
- * Options for an in-place update: the defaults clear the previous view's text, embeds, buttons and
- * files, so a result without controls removes the old ones instead of leaving them live. A fresh
- * attachments array each time, because discord.js appends new files to it.
+ * Options for an in-place update. A presenter reply always carries content, embeds and components
+ * (empty when unused), so the edit replaces the previous view's text, embeds and buttons, and a
+ * result without controls removes the old ones instead of leaving them live. The empty attachments
+ * list clears earlier files; it is a fresh array each time, because discord.js appends new files
+ * to it.
  */
-function replacing(result: HandlerResult): InteractionEditReplyOptions {
-  return { content: "", embeds: [], components: [], attachments: [], ...options(result) };
+function replacing(presented: Presented): InteractionEditReplyOptions {
+  return { attachments: [], ...sendable(presented) };
+}
+
+/**
+ * A handler's result, checked at runtime because discovered modules are untyped JavaScript once
+ * compiled. Anything but a presenter reply (legacy edit options, a JSON dump, undefined) is a
+ * programming error: it is presented as an unexpected failure after the work ran, never sent.
+ */
+function presented(result: unknown, scope: string): Presented {
+  if (result instanceof Presented) return result;
+  throw new Error(`The ${scope} handler must return a presenter reply.`);
 }
 
 /** What the catch path needs to know about how far the interaction got. */
@@ -205,7 +208,7 @@ export class InteractionRouter {
       progress.viewer = viewerOf(actor, interaction.id);
       authorize(actor, interaction.guildId, module.access);
       // Separate lookups retain precise interaction types without casting a handler union.
-      let result: HandlerResult;
+      let result: unknown;
       if (interaction.isChatInputCommand()) {
         const command = this.commands.get(interaction.commandName);
         if (!command?.execute) throw new Error("Command disappeared from immutable registry");
@@ -224,8 +227,10 @@ export class InteractionRouter {
           interaction,
         });
       }
+      // From here the handler's work has run, so a failure may follow a saved change.
       progress.phase = "deliver";
-      await interaction.editReply(progress.mode === "update" ? replacing(result) : options(result));
+      const reply = presented(result, progress.scope);
+      await interaction.editReply(progress.mode === "update" ? replacing(reply) : sendable(reply));
     } catch (error) {
       await this.fail(interaction, error, progress);
     }

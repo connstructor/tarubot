@@ -723,7 +723,7 @@ describe("character failures", () => {
     }
   });
 
-  test("pending_proof shows Token expires and Check again, and re-renders in place", () => {
+  test("pending_proof shows the approved checklist and Check again, and re-renders in place", () => {
     const error = new Failure("pending_proof", "Not yet.", 0, {
       kind: "proof",
       character: CHARACTER,
@@ -741,7 +741,8 @@ describe("character failures", () => {
       tone: "pending",
       title: "Token not on the Lodestone yet",
     });
-    expect(fieldOf(embed, "Token expires")).toBe("<t:1790170200:R> (<t:1790170200:t>)");
+    // Approved characters#10 has no fields; /claim's card carries the token's deadline.
+    expect(embed.fields ?? []).toEqual([]);
     expect(buttonsOf(presented)).toMatchObject([
       { label: "Check again", custom_id: "verify:again:12345678" },
     ]);

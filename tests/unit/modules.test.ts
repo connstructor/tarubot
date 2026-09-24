@@ -85,7 +85,7 @@ test("service dependencies are checked before a router can accept interactions",
       .setName("requires-service")
       .setDescription("Dependency fixture"),
     requires: [key],
-    execute: () => ({ content: "ready" }),
+    execute: () => reply({ tone: "neutral", title: "Ready" }),
   });
   const client = new Client({ intents: [] });
   try {
@@ -161,6 +161,13 @@ test("component discovery owns custom-ID namespaces independently", async () => 
   expect(components.get("fixture")?.acknowledge).toBe("reply");
 });
 
+test("duplicate component prefixes fail discovery instead of shadowing a namespace", async () => {
+  // Two modules claiming one prefix would route every click to whichever loaded last.
+  await expect(loadComponents(new URL("duplicate-components/", fixtures))).rejects.toThrow(
+    "Duplicate component prefix: collide",
+  );
+});
+
 test("discovered fixtures answer with presenter replies and receive a viewer", async () => {
   const client = new Client({ intents: [] });
   try {
@@ -201,6 +208,7 @@ test("compiled output discovers the same module inventory as source", async () =
   const errors = await new Response(child.stderr).text();
   expect(await child.exited).toBe(0);
   expect(errors).toBe("");
+  // Component prefixes in discovery (file-name) order: the seven 2.14.0 namespaces.
   expect(JSON.parse(output)).toEqual({
     commands: [...source.keys()],
     events: 15,

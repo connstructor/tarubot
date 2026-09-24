@@ -27,7 +27,6 @@ import {
   code,
   count,
   cutMarkdown,
-  deadline,
   gilText,
   link,
   list,
@@ -822,7 +821,11 @@ const WAIT_TEXT: Readonly<Record<string, string>> = {
   stopping: "TaruBot is restarting right now.",
 };
 
-/** A token not yet visible (approved characters#10): pending, with Check again in place. */
+/**
+ * A token not yet visible (approved characters#10, reproduced as drawn): pending, the checklist,
+ * and Check again in place. The card adds no deadline field; the approved description's "before
+ * your token expires" points back to the Token expires field on /claim's card.
+ */
 function pendingProofView(s: Situation): FailureView {
   const proof = s.detail?.kind === "proof" ? s.detail : undefined;
   if (!proof)
@@ -847,7 +850,6 @@ function pendingProofView(s: Situation): FailureView {
       `Then run ${code(id ? `/verify character:${id}` : "/verify")} again before your token expires.`,
     ].join("\n"),
     unchanged: "none",
-    fields: [{ name: "Token expires", value: deadline(proof.expiresAt), inline: true }],
     buttons: id ? [verifyButton("again", id)] : [],
   };
 }

@@ -219,7 +219,7 @@ describe("approved cards", () => {
     ).toBe("Find this reference in the bot logs (operation field).");
   });
 
-  test("characters#10: the pending token with its deadline and Check again in place", () => {
+  test("characters#10: the pending token's checklist, exactly as drawn, with Check again", () => {
     const presented = FAILURE_CASES["pending proof · /verify · member"].render();
     expect(onlyEmbed(presented)).toMatchObject({
       title: "Token not on the Lodestone yet",
@@ -231,11 +231,9 @@ describe("approved cards", () => {
         "",
         "Then run `/verify character:12345678` again before your token expires.",
       ].join("\n"),
-      fields: [
-        { name: "Token expires", value: "<t:1790170200:R> (<t:1790170200:t>)", inline: true },
-      ],
       footer: { text: `Code pending_proof · Ref ${REF}` },
     });
+    expect(onlyEmbed(presented).fields ?? []).toEqual([]);
     expect(buttonsOf(presented)).toMatchObject([
       { label: "Check again", custom_id: "verify:again:12345678" },
     ]);

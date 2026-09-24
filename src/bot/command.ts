@@ -3,7 +3,6 @@ import type {
   ApplicationCommandOptionChoiceData,
   AutocompleteInteraction,
   ChatInputCommandInteraction,
-  InteractionEditReplyOptions,
   ModalBuilder,
   SlashCommandBuilder,
 } from "discord.js";
@@ -12,12 +11,6 @@ import type { Presented } from "../discord/presenters/reply.js";
 import type { Actor } from "../domain/policy.js";
 import type { BotContext } from "./context.js";
 import type { ServiceKey } from "./services.js";
-
-/**
- * What a handler returns: a presenter reply, or, until every group has migrated to presenters in
- * 2.14.0, legacy edit-reply options. The router forces mentions off either way.
- */
-export type HandlerResult = Presented | InteractionEditReplyOptions;
 
 /** Both command and autocomplete handlers receive an already authenticated guild actor. */
 export interface CommandContext extends BotContext {
@@ -66,7 +59,13 @@ interface CommandMetadata {
 export type CommandOptions = CommandMetadata &
   (
     | {
-        readonly execute: (context: CommandContext) => Promise<HandlerResult> | HandlerResult;
+        /**
+         * Parse options, call one service method and return its presenter's reply. Only the
+         * presenter builders in src/discord/presenters/reply.ts can create a Presented, so a
+         * handler cannot send raw options, JSON or its own flags; failures are thrown, never
+         * caught, and the router presents them.
+         */
+        readonly execute: (context: CommandContext) => Promise<Presented> | Presented;
         readonly modal?: never;
         readonly beforeModal?: never;
       }

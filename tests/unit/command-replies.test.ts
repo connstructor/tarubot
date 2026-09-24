@@ -5,7 +5,8 @@
  * embed (no flags: the router owns visibility; content only for the /claim token). Through the
  * router, an ownership conflict shows its current owner to an officer on /assign and to no member
  * (owner decision O3), and malformed ledger options and /config's exactly-one checks are input
- * failures that never reach the service.
+ * failures that never reach the service. Together the path tables reach every registered command
+ * path but /apply's form and /version, and every command keeps its private default visibility.
  */
 import { afterEach, expect, test } from "bun:test";
 import { ApplicationCommandOptionType } from "discord.js";
@@ -19,6 +20,7 @@ import { RoleAdministration } from "../../src/application/role-administration.js
 import { Service } from "../../src/application/service.js";
 import { Synchronization } from "../../src/application/synchronization.js";
 import type { Command } from "../../src/bot/command.js";
+import { loadCommands } from "../../src/bot/discovery.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
 import assignCommand from "../../src/commands/characters/assign.command.js";
@@ -45,11 +47,14 @@ import { Failure } from "../../src/domain/values.js";
 import { interactionFixture, type RecordedRequest } from "../fixtures/interactions.js";
 import { CHARACTER_RESULTS as R, TARGET_ID, TOKEN } from "../fixtures/replies/characters.js";
 import {
+  CHANNEL,
   CONFIG_FC,
   CONFIG_RESULTS as C,
   configChange,
+  configGuild,
   OVERRIDE_USER,
   override,
+  ROLE,
 } from "../fixtures/replies/configuration.js";
 import {
   ACTION_RESULTS as GA,
@@ -324,6 +329,27 @@ const PATHS: readonly {
   {
     command: ledgerCommand,
     options: [
+      subcommand("withdraw", [
+        { type: S.Integer, name: "amount", value: 2_500_000 },
+        text("note", "Company workshop materials for airship parts"),
+      ]),
+    ],
+    actor: MANAGER,
+    results: { ledger: L.withdraw },
+    title: "Withdrawal recorded",
+    call: [
+      "ledger",
+      "400",
+      "withdraw",
+      2_500_000,
+      "Company workshop materials for airship parts",
+      INTERACTION_ID,
+      null,
+    ],
+  },
+  {
+    command: ledgerCommand,
+    options: [
       subcommand("adjust", [
         text("balance", "117900000"),
         text("note", "Recount"),
@@ -487,7 +513,7 @@ const OFFICER: Actor = { ...MEMBER, officer: true };
 const B = ApplicationCommandOptionType.Boolean;
 
 /** Each guest, sync and utility command path: options, actor, stubbed result, title and call. */
-const WS7_PATHS: readonly {
+const GUEST_SYNC_PATHS: readonly {
   readonly command: Command;
   readonly options: unknown[];
   readonly actor: Actor;
@@ -600,7 +626,7 @@ const WS7_PATHS: readonly {
 ];
 
 test("every guest, sync and utility command returns its presenter's one embed", async () => {
-  for (const path of WS7_PATHS) {
+  for (const path of GUEST_SYNC_PATHS) {
     const { app, calls } = stubService(path.results);
     const result = await run(
       path.command,
@@ -680,6 +706,7 @@ async function runConfig(
   options: unknown[],
   actor: Actor,
   results: Readonly<Record<string, unknown>>,
+  resolved?: unknown,
 ) {
   const { app, calls } = stubService(results);
   await open?.close();
@@ -696,7 +723,7 @@ async function runConfig(
     resolveActor: async () => actor,
     actor,
     viewer: viewerOf(actor, "1290000000000000001"),
-    interaction: fixture.slash(command.name, options),
+    interaction: fixture.slash(command.name, options, resolved),
   });
   return { result, calls };
 }
@@ -708,10 +735,25 @@ const group = (name: string, options: unknown[]) => ({
   options,
 });
 
+/** A raw role option naming a role by ID. */
+const role = (id: string) => ({ type: S.Role, name: "role", value: id });
+
+/** The resolved role objects Discord sends beside role options, keyed by ID. */
+const resolvedRoles = (...ids: string[]) => ({
+  roles: Object.fromEntries(
+    ids.map((id) => [
+      id,
+      { id, name: "Access role", color: 0, hoist: false, position: 1, permissions: "0" },
+    ]),
+  ),
+});
+
 /** Each configuration command path: options, actor, stubbed result, expected title and call. */
 const CONFIG_PATHS: readonly {
   readonly command: Command;
   readonly options: unknown[];
+  /** Discord's resolved objects for role options, as the raw payload carries them. */
+  readonly resolved?: unknown;
   readonly actor: Actor;
   readonly results: Record<string, unknown>;
   readonly title: string;
@@ -756,6 +798,74 @@ const CONFIG_PATHS: readonly {
     results: { configure: configChange("ledger_channel_id", null) },
     title: "Ledger channel cleared",
     call: ["configure", "400", "ledger_channel_id", null, {}],
+  },
+  {
+    command: configCommand,
+    options: [group("roles", [subcommand("member", [role(ROLE.member)])])],
+    resolved: resolvedRoles(ROLE.member),
+    actor: OFFICER,
+    results: { configure: C.memberSet },
+    title: "Member role set",
+    call: ["configure", "400", "member_role_id", ROLE.member, {}],
+  },
+  {
+    command: configCommand,
+    options: [group("roles", [subcommand("guest", [{ type: B, name: "clear", value: true }])])],
+    actor: OFFICER,
+    results: { configure: configChange("guest_role_id", null, { previous: ROLE.guest }) },
+    title: "Guest role cleared",
+    call: ["configure", "400", "guest_role_id", null, {}],
+  },
+  {
+    // Only the Officer binding passes adopt_holders on to the service.
+    command: configCommand,
+    options: [
+      group("roles", [
+        subcommand("officer", [
+          role(ROLE.officer),
+          { type: B, name: "adopt_holders", value: false },
+        ]),
+      ]),
+    ],
+    resolved: resolvedRoles(ROLE.officer),
+    actor: MANAGER,
+    results: { configure: C.officerNotAdopted },
+    title: "Officer role set without adopting holders",
+    call: ["configure", "400", "officer_role_id", ROLE.officer, { adoptHolders: false }],
+  },
+  {
+    command: configCommand,
+    options: [group("roles", [subcommand("leader", [role(ROLE.leader)])])],
+    resolved: resolvedRoles(ROLE.leader),
+    actor: MANAGER,
+    results: { configure: configChange("leader_role_id", ROLE.leader) },
+    title: "FC Leader role set",
+    call: ["configure", "400", "leader_role_id", ROLE.leader, {}],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("officer_notifications", [{ type: B, name: "clear", value: true }])],
+    actor: OFFICER,
+    results: {
+      configure: configChange("officer_notifications_channel_id", null, {
+        previous: CHANNEL.notices,
+      }),
+    },
+    title: "Officer notifications turned off",
+    call: ["configure", "400", "officer_notifications_channel_id", null, {}],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("guest_applications", [{ type: B, name: "clear", value: true }])],
+    actor: OFFICER,
+    results: {
+      configure: configChange("guest_application_channel_id", null, {
+        previous: CHANNEL.reviews,
+        guild: configGuild({ guest_application_channel_id: null }),
+      }),
+    },
+    title: "Guest applications closed",
+    call: ["configure", "400", "guest_application_channel_id", null, {}],
   },
   {
     command: configCommand,
@@ -805,7 +915,13 @@ const CONFIG_PATHS: readonly {
 
 test("every configuration, setup and officer command returns its presenter's one embed", async () => {
   for (const path of CONFIG_PATHS) {
-    const { result, calls } = await runConfig(path.command, path.options, path.actor, path.results);
+    const { result, calls } = await runConfig(
+      path.command,
+      path.options,
+      path.actor,
+      path.results,
+      path.resolved,
+    );
     if (!(result instanceof Presented)) throw new Error(`/${path.command.name} returned no reply`);
     expect({ command: path.command.name, title: result.options.embeds[0]?.title }).toEqual({
       command: path.command.name,
@@ -853,4 +969,67 @@ test("/config's exactly-one checks are input failures that never reach the servi
     expect(error).toBeInstanceOf(Failure);
     expect(error).toMatchObject({ code: "input", message, detail: { kind: "option", option } });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// The whole command surface
+
+/** A raw option payload as the path walk reads it. */
+interface RawOption {
+  readonly type: number;
+  readonly name: string;
+  readonly options?: readonly RawOption[];
+}
+
+/** Whether a raw option selects a subcommand or subcommand group rather than a value. */
+const isRoute = (option: RawOption): boolean =>
+  option.type === S.Subcommand || option.type === S.SubcommandGroup;
+
+/** The registered path a raw payload selects: 'config roles officer', 'ledger deposit', 'claim'. */
+function pathOf(command: Command, options: readonly unknown[]): string {
+  const parts = [command.name];
+  let level = options as readonly RawOption[];
+  for (let route = level.find(isRoute); route; route = level.find(isRoute)) {
+    parts.push(route.name);
+    level = route.options ?? [];
+  }
+  return parts.join(" ");
+}
+
+/** Every registered path, flattened from the discovered builders as commands.test does. */
+async function registeredPaths(): Promise<string[]> {
+  const paths: string[] = [];
+  const visit = (prefix: string, options: readonly RawOption[]): void => {
+    const nested = options.filter(isRoute);
+    if (!nested.length) paths.push(prefix);
+    for (const option of nested) visit(`${prefix} ${option.name}`, option.options ?? []);
+  };
+  for (const command of (await loadCommands()).values()) {
+    const data = command.toJSON();
+    visit(data.name, (data.options ?? []) as readonly RawOption[]);
+  }
+  return paths.sort();
+}
+
+test("the path tables return one embed for every registered command path", async () => {
+  const covered = new Set(
+    [...PATHS, ...GUEST_SYNC_PATHS, ...CONFIG_PATHS].map((path) =>
+      pathOf(path.command, path.options),
+    ),
+  );
+  const paths = await registeredPaths();
+  expect(paths).toHaveLength(41);
+  // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
+  // and /version reads GitHub, which version.test stubs; every other path is exercised above.
+  expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "version"]);
+});
+
+test("every registered command keeps its private default visibility", async () => {
+  // Replies stay ephemeral; only the DevBot test guild's PUBLIC_TEST_RESPONSES override (applied
+  // by the router, not the command) makes them public there.
+  for (const command of (await loadCommands()).values())
+    expect({ command: command.name, ephemeral: command.ephemeral }).toEqual({
+      command: command.name,
+      ephemeral: true,
+    });
 });

@@ -1,8 +1,8 @@
 /** Custom-ID namespaces let buttons, menus, and modals be extended without router edits. */
 import type { MessageComponentInteraction, ModalSubmitInteraction } from "discord.js";
 import type { Viewer } from "../discord/presenters/audience.js";
+import type { Presented } from "../discord/presenters/reply.js";
 import type { Actor } from "../domain/policy.js";
-import type { HandlerResult } from "./command.js";
 import type { BotContext } from "./context.js";
 import type { ServiceKey } from "./services.js";
 
@@ -33,7 +33,8 @@ export interface ComponentOptions {
    * the router replies instead and the handler's strict parser reports the out-of-date control.
    */
   readonly acknowledge?: AcknowledgeMode | ((customId: string) => AcknowledgeMode);
-  readonly execute: (context: ComponentContext) => Promise<HandlerResult> | HandlerResult;
+  /** Re-authorize the presser's payload and return a presenter reply, as a command does. */
+  readonly execute: (context: ComponentContext) => Promise<Presented> | Presented;
 }
 
 /** An async function would resolve after the acknowledgement it is meant to choose. */

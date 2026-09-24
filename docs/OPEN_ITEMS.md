@@ -7,7 +7,8 @@ Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which disting
 ## Established baseline
 
 - All declared command families are implemented, including `/version`: **19 roots / 41 paths** from 2.13.0 (`/config role_layout` added).
-- **2.13.0** (branch `feat/launch-policy-2.13.0`; not yet merged, published, or deployed) implements the owner's 2026-09-23 launch decisions and the cutover tooling. Its full container run passed **278 tests / 2,843 assertions** with both the supplied dump and the synthetic CI fixture. It includes:
+- **2.14.0** (branch `feat/reply-presenters-2.14.0`; not yet merged, published, or deployed) replaces every JSON reply with the owner-approved embeds: one house-style embed per command, button, form and pre-form reply, failures with `Code · Ref` footers that match the logs, and embed ledger posts, review messages and decision DMs ([REPLIES.md](REPLIES.md)). It adds no migration. Its full container run passed **1,141 tests / 34,266 assertions** with the supplied dump. The DevBot reply session, including a pass with Discord changes paused, is in `test-plans/current.json`.
+- **2.13.0** (merged in PR #11 and published) implements the owner's 2026-09-23 launch decisions and the cutover tooling. Its full container run passed **278 tests / 2,843 assertions** with both the supplied dump and the synthetic CI fixture. It includes:
   - registered-user Guest in every guild, with the multi-character union (ROLE-07);
   - one-time grandfathered Guest grants at first activation, from a checksum-confirmed preview plan (MIG-14);
   - the per-guild role-layout switch (CFG-07);
@@ -53,7 +54,8 @@ These paths have implementation and automated coverage. The remaining work is to
 | Version command | `commits:1` and `commits:10` through Discord; ordinary non-officer access; link clicks and badge appearance. Owner invocation and live backend retrieval have passed. | Approved `/version` amendment |
 | Recovery | Restart with pending guest/ledger work, reconnects, permission loss/restoration, and graceful shutdown while decisions/effects are in flight. | **DB-03–06, OPS-07–09, AC-20–22** |
 | App Platform | Owner-authorized: provision the managed cluster, user, grants, and trusted sources; create the `foundation` app; prove TLS, migration, and the firewall rule; rehearse a fork-based restore and the single-writer update procedure; perform the activation deploy in the window. | **DEPLOY-DO-01**; `docs/APP_PLATFORM.md` |
-| 2.13.0 on DevBot | After merge and publication: stopped-writer backup, restore/migration rehearsal (`check-restore --schema-version`, then `migrate.js --restore-rehearsal` on `tarubot_dev_restore_test` as in OPERATIONS.md), migration 005, guild command registration (19 roots / 41 paths), layout-switch and multi-character union checks, the closed-applications refusal, and the deployment-guard refusals with the DevBot `.env` (which must first name `tarubot_dev`). | **CFG-07, ROLE-07, OPS-14, AC-24–27** |
+| 2.13.0 on DevBot | Stopped-writer backup, restore/migration rehearsal (`check-restore --schema-version`, then `migrate.js --restore-rehearsal` on `tarubot_dev_restore_test` as in OPERATIONS.md), migration 005, guild command registration (19 roots / 41 paths), layout-switch and multi-character union checks, the closed-applications refusal, and the deployment-guard refusals with the DevBot `.env` (which must first name `tarubot_dev`). Record the outcomes in DEV_GUILD.md. | **CFG-07, ROLE-07, OPS-14, AC-24–27** |
+| 2.14.0 on DevBot | Deploy (no migration), re-register commands, and run the reply session in `test-plans/current.json`: compare every reply with the approved mockups, match each error's Ref and Code to the log, read back the ledger posts and the review message, and repeat the change receipts and sync views with `ENABLE_EFFECTS=false`. | **UX-01–03, LEDGER-08** |
 
 ## Production delivery gates
 
@@ -71,8 +73,8 @@ These paths have implementation and automated coverage. The remaining work is to
 The owner put guest-form acceptance and lobby onboarding on hold until after launch (2026-09-23) and chose App Platform with a managed PostgreSQL cluster for production.
 
 1. Finish the 2.12.3 launch-scope DevBot session (deployed 2026-09-23; ledger initialize/deposit/withdraw/history passed): `/ledger adjust`, non-officer denials, `/assign`/`/unassign`, Member/Guest removals and drift repair, and `/guest grant`/`/guest revoke`.
-2. Release the cutover policy and tooling: onboarding-independent registered-visitor Guest, first-activation grandfathered Guest grants, a per-guild role-layout switch, `/apply` off at launch, production tool separation, legacy command cleanup, and the managed-database App Platform spec. **Implemented in 2.13.0** on `feat/launch-policy-2.13.0`; merge, publication, and the DevBot validation session remain.
-3. Replace every JSON reply with the owner-approved embeds (2.14.0), then complete operational alerting/telemetry (OPS-10/OPS-11, 2.15.0).
+2. Release the cutover policy and tooling: onboarding-independent registered-visitor Guest, first-activation grandfathered Guest grants, a per-guild role-layout switch, `/apply` off at launch, production tool separation, legacy command cleanup, and the managed-database App Platform spec. **Merged and published in 2.13.0** (PR #11); its DevBot validation session remains to record.
+3. Replace every JSON reply with the owner-approved embeds (2.14.0). **Implemented** on `feat/reply-presenters-2.14.0`; the DevBot reply session, merge and publication remain. Then complete operational alerting/telemetry (OPS-10/OPS-11, 2.15.0).
 4. Provision the managed database and App Platform app, establish backups/PITR, and rehearse restore on production-shaped data.
 5. Run the read-only dress rehearsal against the production guild, then the coordinated cutover.
 6. After launch: guest-form acceptance, lobby onboarding, and the remaining nickname/character scenarios.

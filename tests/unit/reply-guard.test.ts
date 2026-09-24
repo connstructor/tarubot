@@ -1,8 +1,8 @@
 /**
- * Guard against JSON replies: the officer details path (presenters/reply.ts and the details
- * component) is the only place allowed to send a result as JSON. Modules still on the pre-2.14.0
- * dataReply dump are listed in PENDING, a ratchet each group workstream shrinks as it migrates;
- * the test fails when a listed module stops using it (remove the entry) or an unlisted one starts.
+ * Guard against JSON replies: the officer details path (presenters/reply.ts, where dataReply is
+ * defined, and the details component that calls it) is the only place allowed to send a result as
+ * JSON. The pre-2.14.0 JSON dump (src/discord/replies.ts) is deleted and every command, button and
+ * form now returns a presenter reply, so any other reference fails here.
  */
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
@@ -11,12 +11,6 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 /** Where dataReply belongs for good: its definition and the officer details component. */
 const ALLOWED = new Set(["src/discord/presenters/reply.ts", "src/components/details.component.ts"]);
-
-/** Modules that still dump results as JSON through src/discord/replies.ts, until they migrate. */
-const PENDING = new Set([
-  // The legacy dump itself: nothing imports it any more, and WS10 deletes it.
-  "src/discord/replies.ts",
-]);
 
 /** Every first-party source file, keyed by its repository-relative path. */
 async function sources(): Promise<Map<string, string>> {
@@ -42,21 +36,28 @@ function valuesImports(source: string): string[] {
   return names;
 }
 
-test("dataReply is used only by the details path and the modules still migrating", async () => {
+test("dataReply is referenced only by its definition and the officer details component", async () => {
   const files = await sources();
   const users = [...files].filter(([, text]) => /\bdataReply\b/u.test(text)).map(([path]) => path);
-  // A new JSON reply outside the details path (or a module missing from PENDING).
-  expect(users.filter((path) => !ALLOWED.has(path) && !PENDING.has(path))).toEqual([]);
-  // A migrated module still listed in PENDING: remove it so the ratchet only tightens.
-  expect([...PENDING].filter((path) => !users.includes(path))).toEqual([]);
+  expect(users.sort()).toEqual([...ALLOWED].sort());
+});
+
+test("the legacy JSON dump module stays deleted", async () => {
+  // Nothing may bring back src/discord/replies.ts or import it under its old path.
+  const files = await sources();
+  expect(files.has("src/discord/replies.ts")).toBe(false);
+  for (const [path, text] of files)
+    expect({ path, imports: /from\s*"[^"]*\/discord\/replies\.js"/u.test(text) }).toEqual({
+      path,
+      imports: false,
+    });
 });
 
 test("no source builds an inline JSON code block", async () => {
   for (const [path, text] of await sources()) {
     expect({ path, fenced: text.includes("```json") }).toEqual({ path, fenced: false });
-    // The escaped template form the legacy dump uses is allowed only until it is deleted.
-    if (!PENDING.has(path))
-      expect({ path, escaped: text.includes("\\`\\`\\`json") }).toEqual({ path, escaped: false });
+    // The escaped template form the deleted dump used (\`\`\`json) is banned as well.
+    expect({ path, escaped: text.includes("\\`\\`\\`json") }).toEqual({ path, escaped: false });
   }
 });
 

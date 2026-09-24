@@ -57,8 +57,8 @@ export interface ReplyCase {
 export type ReplyCatalog<Kind extends string> = Readonly<Record<Kind, ReplyCase>>;
 
 /**
- * Every group's catalog. Group workstreams import their catalog module here as they migrate from
- * the JSON replies; the cross-group consistency pins read this map.
+ * Every group's catalog. A new reply group registers its catalog module here; the cross-group
+ * consistency pins read this map.
  */
 export const CATALOGS: Readonly<Record<string, ReplyCatalog<string>>> = {
   failures: FAILURE_CASES,

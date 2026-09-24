@@ -14,7 +14,8 @@ src/
     utility/*.command.ts
   events/*.event.ts            # One file per independently identifiable listener
   components/*.component.ts   # One file per custom-ID namespace
-  discord/                    # SDK port, option builders, selectors, and reply helpers
+  discord/                    # SDK port, option builders, selectors, and the custom-ID codec
+    presenters/               # Pure reply presenters: house style, failures, one module per group
   application/                # Injectable feature services and durable business operations
 ```
 
@@ -47,31 +48,50 @@ Create `src/commands/utility/hello.command.ts`:
 /** A generic Discord utility; it needs no game-specific service. */
 import { defineCommand } from "../../bot/command.js";
 import { command } from "../../discord/options.js";
+import { mentionUser } from "../../discord/presenters/format.js";
+import { reply } from "../../discord/presenters/reply.js";
 
 export default defineCommand({
   data: command("hello", "Say hello"),
   execute({ actor }) {
-    // Return ordinary Discord edit-reply options; the router has already deferred.
-    return { content: `Hello, ${actor.userId}!` };
+    // Return a presenter reply; the router has already deferred and owns visibility and mentions.
+    return reply({
+      tone: "neutral",
+      title: "Hello",
+      description: `Hello, ${mentionUser(actor.userId)}!`,
+    });
   },
 });
 ```
 
 The module owns its builder, `execute`, optional `autocomplete`, and optional required services. Root commands such as `/config` keep their related subcommands together in that feature's module.
 
-The router provides guild/human checks, test-guild scoping, current actor resolution, prompt acknowledgement, safe failure presentation, and default mention handling. Replies default to ephemeral; new features with an intentionally public response can declare `ephemeral: false`. Existing product commands retain their ephemeral contract.
+The router provides guild/human checks, test-guild scoping, current actor resolution, the viewer, prompt acknowledgement, failure presentation, and mention handling. Replies default to ephemeral; new features with an intentionally public response can declare `ephemeral: false`. Existing product commands retain their ephemeral contract.
 
 For observed development sessions, `PUBLIC_TEST_RESPONSES=true` overrides command/component visibility only in `TEST_GUILD_ID`. It does not bypass authorization. The DevBot Compose overlay enables this policy so the development server can follow testing.
 
 For an officer-only root, set both the Discord builder's default `ManageGuild` permission and `access: "officer"`. Mixed-permission subcommands must authorize their individual operations. Application services recheck authorization independently.
 
-`execute` can return content, embeds, attachments, or components. `dataReply()` is available for bounded structured results. Autocomplete returns up to 25 string choices and uses Discord's permission-bearing interaction payload, since autocomplete cannot defer. Keep private completion queries inside an authorized application operation.
+Autocomplete returns up to 25 string choices, built with `choice()` from `src/discord/presenters/format.ts` so labels are cut on character boundaries, and uses Discord's permission-bearing interaction payload, since autocomplete cannot defer. Keep private completion queries inside an authorized application operation.
+
+### Present results
+
+`execute` returns exactly one presenter reply (`Presented`), and nothing else: the command and component contracts are typed that way, and the router answers any other value as an unexpected failure instead of sending it. [REPLIES.md](REPLIES.md) is the house style. In short:
+
+- A command parses its options, calls one service method and returns that result's presenter, such as `presenter(await app.method(actor, …), viewer, options)`. Put the presenter in `src/discord/presenters/<group>.ts`; it is a pure function of the typed result (`src/application/results.ts`), the `viewer` and injected options such as `now`, and it imports application types only.
+- Build every reply with `reply()` (or `post()` for channel posts and DMs). It produces one embed with a tone, an outcome-first title of at most 60 characters with `·` between sections, short labelled fields, and optional approved buttons, and enforces Discord's limits.
+- Format with the shared helpers: `gilText`/`signedGilText` for exact grouped gil with a U+2212 minus, `when()` and `deadline()` for Discord timestamps (never ISO strings), `plain()` and `quote()` to escape and bound user text, and mention helpers that never ping.
+- Report what was saved, not what Discord will do: queued work reads `… QUEUED`, paused work `‖ PAUSED`, and completion words wait for a succeeded job. Use `effectsField()` and `pausedSave()` from `jobs.ts` for change receipts.
+- Choose wording by audience from `viewer`, never access: members never see job or entry UUIDs, diagnostics or other members' details; officers get full copyable IDs where a follow-up command needs them.
+- Throw a `Failure` with a catalog code and typed detail, and let the router present it through the one failure presenter. Never catch a failure to build your own error reply.
+- Never set `flags` or `allowedMentions`; the router applies visibility and forces mentions off.
+- JSON reaches Discord only through the officer-only `details` component and `dataReply()`; `reply-guard.test.ts` fails on any other use. The DevBot test-session post and `officer.notify` are the documented exclusions.
 
 ### Open a modal
 
 A command can declare a synchronous `modal(interaction)` factory **instead of** `execute`. It returns a `ModalBuilder`, as `/apply` does using labeled text inputs. These openers are user-access only, receive no resolved actor, and must not do network/database work: `showModal` must be Discord's initial acknowledgement. Opening the form does not create a record or grant authority.
 
-An optional `beforeModal({ guildId, services, interaction })` check may refuse a closed feature before the form opens. It receives the router-verified guild but no actor, and returns a presenter reply (`Presented`, built with `reply()`) or `null`. Keep it to one fast local read: the router waits at most `MODAL_GATE_BUDGET_MS` (1.5 s) inside Discord's three-second window, and if the check errors, overruns or returns anything else, the problem is logged at warn and the form opens as before. A refusal is sent as the interaction's only reply, with the default visibility and mentions disabled; it is an expected state, so it is not reported and carries no `Code · Ref` footer. The check is a courtesy, not authorization, so the submission path must repeat it. `/apply` uses it to refuse while guest applications are closed; the constructor rejects `beforeModal` on a non-modal command.
+An optional `beforeModal({ guildId, services, interaction })` check may refuse a closed feature before the form opens. It receives the router-verified guild but no actor, and returns a presenter reply (`Presented`, built with `reply()` or a group presenter) or `null`. Keep it to one fast local read: the router waits at most `MODAL_GATE_BUDGET_MS` (1.5 s) inside Discord's three-second window, and if the check errors, overruns or returns anything else, the problem is logged at warn and the form opens as before. A refusal is sent as the interaction's only reply, with the default visibility and mentions disabled; it is an expected state, so it is not reported and carries no `Code · Ref` footer. The check is a courtesy, not authorization, so the submission path must repeat it. `/apply` uses it to refuse while guest applications are closed; the constructor rejects `beforeModal` on a non-modal command.
 
 Route submission through a separate discovered component namespace. The router defers that submission, resolves the current actor, and authorizes it before the handler runs. Validate actor/guild bindings, input limits, and current persisted context again in the application operation; custom IDs are context, not credentials. A form may remain open across a process restart. Reject obsolete joins and duplicate submissions according to the feature's durable policy. Pre-acknowledgement failures use the same reply-visibility rules as deferred errors.
 
@@ -130,7 +150,16 @@ A click is acknowledged with a new reply by default. A component that re-renders
 
 The `guest` component demonstrates durable officer review IDs: it validates action, application UUID, guild, actor permissions, and stored message identity before committing a decision. The separate user-level `guest-apply` namespace handles application forms and their join bindings. New components should resolve private payloads through the same owning-guild authorization rules.
 
-Reply buttons build and parse their custom IDs with the one codec in `src/discord/custom-ids.ts`, which carries selectors only (never the clicker). The `verify` component serves `/claim`'s verify-now button (always a new reply, so the token message is never edited) and the pending-token card's Check again (an in-place update, refused within 15 seconds of the card's last render). The officer-only `details` component re-runs an officer read view for its presser and replies with the JSON file through `dataReply()`; each read view that offers Full details adds its case there. The `ledger` component serves `/ledger balance`'s View history (always a new reply, so the balance stays visible) and the history pager, which re-reads each page in place as whoever clicked; a pager whose FC was replaced since the page was shown is refused as out of date. The `sync` component serves **Check sync status** (`sync:status[:<run>]`), which always opens a new reply with `/sync status` read for whoever clicked, and the `guest` review buttons answer with the same decision presenter as `/guest approve` and `deny`, parsing their IDs with the shared codec. The officer-only `config` component serves `/config show`'s **Run health check** and `/config validate`'s **Re-check** (`config:validate`), which re-run the read-only validation for whoever clicked and replace their own view with the checklist in place.
+Reply buttons build and parse their custom IDs with the one codec in `src/discord/custom-ids.ts`. IDs read `prefix:action[:selector…]`, stay within Discord's 100 characters at maximum inputs, and carry selectors only (an FC, entry number, character, run, application or target member), never the clicker. Buttons on a public test-guild reply can be pressed by anyone, so a handler re-authorizes the presser through the service with the fresh actor, and never trusts the ID for authority. Messages outlive deployments: a grammar only gains actions, and a retired action keeps parsing (and answering "out of date") for at least one minor release. Add a new button's grammar, builder and parser tests together (`custom-ids.test.ts`). The `verify` component serves `/claim`'s verify-now button (always a new reply, so the token message is never edited) and the pending-token card's Check again (an in-place update, refused within 15 seconds of the card's last render). The officer-only `details` component re-runs an officer read view for its presser and replies with the JSON file through `dataReply()`; each read view that offers Full details adds its case there. The `ledger` component serves `/ledger balance`'s View history (always a new reply, so the balance stays visible) and the history pager, which re-reads each page in place as whoever clicked; a pager whose FC was replaced since the page was shown is refused as out of date. The `sync` component serves **Check sync status** (`sync:status[:<run>]`), which always opens a new reply with `/sync status` read for whoever clicked, and the `guest` review buttons answer with the same decision presenter as `/guest approve` and `deny`, parsing their IDs with the shared codec. The officer-only `config` component serves `/config show`'s **Run health check** and `/config validate`'s **Re-check** (`config:validate`), which re-run the read-only validation for whoever clicked and replace their own view with the checklist in place.
+
+## Test a presenter
+
+Every reply state has a case in the reply catalog (`tests/fixtures/replies/<group>.ts`, registered in `index.ts`):
+
+1. Build the typed service result the state needs from the shared samples in `tests/fixtures/results.ts`, and add a `ReplyCase` with its approved `spec` (or `null` for a state without a drawn card), audience, tone, title, timestamp flag and `render()`. A group's catalog is `satisfies ReplyCatalog<Kind>`, so a new reply kind cannot ship without a case; set `concept` when the same concept is reachable from several commands, and `noOp` or `readOnly` where they apply.
+2. `catalogTests()` runs `expectHouseStyle` on every case: one embed that the discord.js validators accept, the tone's color and the title, the house and Discord limits, the timestamp flag, no JSON, mentions forced off, nothing cut, and button IDs the codec parses.
+3. Pin approved cards exactly in `tests/unit/replies-<group>.test.ts`, and add maximal-data variants for lists (`…and N more`, split fields) so no reply is ever cut.
+4. `reply-consistency.test.ts` then checks the case against every other catalog: one title and tone per concept and audience, the tone table, the marker rules, no ISO times, no stray UUIDs in member views, and the banned titles. `reply-guard.test.ts` keeps JSON on the officer details path, and `command-replies.test.ts` runs every registered command path through its presenter.
 
 ## Commenting conventions
 

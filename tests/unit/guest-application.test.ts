@@ -25,7 +25,7 @@ import {
   guestApplicationInput,
 } from "../../src/domain/guest-application.js";
 import { Failure } from "../../src/domain/values.js";
-import type { Presented } from "../../src/discord/presenters/reply.js";
+import { reply, type Presented } from "../../src/discord/presenters/reply.js";
 import {
   guestApplicationModal,
   guestApplicationSubmission,
@@ -325,7 +325,7 @@ test("modal submissions defer, resolve a fresh actor and enforce user/guild/type
       const input = guestApplicationInput.parse(guestApplicationSubmission(interaction, actor));
       expect(input.joinedAt.toISOString()).toBe(fixture.member.joinedAt);
       executions++;
-      return { content: "Accepted" };
+      return reply({ tone: "success", title: "Accepted" });
     },
   });
   try {
@@ -369,7 +369,7 @@ test("officer component authorization still happens after fresh lookup, before a
     access: "officer",
     execute: () => {
       executions++;
-      return { content: "Unexpected" };
+      return reply({ tone: "info", title: "Unexpected" });
     },
   });
   try {
