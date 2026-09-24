@@ -1,8 +1,8 @@
 # Legacy import and production cutover (App Platform + Managed PostgreSQL)
 
-This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14** and the "Approved launch amendments (2026-09-23)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [OPERATIONS.md](OPERATIONS.md#single-database-writer).
+This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14**, the "Approved launch amendments (2026-09-23)", and the "Approved reply-session amendments (2026-09-24)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [OPERATIONS.md](OPERATIONS.md#single-database-writer).
 
-2.13.0 supplies the launch policy and the cutover tooling used below. **The cutover itself uses a published release at or above 2.15.0**: 2.14.0 replaces every JSON reply with the approved embeds, and 2.15.0 adds operational telemetry and officer alerts (OPS-10, OPS-11). `X.Y.Z` below is that release.
+2.13.0 supplies the launch policy and the cutover tooling used below. **The cutover itself uses a published release at or above 2.16.0**: 2.14.0 replaces every JSON reply with the approved embeds, 2.15.0 ships the owner's reply-session decisions of 2026-09-24 (among them the guest-application switch this runbook relies on, the `unset_*` option names and `/officer reset` and `/guest reset`, with migration `006_guest_application_switch.sql`), and 2.16.0 adds operational telemetry and officer alerts (OPS-10, OPS-11). `X.Y.Z` below is that release.
 
 Every provider action (cluster, databases, grants, trusted sources, app create/update), the token reset, and command registration is a separately authorized owner step. Generating or validating a spec authorizes none of them.
 
@@ -40,8 +40,8 @@ Every supplied ownership record needs explicit destination guilds, and every sou
 - **Ledger.** Known balances become immutable import opening entries, including known zero. NULL balances produce uninitialized accounts.
 - **History.** Source character/FC relationships remain historical cache facts. Imported historical membership exists only where supplied trusted ownership and the source guild's linked FC match. Imported Member-role holders with that evidence get two-observation departure protection.
 - **Preferences.** Imported users have no primary character and nickname management disabled; captured nicknames are retained.
-- **Launch defaults** (owner decisions of 2026-09-23). The guild row starts with effects disabled, onboarding off (`access_policy_enabled=false`), the role-layout switch off (`role_layout_enabled=false`), grandfathering pending (`guest_grandfather='pending'`), and guest applications closed (`guest_application_channel_id` NULL). The legacy review channel is recorded in the report's `guildSettings[].guestApplications.legacyChannelId` and in the `migration.import` audit, not applied. The report's `bootstrap` block lists the same defaults.
-- **Guilds without a linked FC.** Such a guild is imported with grandfathering pending too. `acquire.js` does not apply to it (there is no roster), and preview and activation skip the roster-freshness and departure gates, so `preview.js GUILD_ID --output PLAN.json` still writes the plan and checksum that activation confirms. With no roster evidence, every present human without a revocation or an existing grant is planned a grant.
+- **Launch defaults** (owner decisions of 2026-09-23 and 2026-09-24). The guild row starts with effects disabled, onboarding off (`access_policy_enabled=false`), the role-layout switch off (`role_layout_enabled=false`), grandfathering pending (`guest_grandfather='pending'`), and guest applications switched off (`guest_applications_enabled=false`). The legacy review channel is imported into `guest_application_channel_id` without validation; the switch, not an unset channel, keeps `/apply` closed, so reopening applications after launch is `/config guest_applications enabled:true`, which validates that channel first (W16). The report's `guildSettings[].guestApplications` reads `{state: "closed", legacyChannelId}`, and the `migration.import` audit records the same. The report's `bootstrap` block lists the same defaults.
+- **Guilds without a linked FC.** Such a guild is imported with grandfathering pending too. `acquire.js` does not apply to it (there is no roster), and preview and activation skip the roster-freshness and departure gates, so `preview.js GUILD_ID --output PLAN.json` still writes the plan and checksum that activation confirms. With no roster evidence, every present human without a revocation or an existing grant (an active one, or one that `/guest reset` ended) is planned a grant.
 - **Idempotency.** The same fingerprint returns the committed import report and preserves later links, financial entries, preferences, and access decisions. A changed dump targeting an already populated guild produces an explicit conflict for an operator mapping/migration decision.
 
 ## E0. Conventions
@@ -105,7 +105,7 @@ Do not use `docker-compose.tools.yml`: it would recreate DevBot's default-projec
 
 ## E1. Preconditions
 
-1. **Releases.** 2.12.3, 2.13.0, 2.14.0, and X.Y.Z (at least 2.15.0) are merged and published, and the DevBot validation and pre-activation smoke test of X.Y.Z passed.
+1. **Releases.** 2.12.3, 2.13.0, 2.14.0, 2.15.0, and X.Y.Z (at least 2.16.0) are merged and published, and the DevBot validation and pre-activation smoke test of X.Y.Z passed.
 2. **Owner actions.**
    - Remove the production application `965294750741692416` from the development guild `1040379370159743139`. It must not be installed there: with `TEST_GUILD_ID` empty, its global commands would appear there, and a `/config` there would create an effects-enabled production guild row.
    - Record where the legacy bot runs and how its supervisor restart is disabled (W2).
@@ -149,7 +149,7 @@ The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, 
 10. Owner review, from `preview.json`:
     - **Member removals:** `roleTotals` entries whose `binding` is `member` (`remove`), plus `pendingDepartures`. This covers Member holders without a qualifying link, including those who already hold a grant.
     - **Guest additions:** registered users and former members (`grandfathering.plannedDetail.registeredVisitors`, `formerMembers`, `guestRoleAdded`).
-    - **Grandfathering:** `grandfathering.planned`, `skipped.existingGrant.byProvenance` (overlap with `imported_guest`), and `skipped.revoked` (expected 0).
+    - **Grandfathering:** `grandfathering.planned`, `skipped.existingGrant.byProvenance` (overlap with `imported_guest`), and `skipped.revoked` (expected 0). A grant that `/guest reset` ended also counts under `skipped.existingGrant`, so a reset before activation is not undone. It appears in no `byProvenance` entry, which lists active grants only. With no worker before W13, expect none here.
     - **Nicknames:** nickname targets are expected to be zero.
     - **Later layout:** `roleLayout.ifEnabled` shows what enabling the layout would change.
 11. Clean up. `doadmin` drops `tarubot_rehearsal` and `tarubot_restore_test`. After a rehearsal activation the database holds effects-enabled queued work, so drop it promptly. Delete `rehearsal.env`. Keep the timings and outputs.
@@ -168,23 +168,24 @@ The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, 
 
   ```sh
   pg psql -d tarubot -c "SELECT effects_enabled, access_policy_enabled, role_layout_enabled, guest_grandfather,
-    guest_application_channel_id, officer_role_id, leader_role_id, officer_rank_name FROM guilds"
+    guest_applications_enabled, guest_application_channel_id, officer_role_id, leader_role_id, officer_rank_name FROM guilds"
   ```
 
-  Expect `f, f, f, pending` followed by four NULLs. The publish output is `{status: "imported", report}`, and its `report.guildSettings[0].guestApplications.legacyChannelId` is `1196246221682131017`.
+  Expect `f, f, f, pending, f`, then the legacy review channel `1196246221682131017`, then three NULLs. The publish output is `{status: "imported", report}`, and its `report.guildSettings[0].guestApplications` is `{state: "closed", legacyChannelId: "1196246221682131017"}`.
 - **W8. Acquire twice.** With the sidecar running, run `prod dist/scripts/acquire.js 1036062273631952955 > work/roster-1.json`. Wait at least 60 seconds, then run it again with output to `work/roster-2.json`. Note the time of the second run; the time budget starts here.
 - **W9. Preview.** Run `prod dist/scripts/preview.js 1036062273631952955 --output work/grandfather-plan.json > work/preview.json`. The plan checksum is printed on stderr and appears as `grandfathering.planChecksum`.
   - If `pendingDepartures.count` is not zero, the plan is blocked. Acquire again at least 60 seconds after the previous acquisition, then preview again.
   - Review the same totals as E2 step 10 and compare them with the rehearsal.
-  - Expect `guestApplications: "closed"`, `onboarding: false`, and a `roleLayout` of `{enabled:false, wouldRun:false, skipped:"layout disabled"}`.
+  - Expect `guestApplications: "closed"` (the switch is off; the legacy review channel is set), `onboarding: false`, and a `roleLayout` of `{enabled:false, wouldRun:false, skipped:"layout disabled"}`.
   - The owner gives go or no-go. Record the checksum.
 - **W10. Backups.** Record the UTC time `T_pre` as the point-in-time-recovery target and confirm the cluster's backups. Take an independent logical backup with `pg pg_dump -d tarubot -Fc -f /work/backups/pre-activation.dump`, record its checksum, and copy it off the provider.
 - **W11. Activate.** Activation writes only to PostgreSQL; it reads Discord to validate roles and channels and to enumerate members. Run the writer-lease gate, then `prod dist/scripts/activate.js 1036062273631952955 --grandfather-plan SHA --grandfather-plan-file work/grandfather-plan.json > work/activation.json`.
+  - **Guest applications:** pass no `--guest-applications` flag. Without it the switch keeps its imported value (off), so no explicit choice is required, and activation neither changes nor validates the legacy review channel. `--guest-applications open` would switch applications on; it needs a review channel, and activation then validates that channel. `--guest-applications closed` switches them off and keeps the channel; for an import it changes nothing. Opening applications is not part of the launch.
   - **Success:** the output reports `status: "activated"`; `grandfathering` shows `completed` with the planChecksum and `granted`; applications are closed, onboarding is false, and roleLayout is disabled. `lateJoiners` lists humans who joined between the enumeration and the commit.
   - **Plan mismatch:** `status: "plan_mismatch"`, exit 1, and nothing is written. The output shows the added and removed users relative to the reviewed file and whether the roster snapshot or the import changed. If either changed, return to W9. Otherwise the owner reviews only that difference, then either rerun W9 or rerun activate with `--grandfather-plan NEW_SHA` alone; the old plan file describes the previous plan.
   - **Stale roster or pending departures:** return to W8.
   - The commit ends abort limit (a) in E4.
-- **W12. Commands.** Run `prod dist/scripts/register.js --global`; it prints the application, `scope: "global"`, 19 roots, and 41 paths.
+- **W12. Commands.** Run `prod dist/scripts/register.js --global`; it prints the application, `scope: "global"`, 19 roots, and 43 paths.
   - Read back with `prod dist/scripts/commands.js list > work/commands-registered.json`.
   - For each guild scope that still holds commands, run a dry run, for example `prod dist/scripts/commands.js clear-guild 1036062273631952955 --application 965294750741692416`, review the listed commands, then rerun the printed command with `--confirm FINGERPRINT`.
   - Finally, `prod dist/scripts/commands.js list > work/commands-final.json` must exit 0.
@@ -201,7 +202,7 @@ The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, 
 
   Once `/health/ready` reports ready, run `rm -f .cache/app-platform-full.yaml .cache/app-platform-full.checked.yaml`. Both hold the new token in plaintext. Later `full` updates start from the exported live spec, where the token appears only as `EV[...]`.
 - **W14. Smoke checks.**
-  - `/config show` and `/config validate`: onboarding off, role layout disabled, no guest review channel, and roles/channels available.
+  - `/config show` and `/config validate`: onboarding off, role layout disabled, guest applications off, and roles/channels available. `/config show` reads "Off · reviews in #…" with the legacy review channel; `/config validate` reads "Guest applications: closed, so /apply refuses" and shows no check for that channel while applications are off.
   - `/sync status`: the activation reconcile drains with nothing blocked.
   - `/ledger balance` equals the final dump's opening balance.
   - `/guest status` for one imported guest and one grandfathered user (provenance `grandfathered`).
@@ -210,15 +211,15 @@ The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, 
   - A non-officer is denied an officer operation, and a representative `/claim` and `/verify` work.
   - After the first guild reconciliation completes, run `prod dist/scripts/preview.js 1036062273631952955 --late-joiners > work/late-joiners.json`, which reads only the database. Officers decide `/guest grant` for each listed user.
 - **W15. Officer configuration.** A server manager with Manage Server and Manage Roles, who is the guild owner or whose highest role is above @Officer, runs these in order:
-  1. `/config officer_rank rank:Officer`
-  2. `/officer grant member:… reason:…` for each exception the owner approved in E1. With no Officer role bound yet, each reply shows `effects: "recorded"`.
-  3. `/config roles officer role:@Officer adopt_holders:false`. The reply shows `officerHolders.adopt: false`.
+  1. `/config officer_rank rank:Officer`. Repeating it with the saved rank replies "Officer rank already set" and changes nothing (no revision bump, audit or repair pass).
+  2. `/officer grant member:… reason:…` for each exception the owner approved in E1. With no Officer role bound yet, each "Officer access granted" reply says the grant is recorded and takes effect once `/config roles officer` binds a role, and its Discord role field reads "Applies once an Officer role is set".
+  3. `/config roles officer role:@Officer adopt_holders:false`. The reply is titled "Officer role set without adopting holders", with the footer "Audited · adopt_holders:false".
 
-  Binding the role queues an immediate repair pass. Mapping the rank first and recording the grants before the binding means neither rank holders nor approved exceptions lose Officer in between. Holders with neither the rank nor a grant lose the Officer role once reconciliation runs. Optionally run `/config roles leader role:@…`. Do not run `/setup`: it would enable onboarding, open `/apply`, and adopt every Officer-role holder. Staff change access with `/officer` and `/guest grant|revoke`; hand edits to managed roles are treated as drift.
+  Binding the role queues an immediate repair pass. Mapping the rank first and recording the grants before the binding means neither rank holders nor approved exceptions lose Officer in between. Holders with neither the rank nor a grant lose the Officer role once reconciliation runs. Optionally run `/config roles leader role:@…`. Do not run `/setup`: it would enable onboarding, open `/apply`, and adopt every Officer-role holder. Staff change access with `/officer grant|revoke` and `/guest grant|revoke`; hand edits to managed roles are treated as drift. `/officer reset` and `/guest reset` are optional and are not part of the cutover. Each removes a member's override so the automatic rules decide again. `/officer reset` removes an approved exception's grant too, and needs the same manager as grant and revoke. `/guest reset` also ends imported and grandfathered grants.
 - **W16. Close the window.**
   - Remove the operator's trusted-source IP, unless the owner keeps a narrow rule for exports, and stop the sidecar.
   - Export the live spec to `.cache/` (`chmod 600`), and archive `work/` with its checksums off the provider. Confirm that `.cache/app-platform-full.yaml` and `.cache/app-platform-full.checked.yaml` are gone (W13), and remove the token from `production.env` unless local tools still need it.
-  - Post the MIG-10 announcement: members opt in with `/main character:ID` and `/nickname enabled:true`. Visitors get Guest by verifying a character with `/claim` and `/verify`, or by asking an officer for `/guest grant`. `/apply` is not open yet.
+  - Post the MIG-10 announcement: members opt in with `/main character:ID` and `/nickname enabled:true`. Visitors get Guest by verifying a character with `/claim` and `/verify`, or by asking an officer for `/guest grant`. `/apply` is not open yet. Reopening it later is `/config guest_applications enabled:true`, which reuses the imported review channel. Switching on validates that channel first. If it was deleted, or TaruBot can't post there, the command refuses with "Discord permissions need attention", naming the channel, and saves nothing. Fix the channel's permissions, or name another channel in the same command: `/config guest_applications enabled:true channel:#…`.
 
 ## E4. Recovery and abort limits
 
@@ -230,7 +231,7 @@ The rehearsal uses the real cluster, a disposable `tarubot_rehearsal` database, 
 
 Then restart the legacy bot as in (a). If W12 already ran, the legacy command sync replaces the v2 global set, and the next attempt registers it again.
 
-**(c) After the worker has applied effects.** Recovery is forward-only. A database restore does not revert Discord role changes, and recovery must retain acknowledged decisions (MIG-13), so never restore to before activation once any user decision has been acknowledged. Correct individual outcomes with `/guest revoke`, `/guest grant`, `/officer`, and `/config`. To stop the writer, apply the maintenance phase.
+**(c) After the worker has applied effects.** Recovery is forward-only. A database restore does not revert Discord role changes, and recovery must retain acknowledged decisions (MIG-13), so never restore to before activation once any user decision has been acknowledged. Correct individual outcomes with `/guest revoke`, `/guest grant`, `/officer grant|revoke`, and `/config`. `/guest reset` and `/officer reset` are optional (W15). `/guest reset` also ends imported and grandfathered grants, so use it only where FC membership or a registered character should decide Guest. To stop the writer, apply the maintenance phase.
 
 For role repairs, compare current managed roles with the W6 snapshot. Capture a fresh snapshot with `prod dist/scripts/snapshot.js --dump work/legacy-final.sql --output work/role-check.json`; it is a read-only gateway login. Then list every user whose managed roles differ, with `null` meaning absent:
 

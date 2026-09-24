@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -42,19 +42,49 @@ The owner approved these decisions for the production cutover of guild `10360622
 
 This registered-user Guest applies in every configured guild, whether or not lobby onboarding (`/setup`, ACCESS-01) is enabled; onboarding governs only channel visibility. A pending `/claim` confers nothing (ROLE-07).
 
-**First-activation grandfathering.** At the first activation of an imported guild, every human then in the server who does not qualify for Member receives a durable `grandfathered` guest grant. It behaves exactly like an approved grant: it lasts until an explicit `/guest revoke`, and FC Member precedence still applies. It is created exactly once, with its own provenance and audit, from a complete Discord enumeration and settled roster evidence (no linked FC character still awaiting departure confirmation), and only for the plan whose checksum the operator confirmed from the read-only preview. Existing approved, manual, and imported grants are not duplicated. Afterwards the normal rules apply: later newcomers receive nothing automatically unless ROLE-07 or an officer decision applies, and humans who joined between the enumeration and go-live are reported for an officer decision (MIG-14).
+**First-activation grandfathering.** At the first activation of an imported guild, every human then in the server who does not qualify for Member receives a durable `grandfathered` guest grant. It behaves exactly like an approved grant: it lasts until an explicit `/guest revoke`, and FC Member precedence still applies. (Revised on 2026-09-24: `/guest reset` also ends it, as it ends every active grant. A grant that `/guest reset` ended before first activation still counts there as an existing grant, so its holder receives no `grandfathered` grant; see MIG-14.) It is created exactly once, with its own provenance and audit, from a complete Discord enumeration and settled roster evidence (no linked FC character still awaiting departure confirmation), and only for the plan whose checksum the operator confirmed from the read-only preview. Existing approved, manual, and imported grants are not duplicated. Afterwards the normal rules apply: later newcomers receive nothing automatically unless ROLE-07 or an officer decision applies, and humans who joined between the enumeration and go-live are reported for an officer decision (MIG-14).
 
 **Role layout switch.** Managed-role presentation is a per-guild setting (CFG-07). This covers separate member-list display and the consecutive FC Leader → Officer → Member → Guest block. Imported guilds, including the production guild, launch with it off; every other guild, including DevBot's existing guild and guilds first configured by `/setup` or `/config`, has it on. A server manager may change it later.
 
-**Launch configuration.** Guest applications (`/apply`) are closed at launch, and `/apply` refuses with a visitor-facing explanation before its form opens. The importer records but does not apply the legacy review channel (`1196246221682131017`), and first activation never opens applications implicitly. Lobby onboarding stays off: `/setup` is not run in the production guild at launch, because it would also enable onboarding, open `/apply`, and adopt Officer-role holders.
+**Launch configuration.** Guest applications (`/apply`) are closed at launch, and `/apply` refuses with a visitor-facing explanation before its form opens. The importer records but does not apply the legacy review channel (`1196246221682131017`), and first activation never opens applications implicitly. Lobby onboarding stays off: `/setup` is not run in the production guild at launch, because it would also enable onboarding, open `/apply`, and adopt Officer-role holders. (Revised on 2026-09-24: applications now have their own switch, and the importer keeps the legacy review channel with that switch off instead of leaving the channel unset. Applications remain closed at launch; see "Approved reply-session amendments".)
 
 **Officer authority at launch.** Officer authority comes from the in-game rank: `/config officer_rank rank:Officer` maps it, and the legacy Officer role is bound with `/config roles officer role:… adopt_holders:false`, so its current holders receive no manual officer grants. Exceptions use explicit `/officer grant`. Without the option, binding an Officer role keeps its existing behavior of adopting current human holders as audited manual grants; the choice is audited either way, and manager authority is unchanged.
 
 **Deferred guest-application form.** The guest application form and its officer review are deferred until after launch. This covers GUEST-01–GUEST-07, the application-specific parts of GUEST-08 and GUEST-09, AC-12, AC-13, and "approval" in the pre-activation smoke test. The implemented behavior and its automated tests remain; launch does not depend on their live acceptance. Officer `/guest grant`, `/guest revoke`, and `/guest status` remain in launch scope.
 
-**Pre-launch releases.** The 2.12.3 queue-logging patch, the 2.14.0 reply-presentation release (owner-approved embeds replacing every JSON reply), and the 2.15.0 operational telemetry and officer-alert release (OPS-10, OPS-11) come before go-live. The cutover uses a published release at or above 2.15.0.
+**Pre-launch releases.** The 2.12.3 queue-logging patch, the 2.14.0 reply-presentation release (owner-approved embeds replacing every JSON reply), and the 2.15.0 operational telemetry and officer-alert release (OPS-10, OPS-11) come before go-live. The cutover uses a published release at or above 2.15.0. (Revised on 2026-09-24: 2.15.0 ships the reply-session decisions below, OPS-10 and OPS-11 move to 2.16.0, and the cutover uses a published release at or above 2.16.0.)
 
 **Production tooling.** Production maintenance tools run from a build of the deployed release, with an explicitly supplied production environment file and never the development `.env`. They verify deployment identity before any I/O (OPS-14) and leave no guild-scoped commands for the production application (UX-04).
+
+### Approved reply-session amendments (2026-09-24)
+
+The owner made these decisions during the 2.14.0 reply session on DevBot, which compared every reply with the approved mockups. Release 2.15.0 implements them. They supersede conflicting text elsewhere in this document, including the 2026-09-23 amendments above. The referenced numbered requirements carry the normative detail.
+
+**Guest-application switch.** Whether guest applications are open is a per-guild switch, separate from the review channel (CFG-08). The owner's reason: "The channel setting should be separate from whether applications are enabled." `/apply` is open only when the switch is on and both a review channel and a Guest role are set (GUEST-02). `/config guest_applications` takes `enabled:true|false`, `channel:#…`, and `unset_channel:true` in any combination, except a channel together with `unset_channel:true`. Switching applications off refuses only new `/apply` submissions; applications already waiting stay reviewable. `/setup` switches applications on, first validating a kept review channel it is about to open, as switching on with `/config` does.
+
+The importer keeps the legacy review channel (`1196246221682131017`) and stores the switch off (MIG-03). The 2026-09-23 rule that the legacy review channel must not open `/apply` is therefore enforced by the switch, no longer by leaving the channel unset. Reopening after launch is `/config guest_applications enabled:true`. Activation still never opens applications implicitly. `activate.js --guest-applications open|closed` sets the switch and keeps the channel; without the flag, the switch keeps its imported value (off). Guest applications stay closed at launch, lobby onboarding stays off, and the 2026-09-23 deferral of the application form is unchanged.
+
+**No implied change.** A reply never implies a change that did not happen (UX-02). The owner's words: "Don't imply a change where no change occurred." `/main` naming the current main character, and `/nickname` turning sync on or off when it already is, save nothing, queue no reconciliation, and reply that nothing changed. Resuming nickname sync that a manual nickname suspended is still a change. `/config officer_rank` naming the saved rank, or `unset_rank:true` when no rank is set, likewise replies that nothing changed and advances no configuration revision, audits nothing, and queues no repair pass.
+
+**An example for every option.** Every input failure that names an option shows an example of a valid value for it, and every option of every registered command has one (UX-05). The owner's words: "If there's a parameter to input, it should provide an example."
+
+**Ledger entry number or ID.** `/ledger adjust entry:` accepts the entry number that history, receipts, and posts show (`5` or `#5`, resolved in the current FC account) or the entry ID (LEDGER-07). The owner's words: "Allow it to accept the integer, or the UUID. It's obvious which one is provided."
+
+**Member suggestions.** Every member option autocompletes server members. A pasted user ID or mention is still accepted, so a user who has left stays nameable by ID (UX-06).
+
+**Main character after a re-link.** A new trusted link becomes the member's main character when they have no main and no other active link, for example after removing every link. Unlike a first link, it keeps their nickname-sync setting. Imported users keep their imported state (NICK-01, NICK-06).
+
+**Server owner's nickname.** Discord lets no bot change the server owner's nickname. Reconciliation skips the owner's nickname instead of leaving blocked work that no officer can fix (NICK-05).
+
+**"Unset", not "clear".** No `/config` option is named `clear`. The owner's reason: "Clear sounds like you're erasing the channel's history." Channel settings use `unset_channel:true` (`/config ledger`, `officer_notifications`, and `guest_applications`), role settings use `unset_role:true` (`/config roles …`), and the officer rank uses `unset_rank:true` (`/config officer_rank`). Unsetting stops TaruBot using the channel, role, or rank; the Discord channel or role and its history stay.
+
+**Reset commands.** `/officer` and `/guest` gain a third option beside grant and revoke, one that "removes any override and goes back to membership/rank logic":
+- `/officer reset member reason` removes the member's officer grant or revocation, so the configured in-game rank decides again (ROLE-07). Like a grant or revocation, it needs a server manager, whose highest role must be above a bound Officer role (AUTH-03). Like a revocation, it works for someone who has left.
+- `/guest reset member reason` lifts a Guest revocation and ends every active grant of any provenance (approved, manual, imported, grandfathered), so FC membership (current or former) and registered characters decide Guest again (ROLE-02, GUEST-08). Ended grants are kept as history and never confer Guest.
+
+Both are audited and reconcile the member. With nothing to remove, they change nothing and audit nothing. They bring the command surface to 19 roots and 43 paths (AC-23).
+
+**Release order.** 2.15.0 ships these decisions with migration `006_guest_application_switch.sql`. The operational telemetry and officer-alert release (OPS-10, OPS-11) moves from 2.15.0 to 2.16.0, and the cutover uses a published release at or above 2.16.0. Option names, descriptions, and autocomplete changed, so commands are registered again after 2.15.0 is deployed (UX-04).
 
 ## 1. Purpose and interpretation
 
@@ -88,7 +118,7 @@ Synchronization combines Lodestone observations with PostgreSQL policy state to 
 | Guest-role holders at cutover | Create explicit imported guest grants from a complete Discord snapshot |
 | Registered users without an FC character | Automatically Guest while at least one trusted link exists and no linked character is a confirmed FC member (ROLE-07) |
 | Humans present at an imported guild's first activation who do not qualify for Member | Durable `grandfathered` guest grants, created once (MIG-14) |
-| Other newcomers | An audited officer grant; approved applications once guest applications are reopened after launch |
+| Other newcomers | An audited officer grant; approved applications once guest applications are switched on after launch (CFG-08) |
 | Channel operations | Read-only channel metadata through `/channel` |
 
 ### 1.3 Scope boundaries
@@ -160,7 +190,7 @@ Synchronization combines Lodestone observations with PostgreSQL policy state to 
 | Confirmed ineligible for both | Absent | Absent |
 | FC membership uncertain | Preserve existing FC-derived access; new grants await fresh evidence | Preserve guest state, subject to explicit local grants/revocations and member-role precedence |
 
-**ROLE-02.** Guest revocation overrides approved, manual, imported, and grandfathered grants, registered-user eligibility (ROLE-07), and former-member guest eligibility until an officer explicitly restores access. FC-member eligibility is evaluated independently and takes precedence. Persist and audit both revocation and restoration; restoring through an explicit grant creates a durable manual grant.
+**ROLE-02.** Guest revocation overrides approved, manual, imported, and grandfathered grants, registered-user eligibility (ROLE-07), and former-member guest eligibility until an officer explicitly restores access. FC-member eligibility is evaluated independently and takes precedence. Persist and audit both revocation and restoration; restoring through an explicit grant creates a durable manual grant. `/guest reset` restores the automatic rules instead: it lifts the revocation without creating a grant and ends every active approved, manual, imported, and grandfathered grant, so FC membership (current or former) and registered-user eligibility (ROLE-07) decide Guest again (GUEST-08).
 
 **ROLE-03.** A confirmed former member becomes a guest automatically. Unlinking a user's last qualifying character is an explicit local loss of member eligibility and may result in former-member guest access. Roster-driven former-member status requires the departure evidence defined in Section 6.
 
@@ -172,13 +202,13 @@ Synchronization combines Lodestone observations with PostgreSQL policy state to 
 
 **ROLE-07.** Evaluate each user's access as the union over their active trusted links in the guild. Imported, officer-assigned, and profile-verified links participate equally; profile FC hints and pending challenges never do.
 (1) **Member:** at least one linked character has confirmed membership in the currently linked FC. A character awaiting departure confirmation still qualifies (SYNC-10).
-(2) **Officer:** when an Officer role and FC officer rank are configured, at least one linked character with confirmed membership holds that normalized rank in accepted roster evidence. An assignment made by a bot-only officer does not confer it, and explicit manager grants/revocations override the automatic result.
+(2) **Officer:** when an Officer role and FC officer rank are configured, at least one linked character with confirmed membership holds that normalized rank in accepted roster evidence. An assignment made by a bot-only officer does not confer it, and explicit manager grants/revocations override the automatic result until `/officer reset` removes the override.
 (3) **Guest (registered user):** the user has at least one active trusted link, and no linked character qualifies under (1) according to accepted current evidence. With no FC linked, one active trusted link suffices. This applies in every configured guild regardless of lobby onboarding.
 Unknown or stale evidence, including a linked character not yet evaluated against an accepted roster, preserves a role already held but cannot create a new Member, Officer, or registered-user Guest role. Registered-user Guest is derived, not stored: removing the last active link removes that basis, while approved, manual, imported, and grandfathered grants and former-member eligibility keep their own rules. Revocation (ROLE-02) suppresses it, and Member precedence (ROLE-01) always applies. Onboarding (ACCESS-01–ACCESS-05) never changes which access roles a user receives.
 
 ## 4. Discord command contract
 
-All commands are guild-only. Unless expressly identified as a channel notification, responses are ephemeral. Commands that require network or database work must acknowledge or defer before Discord's initial response deadline, normally within three seconds.
+All commands are guild-only. Unless expressly identified as a channel notification, responses are ephemeral. Commands that require network or database work must acknowledge or defer before Discord's initial response deadline, normally within three seconds. Every `member` option suggests server members as the user types and also accepts a pasted user ID or mention (UX-06).
 
 ### 4.1 Authorization definitions
 
@@ -191,7 +221,7 @@ All commands are guild-only. Unless expressly identified as a channel notificati
 
 **AUTH-02.** Use Discord command default permissions to control command availability and runtime authorization to enforce each operation's policy. Evaluate mixed-permission subcommands and `force` options explicitly. Every `force: true` request requires officer authorization regardless of cache freshness.
 
-**AUTH-03.** Selecting or clearing managed roles additionally requires effective `ManageRoles`. Selected roles must be below the actor's highest role unless the actor is the guild owner, and must always be manageable by the bot. Validate member/guest roles as access roles with `Administrator`, `ManageGuild`, and `ManageRoles` permissions disabled.
+**AUTH-03.** Selecting or unsetting managed roles additionally requires effective `ManageRoles`. Selected roles must be below the actor's highest role unless the actor is the guild owner, and must always be manageable by the bot. Validate member/guest roles as access roles with `Administrator`, `ManageGuild`, and `ManageRoles` permissions disabled.
 
 ### 4.2 Configuration commands
 
@@ -199,17 +229,23 @@ All commands are guild-only. Unless expressly identified as a channel notificati
 | --- | --- | --- |
 | `/config fc link fc_id` | Officer | Validate the FC, link it to this guild, and enqueue initial synchronization. An identical existing link is a no-op; a different existing link requires explicit unlinking first. |
 | `/config fc unlink fc_id` | Officer | Require the supplied ID to match the currently linked FC. Remove that link locally without requiring Lodestone availability. |
-| `/config roles member [role] [clear]` | Officer + role authorization | Set or clear the member-role configuration. |
-| `/config roles guest [role] [clear]` | Officer + role authorization | Set or clear the guest-role configuration. |
-| `/config roles officer [role] [clear] [adopt_holders]` | Server manager (Manage Server and Manage Roles) + role authorization | Set or clear the bot-only Officer role (approved staff-rank amendment). Binding a role grants its current human holders audited manual officer grants unless `adopt_holders:false`; the choice is audited. |
-| `/config ledger [channel] [clear]` | Officer | Set or clear the ledger notification channel. |
-| `/config officer_notifications [channel] [clear]` | Officer | Set or clear the operational/officer notification channel. |
-| `/config guest_applications [channel] [clear]` | Officer | Set or clear the guest application review channel. |
+| `/config roles member [role] [unset_role]` | Officer + role authorization | Set or unset the member-role configuration. |
+| `/config roles guest [role] [unset_role]` | Officer + role authorization | Set or unset the guest-role configuration. |
+| `/config roles officer [role] [unset_role] [adopt_holders]` | Server manager (Manage Server and Manage Roles) + role authorization | Set or unset the bot-only Officer role (approved staff-rank amendment). Binding a role grants its current human holders audited manual officer grants unless `adopt_holders:false`; the choice is audited. |
+| `/config roles leader [role] [unset_role]` | Server manager (Manage Server and Manage Roles) + role authorization | Set or unset the FC Leader role. |
+| `/config officer_rank [rank] [unset_rank]` | Server manager (Manage Server and Manage Roles) | Set the in-game FC rank that grants bot officer authority (ROLE-07), or unset it so that only manual officer grants apply. Naming the saved rank, or unsetting when no rank is set, changes nothing and says so (UX-02). |
+| `/config ledger [channel] [unset_channel]` | Officer | Set or unset the ledger notification channel. |
+| `/config officer_notifications [channel] [unset_channel]` | Officer | Set or unset the operational/officer notification channel. |
+| `/config guest_applications [enabled] [channel] [unset_channel]` | Officer | Switch guest applications on or off, and set or unset their review channel, in one audited revision (CFG-08). Switching on validates the review channel that will take applications; switching off keeps waiting applications reviewable. |
 | `/config role_layout enabled` | Server manager (Manage Server and Manage Roles; AUTH-03 hierarchy checks when enabling) | Turn automatic managed-role display and ordering on or off for this guild (CFG-07). Off never changes any role's hoist flag or position; enabling queues one layout pass. |
 | `/config show` | Officer | Display configuration, enabled/blocked capabilities, linked FC, and relevant freshness/status information. |
 | `/config validate` | Officer | Check stored roles/channels, current bot permissions/hierarchy, and configuration consistency without mutating access. |
+| `/setup [fc_id] [prefix] [officer_rank] [lobby] [officers]` | Server manager (Manage Server, Manage Roles, and Manage Channels) | Create or reuse the four access roles and the lobby and officer rooms, and enable onboarding (ACCESS-01). It also switches guest applications on, using the officer room as the review channel when none is set (CFG-08), and adopts the Officer role's current holders. Not run in the production guild at launch. |
+| `/officer grant member reason` | Server manager (Manage Server and Manage Roles; AUTH-03 hierarchy checks on the bound Officer role, if any) | Record an audited officer grant for a current member, overriding the rank-derived result (ROLE-07). Works before an Officer role is bound. |
+| `/officer revoke member reason` | Server manager (Manage Server and Manage Roles; AUTH-03 hierarchy checks on the bound Officer role, if any) | Record an audited officer revocation, overriding the rank-derived result; works for a user who has left. |
+| `/officer reset member reason` | Server manager (Manage Server and Manage Roles; AUTH-03 hierarchy checks on the bound Officer role, if any) | Remove the member's officer grant or revocation, so the configured in-game rank decides again (with no rank set, only manual officer grants confer officer authority); works for a user who has left. Audited; with no override to remove, nothing changes. |
 
-For set/clear commands, require exactly one of a value or `clear: true`. Validation failures retain the saved configuration and return a corrective instruction.
+For the set/unset commands (`/config roles …`, `/config ledger`, `/config officer_notifications`, and `/config officer_rank`), require exactly one of a value or the command's unset option (`unset_role:true`, `unset_channel:true`, or `unset_rank:true`). `/config guest_applications` requires at least one of `enabled`, `channel`, and `unset_channel`, and refuses `channel` together with `unset_channel`. No `/config` option is named `clear` (2026-09-24 amendment). Unsetting stops TaruBot using the channel, role, or rank and deletes no Discord channel or role; an unset managed role is still removed from its holders by the retired-role cleanup (CFG-04). Validation failures retain the saved configuration and return a corrective instruction.
 
 **CFG-01.** IDs or canonical Lodestone URLs may identify an FC. Extract the ID from an allowed Lodestone host and the expected FC path, validate it, and resolve it through the configured Nodestone adapter.
 
@@ -217,7 +253,7 @@ For set/clear commands, require exactly one of a value or `clear: true`. Validat
 
 **CFG-03.** Check required bot permissions and hierarchy before saving configuration. Recheck them before effects because permissions and role positions can change later. A deleted/misconfigured resource must block only affected operations and produce an actionable diagnostic.
 
-**CFG-04.** Persist configuration revisions. Configuration changes must enqueue reconciliation. Superseded managed roles require durable cleanup of the retired role IDs; preserve unrelated roles. Clearing a role stops its future assignment and schedules its cleanup.
+**CFG-04.** Persist configuration revisions. Configuration changes must enqueue reconciliation. Superseded managed roles require durable cleanup of the retired role IDs; preserve unrelated roles. Unsetting a role stops its future assignment and schedules its cleanup.
 
 **CFG-05.** Unlinking an FC removes FC-derived member access and the automatic former-member eligibility associated with that link. With no FC linked, every user with an active trusted link qualifies as a registered Guest under ROLE-07, subject to revocation. Explicit approved, manual, imported, and grandfathered guest grants remain guild-scoped and continue to apply. Record unlinking as a configuration event, retaining existing membership history.
 
@@ -226,6 +262,10 @@ For set/clear commands, require exactly one of a value or `clear: true`. Validat
 **CFG-07.** Persist a per-guild role-layout switch. When it is on, TaruBot keeps the configured managed roles displayed separately and in one consecutive FC Leader → Officer → Member → Guest block (see the 2026-09-21 amendment). When it is off, TaruBot MUST NOT change any role's display (hoist) or position: layout work completes as skipped; startup, rejoin, role events, configuration, and refresh schedule no layout work; and roles created by `/setup` keep Discord's default display. Role assignment is unaffected.
 Starting values: guilds created by the legacy import start with the switch off. Every other guild starts with it on, including guilds first created by `/setup` or `/config` and guilds managed live before migration 005. `/setup` never changes the switch.
 `/config role_layout enabled:<true|false>` requires a server manager with Manage Server and Manage Roles, plus AUTH-03 hierarchy checks for each managed role when enabling. A change is audited and advances the configuration revision; repeating the current value changes nothing. Enabling queues one layout pass. Disabling leaves the current display and order unchanged, and a pass already running stops before its next write. The read-only cutover preview reports the switch and the hoist/position changes that enabling it would make.
+
+**CFG-08.** Persist a per-guild guest-application switch, separate from the review channel (2026-09-24 amendment). Guest applications are open only when the switch is on and both a review channel and a Guest role are configured; `/apply`'s pre-form check, submission, activation, and the read-only preview use this one rule (GUEST-02).
+`/config guest_applications` takes `enabled:true|false`, `channel:#…`, and `unset_channel:true` in any combination, except a channel together with `unset_channel:true`. It saves them in one configuration revision, audits each changed setting, and enqueues reconciliation like other configuration changes. A request that matches the saved state changes nothing and says so. Before saving, it validates any channel named in the request and, when the request switches applications on, the stored review channel that will then take them, including a legacy channel the import kept (CFG-02). A request that only switches applications off or unsets the channel validates nothing, so a deleted channel never blocks closing. If the saved settings change between that validation and the save, so that applications would take a channel that was not validated, nothing is saved and the reply asks the officer to run the command again. Switching on without a review channel or Guest role saves the switch but leaves `/apply` closed. Switching off refuses only new `/apply` submissions; applications already waiting stay reviewable (GUEST-04).
+Starting values: migration 006 turned the switch on for guilds that already had a review channel and were not awaiting first activation, and off everywhere else. A guild created later starts with it off. `/setup` turns it on (ACCESS-01). The legacy import keeps the legacy review channel with the switch off (MIG-03). Activation changes the switch only on an explicit choice (`open` requires a configured review channel), keeps the channel either way, and validates the review channel only when applications will be open. `/config show` reports the switch together with the review channel it keeps, and `/config validate` reports a review-channel check only while applications are on.
 
 ### 4.3 Character commands
 
@@ -237,8 +277,8 @@ Starting values: guilds created by the legacy import start with the switch off. 
 | `/assign member reason [character] [forename] [surname] [world]` | Officer | Make an audited, trusted manual assignment to a current non-bot guild member. |
 | `/unassign member character reason` | Officer | Remove that user's local character link. Stored owner IDs must remain usable after the user leaves Discord. |
 | `/characters [member]` | Self; officer for another user | List local links, provenance/status, canonical names/worlds, primary character, and known FC information. |
-| `/main character` | Self | Select an active trusted linked character as the guild-specific primary character. |
-| `/nickname enabled` | Self | Enable or disable bot-managed character nicknames for this guild. |
+| `/main character` | Self | Select an active trusted linked character as the guild-specific primary character. Naming the current primary character changes nothing and says so. |
+| `/nickname enabled` | Self | Enable or disable bot-managed character nicknames for this guild. Repeating the current setting changes nothing and says so; resuming management that a manual nickname suspended is a change. |
 
 **CHAR-01.** For claim/assignment, require exactly one selector form: `character` as a positive ID/canonical character-profile URL, or the complete `forename`, `surname`, `world` triple. Reject incomplete or conflicting selector forms.
 
@@ -256,29 +296,34 @@ Starting values: guilds created by the legacy import start with the switch off. 
 | --- | --- | --- |
 | `/refresh [force]` | Guild user; officer for force | Refresh when due, or reconcile from usable cached data. Return the run ID, freshness/cooldown, and queued/completed/blocked result. |
 | `/sync status [run_id]` | Guild user for their own requests; officer for guild-wide status | Inspect authorized refresh/reconciliation results and pending/blocked work, including after the initiating interaction expires. |
-| `/apply` | Guild user | Submit a guest application when applications are open in this guild (a review channel is configured) and the user has no active trusted link, lacks member/guest access, and has no pending application; otherwise explain why. While applications are closed, refuse before the form opens. Closed at launch (see Approved launch amendments). |
+| `/apply` | Guild user | Submit a guest application when applications are open in this guild (the guest-application switch is on and a review channel and Guest role are configured; CFG-08) and the user has no active trusted link, lacks member/guest access, and has no pending application; otherwise explain why. While applications are closed, refuse before the form opens. Closed at launch (see Approved launch amendments). |
 | `/guest approve application` | Officer | Approve a pending application through the same operation used by its review button. |
 | `/guest deny application [reason]` | Officer | Deny a pending application through the same operation used by its review button. |
 | `/guest grant member reason` | Officer | Grant guest access manually, with an audit record; can explicitly restore revoked guest access. |
 | `/guest revoke member reason` | Officer | Persistently revoke guest eligibility and cancel unresolved applications for that user. |
+| `/guest reset member reason` | Officer | Lift the user's guest revocation and end every active guest grant of any provenance, keeping the ended grants as history, so the automatic rules decide Guest again (ROLE-02). Audited; with nothing to remove, nothing changes. |
 | `/guest status [member]` | Self; officer for another user | Show application, grant, revocation, and automatic-guest status within this guild. |
 | `/ledger deposit amount note` | Ledger member | Record a positive deposit. |
 | `/ledger withdraw amount note` | Officer | Record a positive withdrawal if sufficient recorded funds exist. |
 | `/ledger balance [fc_id]` | Ledger member; officer for historical FC | Show the initialized/unknown balance and relevant delivery status. |
 | `/ledger history [fc_id] [before]` | Ledger member; officer for historical FC | Paginate durable entries using a stable cursor. |
 | `/ledger initialize balance note` | Officer | Set the opening balance of an uninitialized current guild/FC ledger exactly once. |
-| `/ledger adjust balance note [entry]` | Officer | Append a correction bringing the recorded balance to the specified value; optionally reference the corrected entry. |
+| `/ledger adjust balance note [entry]` | Officer | Append a correction bringing the recorded balance to the specified value; optionally reference the corrected entry by its entry number (`5` or `#5`) or its entry ID (LEDGER-07). |
 | `/ping` | Guild user | Report Discord gateway latency with an appropriate label. |
 | `/channel` | Guild user | Report the current channel's ID, name, and type. |
 | `/version [commits]` | Guild user | Show the installed SemVer and recent GitHub commit IDs, links, titles, and verified-signature badges. |
 
 **UX-01.** Bound input sizes and honor Discord message, embed, autocomplete, and component limits. Escape user-controlled display content and set an explicit allowed-mentions policy, defaulting to no parsed mentions. Authorize any intended recipient mention separately from user-supplied text.
 
-**UX-02.** Distinguish committed application state from pending Discord effects. Long jobs must remain inspectable after an interaction token expires. Use completion wording only for confirmed successful effects, and queued/blocked wording for work awaiting delivery.
+**UX-02.** Distinguish committed application state from pending Discord effects. Long jobs must remain inspectable after an interaction token expires. Use completion wording only for confirmed successful effects, and queued/blocked wording for work awaiting delivery. Never imply a change that did not occur: a request that matches the saved state gets a reply saying that nothing changed, never a change receipt (2026-09-24 amendment). Examples include `/main` naming the current main character, `/nickname` repeating its setting, `/config officer_rank` naming the saved rank (or `unset_rank:true` with none set), `/config guest_applications` or `/config role_layout` matching the saved state, and `/officer reset` or `/guest reset` with nothing to remove.
 
 **UX-03.** Represent an unconfigured guild explicitly and return setup instructions. Read-only commands use read-only persistence operations; configuration is created through authorized configuration commands.
 
 **UX-04.** Register the declared command set through an explicit deployment operation. Support guild-scoped registration for development and intended production registration. Reconcile the bot's registered commands to exactly the command set defined in Section 4. Production registers the declared set in global scope and leaves no guild-scoped commands for the production application. Command maintenance tooling reads back every scope. It clears leftover guild-scoped commands in a named guild only after a dry run and a fingerprint-bound confirmation, and never clears the global scope.
+
+**UX-05.** An input failure caused by an option's value names that option and shows an example of a valid value for it. An input failure that no option value caused names no option and shows no example, which would only repeat the failed command: `/nickname enabled:true` without a main character names `/main` as the step to take instead. Every option of every registered command path has an example, including ID options such as `/ledger adjust entry`, `/sync status run_id`, and `/guest approve|deny application`; automated checks fail on any option without one (2026-09-24 amendment).
+
+**UX-06.** Every member option autocompletes current human server members by display name, username, global name, or nickname, with the user ID as the submitted value. This covers `/characters`, `/assign`, `/unassign`, `/guest status|grant|revoke|reset`, and `/officer grant|revoke|reset`. A pasted user ID or mention is still accepted, so a user who has left the server stays nameable by ID (CHAR-03). Where a member may name only themselves, they are offered only themselves. Suggestions grant nothing: each operation still authorizes its actor and target (AUTH-01) (2026-09-24 amendment).
 
 ## 5. Character verification and nickname behavior
 
@@ -298,7 +343,7 @@ Starting values: guilds created by the legacy import start with the switch off. 
 
 ### 5.2 Nicknames
 
-**NICK-01.** Store primary-character selection and nickname preferences per `(guild, user)`. For a new user with no prior links, the first successfully trusted link becomes the initial primary character and enables nickname management. Thereafter the selection changes through `/main` or removal of the selected link.
+**NICK-01.** Store primary-character selection and nickname preferences per `(guild, user)`. For a new user with no prior links, the first successfully trusted link becomes the initial primary character and enables nickname management. Thereafter the selection changes through `/main` or removal of the selected link. A new trusted link also becomes the primary character when the user has no primary character and no other active link, for example after removing every link; it keeps the user's nickname-management setting. With management on, the new primary character's nickname replaces a restore still pending from removing the previous primary (NICK-04), as `/main` does; with management off, that restore stands. Imported users keep their imported state (NICK-06).
 
 **NICK-02.** The generated nickname is the canonical full character name. Format it within Discord's nickname length limits using Unicode-safe truncation when necessary, and retain the complete canonical name in PostgreSQL.
 
@@ -306,7 +351,7 @@ Starting values: guilds created by the legacy import start with the switch off. 
 
 **NICK-04.** Disabling management or unlinking the primary character restores the saved pre-management nickname when the current nickname still matches the last bot-written value. Otherwise retain the current nickname. Unlinking the primary clears the selection and returns instructions for selecting another character.
 
-**NICK-05.** Renames/world changes must update cached identity attributes. A managed nickname follows a confirmed primary-character name update. Report bot permission/hierarchy limitations, including the guild owner, as scoped blocked effects while retaining the character link.
+**NICK-05.** Renames/world changes must update cached identity attributes. A managed nickname follows a confirmed primary-character name update. Report bot permission/hierarchy limitations as scoped blocked effects while retaining the character link. Discord lets no bot change the guild owner's nickname, so reconciliation never writes or restores it, drops any pending nickname write or restore for the owner, and never blocks on it; replies to the owner say so instead of promising a nickname change (2026-09-24 amendment).
 
 **NICK-06.** Imported users start with an unset primary character and nickname management disabled, retaining their current Discord nickname. They can select a primary character and enable management explicitly.
 
@@ -364,11 +409,11 @@ Treat a multi-page crawl as a time-bounded observation. Record its acquisition i
 
 **GUEST-01.** Persist applications with guild, applicant, current guild-join context, creation time, review channel/message IDs, state, reviewer, decision time, and optional reason. Enforce at most one pending application per `(guild, user)` in PostgreSQL.
 
-**GUEST-02.** `/apply` requires a valid guest role and review channel. Persist the application and its review-message work together. The review message identifies the applicant, submission time, and application ID and provides approval/denial controls. Return the pending application for duplicate requests, or explain existing member/guest eligibility. An unregistered newcomer gains guest eligibility through an explicit officer grant or, while applications are open, approval. A user with an active trusted link receives it through ROLE-07 and is directed away from `/apply`. When no review channel is configured, `/apply` refuses with a visitor-facing explanation before its form opens, and again if a form opened earlier is submitted.
+**GUEST-02.** `/apply` requires the guest-application switch to be on and a valid guest role and review channel (CFG-08). Persist the application and its review-message work together. The review message identifies the applicant, submission time, and application ID and provides approval/denial controls. Return the pending application for duplicate requests, or explain existing member/guest eligibility. An unregistered newcomer gains guest eligibility through an explicit officer grant or, while applications are open, approval. A user with an active trusted link receives it through ROLE-07 and is directed away from `/apply`. When applications are closed (switched off, or without a review channel or Guest role), `/apply` refuses with a visitor-facing explanation before its form opens, and again if a form opened earlier is submitted.
 
 **GUEST-03.** Support `pending`, `approved`, `denied`, `cancelled`, and `superseded` application outcomes. Approval/denial must atomically transition only a pending application. Concurrent/repeated decisions return the single committed outcome.
 
-**GUEST-04.** Review buttons must resolve durable application identifiers from PostgreSQL and work after restarts. Validate guild, application/message identity, actor permissions, and current applicant state on every click before invoking the authorized decision operation.
+**GUEST-04.** Review buttons must resolve durable application identifiers from PostgreSQL and work after restarts. Validate guild, application/message identity, actor permissions, and current applicant state on every click before invoking the authorized decision operation. Switching applications off (CFG-08) refuses only new submissions; pending applications stay reviewable through their review controls and `/guest approve|deny`.
 
 **GUEST-05.** At decision time, cancel a pending application if the applicant has left or its guild-join context is obsolete. Supersede a pending application if the applicant became an FC member. Retain committed decisions as audit outcomes; effect execution independently rechecks current membership and applies the role precedence in ROLE-01.
 
@@ -376,9 +421,9 @@ Treat a multi-page crawl as a time-bounded observation. Record its acquisition i
 
 **GUEST-07.** Retain review history in PostgreSQL, update the review message with its outcome, and disable completed controls. Recreate a missing review message or handle the application through its command ID. Message repair operates from the durable application record.
 
-**GUEST-08.** Persist approved, manual, imported, and grandfathered grants with provenance. Guest revocation must be durable and auditable. An officer's subsequent explicit approval/grant may restore access. Denied applicants may reapply after a configurable cooldown, defaulting to 24 hours. Any existing revocation remains effective until explicit restoration.
+**GUEST-08.** Persist approved, manual, imported, and grandfathered grants with provenance. Guest revocation must be durable and auditable. An officer's subsequent explicit approval/grant may restore access. Denied applicants may reapply after a configurable cooldown, defaulting to 24 hours. Any existing revocation remains effective until explicit restoration or `/guest reset`. `/guest reset` ends grants instead of deleting them: an ended grant records when, by whom, and why it ended, confers nothing, and no longer appears in `/guest status`. First-activation grandfathering still counts it as an existing grant, so its holder receives no `grandfathered` grant (MIG-14).
 
-**GUEST-09.** Approved/manual/imported/grandfathered grants survive the user's departure from Discord and can apply on rejoin unless revoked. Cancel pending applications on an observed departure and require a matching stored guild-join context at decision time. On rejoin, evaluate existing grants and history under current policy.
+**GUEST-09.** Approved/manual/imported/grandfathered grants survive the user's departure from Discord and can apply on rejoin unless revoked or ended by `/guest reset`. Cancel pending applications on an observed departure and require a matching stored guild-join context at decision time. On rejoin, evaluate existing grants and history under current policy.
 
 ## 8. Gil ledger
 
@@ -394,7 +439,7 @@ Treat a multi-page crawl as a time-bounded observation. Record its acquisition i
 
 **LEDGER-06.** In one PostgreSQL transaction, enforce the idempotency key, lock/serialize the account, validate initialization/range/funds, insert the entry, update the balance, and enqueue its notification. Competing withdrawals are evaluated in account order against the resulting available balance, retaining the nonnegative-balance invariant.
 
-**LEDGER-07.** Record corrections as additional signed entries referencing immutable history. `/ledger adjust` records the difference between the current and supplied target balance with an explanation. An identical target is a no-op. A referenced prior entry must belong to the same account.
+**LEDGER-07.** Record corrections as additional signed entries referencing immutable history. `/ledger adjust` records the difference between the current and supplied target balance with an explanation. An identical target is a no-op. A referenced prior entry must belong to the same account. An officer names it by entry number (`5` or `#5`) or entry ID; a number resolves within the current account, and a number or ID that is not in that account is refused as not found.
 
 **LEDGER-08.** Require a linked FC and a valid configured ledger channel before accepting a financial mutation. If delivery fails after the transaction commits, retain the transaction and mark delivery pending/blocked. Return the durable entry ID, delivery state, and a route to inspect or retry notification work independently.
 
@@ -454,7 +499,7 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 ### Approved onboarding extension
 
-**ACCESS-01.** Explicit `/setup` enables a persisted guild-scoped channel policy and provisions/reuses distinct lobby and officer text rooms alongside the four access roles. Require current Manage Server, Manage Roles, and Manage Channels for setup. Existing guilds remain opted out until that action; enforce the bot's channel and role capabilities before mutation.
+**ACCESS-01.** Explicit `/setup` enables a persisted guild-scoped channel policy and provisions/reuses distinct lobby and officer text rooms alongside the four access roles. Require current Manage Server, Manage Roles, and Manage Channels for setup. Existing guilds remain opted out until that action; enforce the bot's channel and role capabilities before mutation. `/setup` also switches guest applications on, using the officer room as the review channel when none is set (CFG-08).
 
 **ACCESS-02.** Role-less newcomers see the lobby; ordinary Members/Guests see ordinary channels and not the lobby. Officers and FC Leaders see the lobby, ordinary channels, and staff areas. Preserve existing private areas as staff-only. Apply visibility to every non-thread guild channel type and categories, with threads inheriting their parent's visibility. Discord owner/Administrator bypass remains intrinsic.
 
@@ -474,14 +519,14 @@ The physical schema may use different names, but it must represent these logical
 
 | Logical records | Required scope/invariants |
 | --- | --- |
-| Guild configuration | Guild ID, nullable FC/role/channel IDs, configuration revision, active/disabled state |
+| Guild configuration | Guild ID, nullable FC/role/channel IDs, role-layout and guest-application switches, configuration revision, active/disabled state |
 | Discord users and guild-user state | Stable user identity; per-guild presence and nickname/primary preferences |
 | FCs and characters | Shared public identity/display caches; observation/freshness metadata |
 | Character links | Guild, character, owner, active/inactive state, provenance, actor/time; one active owner per guild/character |
 | Verification challenges | Bound tuple, token hash, expiry, consumption/replacement state |
 | Sync runs and roster snapshots | FC, requested/attempted/completed state, completeness evidence, version, counts/errors |
 | Membership observations/history | Pending departures and confirmed periods; guild/user/FC historical eligibility |
-| Guest applications/grants/revocations | Durable state machines and one pending application per guild/user |
+| Guest applications/grants/revocations | Durable state machines and one pending application per guild/user; grants ended by `/guest reset` retained with end time, actor, and reason |
 | Ledger accounts/entries | Guild/FC account uniqueness, known/unknown state, ordered immutable entries, idempotency |
 | Jobs/outbound effects | Durable payload/version, deduplication key, attempts, due time, lease/status, delivery IDs/errors |
 | Audit and import provenance | Actor/source, guild, target, decision, timestamps, source checksum/keys and reconciliation results |
@@ -496,7 +541,7 @@ The physical schema may use different names, but it must represent these logical
 
 **DB-06.** Reconciliation effects derive current desired state. Ledger notifications refer to an immutable committed entry. Store enough information to inspect and retry delivery independently of its committed application decision.
 
-**DB-07.** Audit officer assignments/unassignments, configuration changes, guest decisions/grants/revocations, verification provenance changes, ledger mutations, and migration actions. Record cache acquisition and update results as operational history, with aggregated officer notifications where appropriate.
+**DB-07.** Audit officer assignments/unassignments, configuration changes, guest decisions/grants/revocations/resets, officer grants/revocations/resets, verification provenance changes, ledger mutations, and migration actions. Record cache acquisition and update results as operational history, with aggregated officer notifications where appropriate.
 
 **DB-08.** Removing the bot from a guild deactivates its work while retaining its history. A documented retention policy may prune expired challenges and bounded diagnostic payloads. Retain ledger entries, active links/grants, and membership evidence required by access policy.
 
@@ -563,7 +608,7 @@ The SQL input provides identity records, ownership links, guild configuration, c
 
 **MIG-02.** Provide a read-only dry run reporting input counts, relationships, mappings, invalid values, normalization, opening balances, and proposed access bootstrap actions. Validate in staging and publish through transactions so live state consists of a complete accepted import or its pre-import state.
 
-**MIG-03.** Import every valid identity and ownership record, including unclaimed characters and users absent from Discord. For the supplied fixture, this includes 40 FCs, 4,251 characters, 241 users, and 161 ownership links. Normalize empty optional role/channel IDs to null. Validate all foreign-key relationships and report conflicts explicitly. Record, but do not apply, the legacy guest-application review channel. Imported guilds start with guest applications closed, the role-layout switch off (CFG-07), and grandfathering pending (MIG-14).
+**MIG-03.** Import every valid identity and ownership record, including unclaimed characters and users absent from Discord. For the supplied fixture, this includes 40 FCs, 4,251 characters, 241 users, and 161 ownership links. Normalize empty optional role/channel IDs to null. Validate all foreign-key relationships and report conflicts explicitly. Import the legacy guest-application review channel with the guest-application switch off (CFG-08). Imported guilds start with guest applications closed, the role-layout switch off (CFG-07), and grandfathering pending (MIG-14).
 
 **MIG-04.** The input schema associates ownership with users and balances with FCs. For the supplied single-guild fixture, map its 161 ownership links and all 40 FC ledger states to the sole configured guild. Create 40 guild/FC ledger accounts: 36 known opening balances, including explicit zeros, and four uninitialized accounts. Enable mutations for the currently linked account.
 
@@ -605,7 +650,7 @@ The numeric values in Section 12.1 define the supplied acceptance fixture. For a
 **MIG-13.** Maintain one authorized application writer during activation and recovery. Retain input snapshots and PostgreSQL backups. Document recovery before activation and after live transactions have been accepted. Post-activation recovery must retain acknowledged ledger entries, links, and decisions through compatible database restoration or reconciliation/replay of exported changes, then resume pending durable work. Reset the legacy application token after the legacy process stops and before any v2 gateway connection in the window. On App Platform, the worker component is added only after activation. A PostgreSQL writer lease enforces the single writer: each bot process holds a session advisory lock on a direct connection for its lifetime, and a second process waits, unready, until it is released. Before migration, import, activation, or restoration, the operator confirms that no process holds it. A database restore does not revert Discord role changes a writer already applied; recovery after effects began compares current roles with the cutover snapshot and resolves differences explicitly.
 
 **MIG-14.** At an imported guild's first activation, completely enumerate current Discord membership. In the transaction that enables effects, create a `grandfathered` guest grant for each human who is not Member-eligible under ROLE-01/ROLE-07, according to the fresh accepted roster required for activation (a roster accepted after the import, with no linked FC character awaiting departure confirmation).
-- Exclude bots, users who already hold an approved, manual, or imported grant, and revoked users. Never clear a revocation.
+- Exclude bots, revoked users, and users with an existing grant (evaluation basis `existing_grant`): an active approved, manual, or imported grant, or any grant that `/guest reset` ended, which still counts although it confers nothing. Never clear a revocation.
 - Record guild/user IDs, enumeration time, accepted roster time, evaluation basis, and the plan checksum. The checksum covers the guild, the import fingerprint, the latest accepted roster snapshot, and the planned user IDs; it excludes timestamps, roles, and nicknames.
 - The read-only preview reports the plan (counts, sample IDs, checksum) and can write it to a file. Activation writes only a plan whose checksum the operator confirmed; otherwise it rolls back unchanged and reports the users added and removed relative to the reviewed plan file.
 - Persist a guild-level completion marker so the run happens exactly once. Guilds not created by the import are never grandfathered.
@@ -626,10 +671,10 @@ Verification must cover observable behavior, policy invariants, concurrency, and
 | AC-05 | Competing claims/assignments resolve to at most one active owner per guild/character. Repeated same-owner operations are idempotent, and every private read/mutation enforces target-guild authorization. |
 | AC-06 | Unclaim/unassign resolves stored identity during a Lodestone outage and after a rename/transfer, verifies the target owner, commits the local link change, and queues reconciliation. |
 | AC-07 | One complete accepted roster establishes positive membership. Any remaining qualifying character retains member eligibility. Two properly separated complete absence observations confirm departure; invalid/incomplete acquisition retains the prior accepted state. |
-| AC-08 | Confirmed former members and registered users with no FC character become guests in every configured guild, with onboarding enabled or disabled. Later unregistered newcomers gain access through an officer grant (or approval while applications are open). Guest revocation survives refresh/restart/rejoin, and current FC-member eligibility takes precedence over guest state. |
+| AC-08 | Confirmed former members and registered users with no FC character become guests in every configured guild, with onboarding enabled or disabled. Later unregistered newcomers gain access through an officer grant (or approval while applications are open). Guest revocation survives refresh/restart/rejoin until an explicit grant or `/guest reset`, and current FC-member eligibility takes precedence over guest state. |
 | AC-09 | A failed/stale refresh retains existing FC-derived access and the successful-snapshot timestamp while reporting degraded state. A validated empty roster follows the same departure confirmation rules as other complete observations. |
 | AC-10 | A run records complete Discord member enumeration, scopes work to humans, and reports individual skipped/blocked outcomes while continuing eligible work. Repeated reconciliation applies only necessary managed-role/nickname deltas. |
-| AC-11 | Configuration unlink verifies the linked FC ID and works offline. Role replacement/clearing cleans up retired managed roles while preserving unrelated roles. Effects use the current applicable configuration/version. |
+| AC-11 | Configuration unlink verifies the linked FC ID and works offline. Role replacement/unsetting cleans up retired managed roles while preserving unrelated roles. Effects use the current applicable configuration/version. |
 | AC-12 | Guest review buttons work after restart and authorize each actor/guild. Simultaneous approve/deny actions resolve to one committed outcome. Concurrent/duplicate applications resolve to one pending record. |
 | AC-13 | Applicant departure, promotion to FC membership, deleted review messages, failed role writes, and blocked DMs preserve a correct durable application/grant state with visible delivery outcomes. |
 | AC-14 | Primary selection and nickname preferences are deterministic. Manual nicknames and guild-owner/hierarchy limitations are respected. Ownership remains committed if nickname application fails. |
@@ -641,11 +686,14 @@ Verification must cover observable behavior, policy invariants, concurrency, and
 | AC-20 | Crashes after commit, during roster acquisition, during approval, and during notification delivery resume persisted work with the same committed application decisions, entry identities, and confirmed membership evidence. |
 | AC-21 | Lodestone operations obey concurrency/rate/deadline bounds, terminate timed-out underlying work, and keep Discord interaction acknowledgement responsive. Library fixtures cover missing selectors, explicit zero, malformed numbers, 404, maintenance, rate limits, and network exceptions. |
 | AC-22 | Docker images build reproducibly, Compose validates, PostgreSQL data survives container recreation, and the bot recovers from database/Discord reconnects. Health probes operate independently of Lodestone acquisition. Graceful shutdown and backup restoration are exercised. A second bot process against the same database waits for the writer lease, stays unready, and takes over only after the first releases it or loses its session. |
-| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (19 root commands / 41 paths including `/config role_layout`). |
+| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (19 root commands / 43 paths, including `/config role_layout`, `/officer reset`, and `/guest reset`). |
 | AC-24 | A user with several trusted links becomes Member when any is a confirmed FC member, receives Officer when any holds the configured rank (except through a bot-only officer's assignment), and is Guest when none is in the FC, with onboarding enabled or disabled. Unknown/stale evidence creates no new role, removing the last link removes derived Guest, and onboarding-disabled guilds receive no channel-visibility work. |
-| AC-25 | First activation of an imported guild grandfathers exactly the previewed set of current non-member humans, once; reruns and later activations add nothing. Bots, Member-eligible users, existing grant holders, and revoked users are excluded. A mismatched plan checksum, a stale roster, or a linked FC character awaiting departure confirmation rolls activation back unchanged. Grandfathered grants survive refresh/restart/rejoin, yield to Member precedence and explicit revocation, and can be restored by an explicit grant. |
+| AC-25 | First activation of an imported guild grandfathers exactly the previewed set of current non-member humans, once; reruns and later activations add nothing. Bots, Member-eligible users, existing grant holders (including users whose grant `/guest reset` ended), and revoked users are excluded. A mismatched plan checksum, a stale roster, or a linked FC character awaiting departure confirmation rolls activation back unchanged. Grandfathered grants survive refresh/restart/rejoin, yield to Member precedence and explicit revocation, and can be restored by an explicit grant. |
 | AC-26 | With the role-layout switch off, startup, activation, setup, role configuration, role events, refresh, and requeued work make no hoist/position writes, and layout work completes as skipped. Enabling it (manager-only, audited, revision-fenced) queues one pass that converges; disabling during a pass supersedes it before any further write. |
-| AC-27 | An imported guild activates with guest applications closed (legacy review channel recorded, not applied), onboarding off, and the role-layout switch off, and `/apply` refuses with a visitor-facing explanation before its form opens. Production tools refuse mixed application/guild/database identities and development `.env` leakage, and after registration no guild-scoped commands remain for the production application. |
+| AC-27 | An imported guild activates with guest applications closed (legacy review channel kept with the guest-application switch off), onboarding off, and the role-layout switch off, and `/apply` refuses with a visitor-facing explanation before its form opens. Production tools refuse mixed application/guild/database identities and development `.env` leakage, and after registration no guild-scoped commands remain for the production application. |
+| AC-28 | The guest-application switch is independent of the review channel (CFG-08). `/apply` is open only with the switch on and both a review channel and a Guest role set. Switching off keeps the channel and leaves pending applications reviewable, and a request matching the saved state changes nothing. Switching on validates the review channel that will take applications, including a stored legacy channel, while switching off or unsetting the channel validates nothing. `/setup` switches applications on, an import keeps the legacy channel with the switch off, migration 006 switches on only guilds that already had a review channel and were not awaiting first activation, and activation changes the switch only on an explicit choice. |
+| AC-29 | `/officer reset` removes an officer grant or revocation, so the configured rank decides again, including for a user who has left; like grant and revoke, it refuses a manager other than the guild owner whose highest role is not above a bound Officer role. `/guest reset` lifts a revocation and ends every active grant of any provenance; ended grants stay as history, confer nothing, are left out of `/guest status`, and still exclude the user from first-activation grandfathering. Both are audited and reconcile the member, and with nothing to remove they change nothing and audit nothing. |
+| AC-30 | `/main` naming the current main and `/nickname` repeating the current setting save nothing, queue no reconciliation, and reply that nothing changed. `/config officer_rank` naming the saved rank, or unsetting when none is set, replies that nothing changed without a revision bump, audit, or repair pass. Every option of every registered command path has an input-failure example. `/ledger adjust entry` accepts `5`, `#5`, or the entry ID within the current account. Member options suggest server members and still accept pasted IDs and mentions. After a non-imported user removes every link, their next link becomes the main without changing nickname sync. Reconciliation never writes, restores, or blocks on the guild owner's nickname. |
 
 Before production activation, perform a smoke test of command registration, proof/assignment, member/guest transitions (including multi-character union and officer guest grant/revoke), nickname handling, and ledger delivery in a dedicated configured test guild. Automated checks use dedicated test credentials and guild identifiers.
 

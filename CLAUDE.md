@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)" and "Approved reply-session amendments (2026-09-24)".
 
 ## Project map
 
@@ -25,10 +25,10 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
-- `src/import/`: the legacy MariaDB importer. Imports start with applications closed, layout off, and grandfathering pending.
+- `src/import/`: the legacy MariaDB importer. Imports keep the legacy review channel with the guest-application switch off, and start with layout off and grandfathering pending.
 - `scripts/`: one-shot operator tools: migrate, register, commands (scope read-back and cleanup), snapshot, import, acquire, preview, activate, retry, check-restore, discord-inspect, discord-smoke, and app-spec (App Platform phases).
 - `sidecar/` and `vendor/nodestone`: the bounded Lodestone parser service. Update it only through `bun run nodestone:update`.
-- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `005_launch_access_policy.sql`).
+- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `006_guest_application_switch.sql`; 2.14.x required `005_launch_access_policy.sql`).
 
 ## Commands
 
@@ -60,6 +60,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 ## DevBot operations
 
 - Always pass both Compose files: `docker compose -f docker-compose.yml -f docker-compose.devbot.yml …`. That targets the `tarubot_dev` database and test guild `1040379370159743139`. Pin releases with `TARUBOT_IMAGE_TAG=X.Y.Z`.
+- Docker on this Linux machine needs the `docker` group. When the session predates the group change, run Compose through `sg docker -c '…'`; don't change group membership yourself.
 - The tool guard's DevBot profile requires local tools to name `…/tarubot_dev`, on loopback or `postgres`, with an empty CA. The one exception is `migrate.js --restore-rehearsal`, which requires a `*_restore_test` copy instead. If the owner's `.env` still says `…/tarubot`, local tools are refused. Changing it is the owner's action; never edit `.env` yourself.
 - Updating DevBot (see docs/OPERATIONS.md and docs/DEV_GUILD.md):
   1. Stop `tarubot`.
@@ -79,14 +80,14 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Production tools never run from this checkout or its `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file="$HOME/tarubot-cutover/production.env" dist/scripts/<tool>.js`, never `bun run`. The file is a copy of `production.env.example`. Before the window, token use is limited to read-only REST inspection and rehearsal logins against `tarubot_rehearsal`, under `TARUBOT_ENVIRONMENT=rehearsal`, which the guard keeps read-only on Discord. See docs/MIGRATION.md E0–E2.
 - The production application `965294750741692416` must not be installed in the dev guild; the owner removes it before cutover.
 - Production registers commands only with `register.js --global`; the guard refuses a production `--guild` registration, which would show every command twice.
-- Cutover rules live in the REQUIREMENTS.md launch amendments and docs/MIGRATION.md. Read them before touching import, activation, access policy, or tooling:
+- Cutover rules live in the REQUIREMENTS.md launch and reply-session amendments and docs/MIGRATION.md. Read them before touching import, activation, access policy, or tooling:
   - registered-user Guest applies in every guild, as the union over linked characters;
   - first activation writes one-time `grandfathered` grants from a checksum-confirmed preview;
   - the role layout is off for imported guilds;
-  - `/apply` and onboarding are off, and `/setup` is not run in production;
+  - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover uses a published release ≥ 2.15.0 (2.14.0 adds the reply embeds; 2.15.0 adds the OPS-10/OPS-11 telemetry and officer alerts).
+  - the cutover uses a published release ≥ 2.16.0 (2.14.0 adds the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the OPS-10/OPS-11 telemetry and officer alerts).
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
@@ -100,7 +101,9 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - The tool guard refuses production and rehearsal runs that could merge these values.
 - One bot process writes to a database. It holds the writer lease (PostgreSQL advisory lock `714882494`) from before login until shutdown, and checks the lease session every 30 seconds, exiting with status 1 if it errors, goes silent or no longer holds the lock (also when shutdown then hangs, through the 27-second deadline). Every lease statement, including each wait attempt, has a 10-second client-side deadline; a waiting process whose session goes silent exits with status 1 too. A second instance logs `Waiting for the database writer lease…`, stays unready (readiness 503) and does nothing until the lease frees. Before migrate, import, activate, or restore, check `pg_locks` for that key (docs/OPERATIONS.md).
 - Queue waits (`busy`, `ordered`, `cooldown`, `superseded`) are expected and log at debug. `lease_lost` logs at warn, and only terminal failures log at error.
-- Guild configuration changes (`/config` fields, officer rank, FC unlink, `/setup`, activation) bump `guilds.revision` and queue a full repair pass (`reconcile.guild`). The exception is `/config role_layout`: it bumps the revision (fencing in-flight work) but queues no repair pass. Enabling queues one `roles.layout` pass, disabling queues nothing, and repeating the current value changes nothing (no revision bump and no audit).
+- Guild configuration changes (`/config` fields, officer rank, FC unlink, `/setup`, activation) bump `guilds.revision` and queue a full repair pass (`reconcile.guild`). A repeat that matches what is saved is a no-op (no revision bump, audit or repair pass) for `/config officer_rank` (the saved rank, or `unset_rank` with none set), `/config guest_applications`, `/config fc link` naming the linked FC, and an `activate.js` rerun on a live guild without `--requeue`. Role and channel fields save again even when unchanged. The exception is `/config role_layout`: it bumps the revision (fencing in-flight work) but queues no repair pass. Enabling queues one `roles.layout` pass, disabling queues nothing, and repeating the current value changes nothing (no revision bump and no audit).
+- `/config guest_applications` saves `enabled`, `channel` and `unset_channel` in one revision with one repair pass, auditing each changed setting. It validates the channel that will take applications (a named one, or the stored one, such as an imported legacy channel, when the call switches applications on), never when switching off or unsetting, and refuses with the "Server settings changed" conflict if, under the row lock, the change would leave applications on with a channel other than the one it validated. No `/config` option is named `clear`: unsetting uses `unset_channel`, `unset_role` or `unset_rank`.
+- Member overrides (`/officer grant|revoke|reset`, `/guest grant|revoke|reset`) leave the revision alone and queue `reconcile.user` for that member. The `/officer` trio needs a server manager (Manage Server and Manage Roles), and while an Officer role is bound each first runs `validateRole` on it: the bot must manage it and the manager's highest role must be above it (the server owner is exempt). The `/guest` trio needs bot officer access. `/officer reset` deletes the officer override so the rank decides, and like a revoke it works for a member who left. `/guest reset` lifts the revocation and ends every active grant of any provenance (kept as history); grandfathering still counts ended grants (basis `existing_grant`), so a reset before first activation stands. A reset with nothing to remove audits and queues nothing.
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
-- `/setup` enables onboarding, opens `/apply` (it adopts the officer room as the review channel), and adopts every Officer-role holder.
-- Leave the old `feat/lobby-access` stash alone. It has been superseded.
+- `/setup` enables onboarding, switches guest applications on (adopting the officer room as the review channel when none is set, and validating a kept one first), and adopts every Officer-role holder.
+- Leave the old `feat/lobby-access` stash alone. It has been superseded. It exists only in the original Mac clone; this Linux clone has no stashes.

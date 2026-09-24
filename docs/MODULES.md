@@ -74,6 +74,8 @@ For an officer-only root, set both the Discord builder's default `ManageGuild` p
 
 Autocomplete returns up to 25 string choices, built with `choice()` from `src/discord/presenters/format.ts` so labels are cut on character boundaries, and uses Discord's permission-bearing interaction payload, since autocomplete cannot defer. Keep private completion queries inside an authorized application operation.
 
+A command has one `autocomplete` handler for all its options. When several options autocomplete, the handler dispatches on the focused option with `focusedOption()` from `src/discord/autocomplete.ts`, as `/unassign` (member, then character) and `/guest` (member, then application) do. A mixed-permission command authorizes each branch in the handler too, because suggestions can reveal records. Every free-text `member:` option completes with the shared `completeMember()`: it filters the cached server members, falls back to Discord's member search within `SEARCH_BUDGET_MS` (1.2 s) when the cache has no match for two or more typed characters, and offers a pasted ID or mention back so departed users stay nameable. Its values are user IDs, which `userId()` in `src/discord/selectors.ts` parses. Pass `selfOnly` where a member may name only themselves. `member-autocomplete.test.ts` calls the commands' own handlers to check which completer each focused option reaches and who may see its suggestions.
+
 ### Present results
 
 `execute` returns exactly one presenter reply (`Presented`), and nothing else: the command and component contracts are typed that way, and the router answers any other value as an unexpected failure instead of sending it. [REPLIES.md](REPLIES.md) is the house style. In short:
@@ -84,6 +86,7 @@ Autocomplete returns up to 25 string choices, built with `choice()` from `src/di
 - Report what was saved, not what Discord will do: queued work reads `… QUEUED`, paused work `‖ PAUSED`, and completion words wait for a succeeded job. Use `effectsField()` and `pausedSave()` from `jobs.ts` for change receipts.
 - Choose wording by audience from `viewer`, never access: members never see job or entry UUIDs, diagnostics or other members' details; officers get full copyable IDs where a follow-up command needs them.
 - Throw a `Failure` with a catalog code and typed detail, and let the router present it through the one failure presenter. Never catch a failure to build your own error reply.
+- Give every option an Example: the input-failure card shows the first `EXAMPLES` line (`src/discord/presenters/failure.ts`) of that command path that uses the failing option. `failure-reply.test.ts` walks every registered command path and fails on any option without an example. Leave the option detail off a failure whose option value was valid, so no Example repeats the command that failed: `/nickname enabled:true` without a main names the `/main` step instead.
 - Never set `flags` or `allowedMentions`; the router applies visibility and forces mentions off.
 - JSON reaches Discord only through the officer-only `details` component and `dataReply()`; `reply-guard.test.ts` fails on any other use. The DevBot test-session post and `officer.notify` are the documented exclusions.
 
