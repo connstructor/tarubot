@@ -246,6 +246,13 @@ describe("formatting", () => {
     expect(link("Example [Char](x)", lodestone.character(CHARACTER.id))).toBe(
       "[Example \\[Char\\](x)](https://na.finalfantasyxiv.com/lodestone/character/12345678/)",
     );
+    // A typed backslash stays literal, so '\]' or a trailing '\' can't close the link early.
+    expect(link("Bad\\]x", lodestone.character(CHARACTER.id))).toBe(
+      "[Bad\\\\\\]x](https://na.finalfantasyxiv.com/lodestone/character/12345678/)",
+    );
+    expect(link("Trail\\", lodestone.character(CHARACTER.id))).toBe(
+      "[Trail\\\\](https://na.finalfantasyxiv.com/lodestone/character/12345678/)",
+    );
     expect(() => link("x", "javascript:alert(1)")).toThrow();
   });
 });

@@ -249,13 +249,15 @@ const LINK_URL = /^https:\/\/[^\s()<>]+$/u;
 
 /**
  * A masked link whose text names its target ('Lodestone profile', never 'here'). The label is
- * escaped and its brackets too, so user text can't end the link early.
+ * escaped and its brackets too, so user text can't end the link early. Backslashes and brackets
+ * are escaped in one pass before the markdown escaping adds its own backslashes, so a label such
+ * as 'a\]' or one ending in '\' can't turn an escape into a live bracket.
  */
 export function link(label: string, url: string): string {
   if (!LINK_URL.test(url)) throw new Error("A link needs an https URL without spaces.");
-  const text = escapeMarkdown(collapse(label))
-    .replace(/[[\]]/gu, "\\$&")
-    .replace(/<(?=[@#/:]|[a-z]+:)/giu, "\\<");
+  const text = escapeMarkdown(collapse(label).replace(/[\\[\]]/gu, "\\$&"), {
+    escape: false,
+  }).replace(/<(?=[@#/:]|[a-z]+:)/giu, "\\<");
   return `[${cutMarkdown(text, DISCORD_LIMITS.fieldName)}](${url})`;
 }
 
