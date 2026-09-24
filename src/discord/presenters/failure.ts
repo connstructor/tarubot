@@ -17,6 +17,7 @@ import {
   type FailureCategory,
   type FailureClassification,
   type FailureDetail,
+  type ForbiddenScope,
   type SetupPiece,
 } from "../../domain/failures.js";
 import { OFFICERS_ONLY } from "../../domain/policy.js";
@@ -306,13 +307,19 @@ function officerSentence(s: Situation): string {
   return OFFICERS_ONLY;
 }
 
-/** The Discord permissions a manager refusal says are missing, from the viewer's own flags. */
-function missingPermissions(s: Situation, manageRolesOnly: boolean): string | undefined {
-  if (manageRolesOnly) return "Manage Roles";
+/**
+ * The Discord permissions a manager refusal says are missing, from the viewer's own flags. The
+ * viewer carries no Manage Channels flag, so /setup's three-permission check names Manage Channels
+ * only when both known permissions are present: then it must be the one missing.
+ */
+function missingPermissions(s: Situation, scope: ForbiddenScope | undefined): string | undefined {
+  if (scope === "manage_roles") return "Manage Roles";
   const missing = [
     !(s.viewer?.manageGuild ?? false) && "Manage Server",
     !(s.viewer?.manageRoles ?? false) && "Manage Roles",
   ].filter((name): name is string => Boolean(name));
+  if (scope === "manage_channels" && !missing.length && s.viewer !== undefined)
+    return "Manage Channels";
   return missing.length ? missing.join(" and ") : undefined;
 }
 
@@ -350,8 +357,9 @@ function forbiddenView(s: Situation): FailureView {
         ],
       };
     case "manager":
-    case "manage_roles": {
-      const missing = missingPermissions(s, scope === "manage_roles");
+    case "manage_roles":
+    case "manage_channels": {
+      const missing = missingPermissions(s, scope);
       return {
         concept: "forbidden.manager",
         tone: "error",
@@ -367,7 +375,9 @@ function forbiddenView(s: Situation): FailureView {
             value:
               scope === "manage_roles"
                 ? "Anyone with Manage Roles, such as the server owner"
-                : "Anyone with both permissions, such as the server owner",
+                : scope === "manage_channels"
+                  ? "Anyone with all three permissions, such as the server owner"
+                  : "Anyone with both permissions, such as the server owner",
             inline: true,
           },
         ],
@@ -1047,16 +1057,20 @@ function blockedView(s: Situation): FailureView {
         value: `${mentionChannel(channel)} (${code(channel)})`,
         inline: true,
       },
-      role !== undefined && {
-        name: "How to fix",
-        value:
-          "Server Settings → Roles: drag the TaruBot role above this role and give it Manage Roles.",
-      },
-      channel !== undefined && {
-        name: "How to fix",
-        value:
-          "Channel settings → Permissions: give the TaruBot role the permissions listed above.",
-      },
+      // How to fix only when the throw site names that remedy: a refusal about the chosen role or
+      // channel itself (an integration role, admin permissions, a reserved channel) has none.
+      role !== undefined &&
+        resource?.fix === "hierarchy" && {
+          name: "How to fix",
+          value:
+            "Server Settings → Roles: drag the TaruBot role above this role and give it Manage Roles.",
+        },
+      channel !== undefined &&
+        resource?.fix === "channel_permissions" && {
+          name: "How to fix",
+          value:
+            "Channel settings → Permissions: give the TaruBot role the permissions listed above.",
+        },
       { name: "Then", value: "Run `/config validate` to re-check every role and channel." },
     ],
   };

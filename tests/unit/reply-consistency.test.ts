@@ -655,8 +655,10 @@ describe("resolved inconsistencies", () => {
       expect(embed.title).toBe("Discord permissions need attention");
       expect(fieldOf(embed, "Then")).toBeDefined();
     }
-    // Affected and How to fix name the role or channel whenever the refusal knows which one; a
-    // raw Discord permission error does not, so its card keeps the officer diagnostic instead.
+    // Affected names the role or channel whenever the refusal knows which one, and How to fix
+    // appears when the throw site names the remedy (TaruBot's role position or channel
+    // permissions); a raw Discord permission error names neither, so its card keeps the officer
+    // diagnostic instead.
     const role = embedOf("failures/blocked role · /config roles guest · officer");
     expect([fieldOf(role, "Affected"), fieldOf(role, "How to fix")]).not.toContain(undefined);
   });
@@ -677,6 +679,20 @@ describe("resolved inconsistencies", () => {
       "characters/unassign.unlinked",
     ])
       expect({ key, tone: caseOf(key).tone }).toEqual({ key, tone: "success" });
+  });
+
+  test("15b. a change saved with a caveat the user or an officer must fix is warning", () => {
+    // The C4 tone table's caveat row: saved, but something still needs fixing before it applies.
+    for (const key of [
+      "characters/nickname.on_owner",
+      "configuration/role.leader_no_fc",
+      "configuration/role.officer_no_rank",
+      "configuration/channel.ledger_no_fc",
+      "configuration/channel.applications_no_role",
+      "configuration/rank.heads_up",
+      "guests/grant.no_role",
+    ])
+      expect({ key, tone: caseOf(key).tone }).toEqual({ key, tone: "warning" });
   });
 
   test("16. guest and officer refusals get per-concept cards from the one catalog", () => {

@@ -4,7 +4,10 @@ import {
   ChannelType,
   Client,
   DiscordAPIError,
+  DiscordjsError,
+  DiscordjsErrorCodes,
   GatewayIntentBits,
+  GatewayRateLimitError,
   PermissionFlagsBits,
 } from "discord.js";
 import type { Collection, GuildMember, Role } from "discord.js";
@@ -97,9 +100,32 @@ export class DiscordGateway implements DiscordPort {
   /** Require complete, count-consistent enumeration before snapshot or guild-wide reconciliation. */
   async members(guildId: string): Promise<MemberView[]> {
     const guild = await this.client.guilds.fetch(guildId);
+    // Every way the full list can't be read is the member-list failure, with its approved card.
+    const listFailure = (retryAfter = 0) =>
+      new Failure(
+        "incomplete",
+        "Discord didn't return the complete member list. Try again in a minute.",
+        retryAfter,
+        { kind: "discord", what: "member_list" },
+      );
     for (let attempt = 0; attempt < 3; attempt++) {
       const count = guild.memberCount;
-      const members = await guild.members.fetch({ time: 60000 });
+      let members: Collection<string, GuildMember>;
+      try {
+        members = await guild.members.fetch({ time: 60000 });
+      } catch (error) {
+        // Discord allows one full member-list request per guild every 30 seconds (RATE_LIMITED),
+        // and chunks can stop arriving (GuildMembersTimeout); both mean the list couldn't be
+        // read. Retrying inside this loop would only be rate limited again, so stop here.
+        if (error instanceof GatewayRateLimitError)
+          throw listFailure(Math.ceil(error.data.retry_after));
+        if (
+          error instanceof DiscordjsError &&
+          error.code === DiscordjsErrorCodes.GuildMembersTimeout
+        )
+          throw listFailure();
+        throw error;
+      }
       if (members.size === count && count === guild.memberCount) {
         // A member without a join time makes the whole list unusable for a guild-wide read, so
         // it is reported as the member-list failure (keeping that card's adopt_holders tip).
@@ -113,12 +139,7 @@ export class DiscordGateway implements DiscordPort {
         return [...members.values()].map((member) => this.view(member));
       }
     }
-    throw new Failure(
-      "incomplete",
-      "Discord didn't return the complete member list. Try again in a minute.",
-      0,
-      { kind: "discord", what: "member_list" },
-    );
+    throw listFailure();
   }
   /**
    * Access roles must be assignable, nonadministrative, and below the applicable hierarchies.
@@ -134,13 +155,16 @@ export class DiscordGateway implements DiscordPort {
     const role = (await guild.roles.fetch()).get(roleId);
     const bot = await guild.members.fetchMe({ force: true });
     const affected = { kind: "resource", resource: "role", id: roleId } as const;
-    if (
-      !role ||
-      role.guild.id !== guildId ||
-      role.id === guild.id ||
-      role.managed ||
-      bot.roles.botRole?.id === role.id
-    )
+    // A configured role deleted from Discord (or one from another server) can't be fixed by
+    // changing its permissions: say so, so /config validate and job diagnostics point at the cause.
+    if (!role || role.guild.id !== guildId)
+      throw new Failure(
+        "blocked",
+        "That role no longer exists in this server. Choose another with /config roles, or run /setup to recreate it.",
+        0,
+        affected,
+      );
+    if (role.id === guild.id || role.managed || bot.roles.botRole?.id === role.id)
       throw new Failure(
         "blocked",
         "Pick an ordinary role: not @everyone, not a bot or integration role, and not TaruBot's own role.",
@@ -173,7 +197,7 @@ export class DiscordGateway implements DiscordPort {
         "blocked",
         `TaruBot can't manage <@&${roleId}>. Its own role must be above that role, and it needs Manage Roles.`,
         0,
-        affected,
+        { ...affected, fix: "hierarchy" },
       );
     if (actorId) {
       const actor = await guild.members.fetch({ user: actorId, force: true });
@@ -319,7 +343,7 @@ export class DiscordGateway implements DiscordPort {
         "blocked",
         `TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#${channelId}>, and it must be a text channel in this server.`,
         0,
-        { kind: "resource", resource: "channel", id: channelId },
+        { kind: "resource", resource: "channel", id: channelId, fix: "channel_permissions" },
       );
   }
   /** REST deltas touch only requested role IDs; retry observes any partially applied transition. */
@@ -341,7 +365,7 @@ export class DiscordGateway implements DiscordPort {
           "blocked",
           "A current or retired access role is above the bot's role.",
           0,
-          { kind: "resource", resource: "role", id: roleId },
+          { kind: "resource", resource: "role", id: roleId, fix: "hierarchy" },
         );
       await member.roles.remove(roleId, "TaruBot access reconciliation");
     }

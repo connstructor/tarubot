@@ -79,7 +79,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
         "forbidden",
         "Setting up onboarding needs Manage Server, Manage Roles and Manage Channels.",
         0,
-        { kind: "scope", scope: "manager" },
+        { kind: "scope", scope: "manage_channels" },
       );
   }
 
@@ -251,7 +251,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
           "blocked",
           `TaruBot needs View Channel, Manage Channels and Manage Roles in <#${channel.id}>.`,
           0,
-          { kind: "resource", resource: "channel", id: channel.id },
+          { kind: "resource", resource: "channel", id: channel.id, fix: "channel_permissions" },
         );
       channels.push({
         id: channel.id,

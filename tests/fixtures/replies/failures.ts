@@ -858,9 +858,44 @@ export const FAILURE_CASES = {
     failure(
       "blocked",
       "TaruBot can't manage <@&223456789012345602>. Its own role must be above that role, and it needs Manage Roles.",
-      { kind: "resource", resource: "role", id: "223456789012345602" },
+      { kind: "resource", resource: "role", id: "223456789012345602", fix: "hierarchy" },
     ),
     "/config roles guest",
+  ),
+  // Refusals about the chosen role or channel itself name it but give no hierarchy or permission
+  // remedy, since dragging TaruBot's role or granting it permissions would not help.
+  "blocked ordinary role · /config roles member · officer": card(
+    "blocked",
+    "officer",
+    BLOCKED_OFFICER,
+    failure(
+      "blocked",
+      "Pick an ordinary role: not @everyone, not a bot or integration role, and not TaruBot's own role.",
+      { kind: "resource", resource: "role", id: "223456789012345601" },
+    ),
+    "/config roles member",
+  ),
+  "blocked admin role · /officer grant · manager": card(
+    "blocked",
+    "manager",
+    BLOCKED_OFFICER,
+    failure(
+      "blocked",
+      "Access roles can't have Administrator, Manage Server or Manage Roles. Remove those from <@&223456789012345603> or pick another role.",
+      { kind: "resource", resource: "role", id: "223456789012345603" },
+    ),
+    "/officer grant",
+  ),
+  "blocked reserved channel · /setup · manager": card(
+    "blocked",
+    "manager",
+    BLOCKED_OFFICER,
+    failure(
+      "blocked",
+      "The Community Updates channel and its category are reserved. Choose a different officer channel.",
+      { kind: "resource", resource: "channel", id: "323456789012345603" },
+    ),
+    "/setup",
   ),
   "blocked channel · /ledger deposit · member": card(
     "blocked",
@@ -869,7 +904,12 @@ export const FAILURE_CASES = {
     failure(
       "blocked",
       "TaruBot needs View Channel, Send Messages, Embed Links and Read Message History in <#323456789012345601>, and it must be a text channel in this server.",
-      { kind: "resource", resource: "channel", id: "323456789012345601" },
+      {
+        kind: "resource",
+        resource: "channel",
+        id: "323456789012345601",
+        fix: "channel_permissions",
+      },
     ),
     "/ledger deposit",
   ),

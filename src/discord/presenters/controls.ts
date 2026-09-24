@@ -46,26 +46,15 @@ export interface PagerState {
 }
 
 /**
- * The history pager, edited in place. Latest and Newer are enabled whenever at least one newer
- * entry exists (above > 0), whatever cursor the page was opened with; Latest is hidden on the
- * newest page and Newer disabled there. Older is disabled on the oldest page. A disabled button
- * omits its cursor, and each action name keeps the IDs unique within the message.
+ * The history pager, edited in place, in the approved ledger#21/#23 order: Newer, Older, Latest.
+ * Newer and Latest are enabled whenever at least one newer entry exists (above > 0), whatever
+ * cursor the page was opened with; Latest is hidden on the newest page and Newer disabled there.
+ * Older is disabled on the oldest page. A disabled button omits its cursor, and each action name
+ * keeps the IDs unique within the message.
  */
 export function ledgerPager(page: PagerState): ButtonSpec[] {
   const newer = page.above > 0;
-  const buttons: ButtonSpec[] = [];
-  if (newer)
-    buttons.push({
-      style: "secondary",
-      label: "Latest",
-      customId: encodeControl({
-        prefix: "ledger",
-        action: "latest",
-        scope: page.scope,
-        fcId: page.fcId,
-      }),
-    });
-  buttons.push(
+  const buttons: ButtonSpec[] = [
     {
       style: "secondary",
       label: "Newer",
@@ -91,7 +80,19 @@ export function ledgerPager(page: PagerState): ButtonSpec[] {
         before: page.older,
       }),
     },
-  );
+  ];
+  // Latest comes last, as approved, and only when there is a newer page to jump from.
+  if (newer)
+    buttons.push({
+      style: "secondary",
+      label: "Latest",
+      customId: encodeControl({
+        prefix: "ledger",
+        action: "latest",
+        scope: page.scope,
+        fcId: page.fcId,
+      }),
+    });
   return buttons;
 }
 

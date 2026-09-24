@@ -369,6 +369,40 @@ describe("audience rules", () => {
     expect(visibleText(member)).not.toContain("View Channel");
   });
 
+  test("blocked: How to fix appears only where the throw site names the remedy", () => {
+    // The chosen role or channel is itself unusable: dragging TaruBot's role would not help.
+    for (const key of [
+      "blocked ordinary role · /config roles member · officer",
+      "blocked admin role · /officer grant · manager",
+      "blocked reserved channel · /setup · manager",
+    ] as const) {
+      const embed = onlyEmbed(FAILURE_CASES[key].render());
+      expect({ key, fields: embed.fields?.map((item) => item.name) }).toEqual({
+        key,
+        fields: ["Affected", "Then"],
+      });
+    }
+    // A channel-permission refusal names the permission remedy.
+    const channel = onlyEmbed(
+      render(
+        new Failure(
+          "blocked",
+          "TaruBot needs View Channel, Manage Channels and Manage Roles in <#323456789012345601>.",
+          0,
+          {
+            kind: "resource",
+            resource: "channel",
+            id: "323456789012345601",
+            fix: "channel_permissions",
+          },
+        ),
+        { viewer: VIEWERS.manager, scope: "/setup" },
+      ),
+    );
+    expect(channel.fields?.map((item) => item.name)).toEqual(["Affected", "How to fix", "Then"]);
+    expect(channel.fields?.[1]?.value).toContain("give the TaruBot role the permissions");
+  });
+
   test("error text never reaches Discord: a raw Error and a ZodError are 'Something went wrong'", () => {
     const zod = (() => {
       try {
@@ -429,6 +463,32 @@ describe("audience rules", () => {
       FAILURE_CASES["forbidden manage_roles · /config roles member · officer"],
     )?.error;
     expect(field(roles, "Missing permission", { viewer: VIEWERS.officer })).toBe("Manage Roles");
+  });
+
+  test("/setup's channel check names Manage Channels and all three permissions", () => {
+    // A manager with Manage Server and Manage Roles passes the role check, so the third
+    // permission is the one /setup's channel provisioning found missing.
+    const refused = new Failure(
+      "forbidden",
+      "Setting up onboarding needs Manage Server, Manage Roles and Manage Channels.",
+      0,
+      { kind: "scope", scope: "manage_channels" },
+    );
+    const manager: Viewer = { ...VIEWERS.officer, manageGuild: true, manageRoles: true };
+    const embed = onlyEmbed(render(refused, { viewer: manager, scope: "/setup" }));
+    expect(embed.title).toBe("Server managers only");
+    expect(embed.fields).toEqual([
+      { name: "Missing permission", value: "Manage Channels", inline: true },
+      {
+        name: "Who can do this",
+        value: "Anyone with all three permissions, such as the server owner",
+        inline: true,
+      },
+    ]);
+    // Without Manage Server, only what the viewer is known to lack is named.
+    expect(field(refused, "Missing permission", { viewer: VIEWERS.officer, scope: "/setup" })).toBe(
+      "Manage Server and Manage Roles",
+    );
   });
 });
 

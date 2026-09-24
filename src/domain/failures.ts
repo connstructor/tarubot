@@ -140,6 +140,8 @@ export type ForbiddenScope =
   | "owner"
   | "manager"
   | "manage_roles"
+  /** /setup's channel provisioning: Manage Server, Manage Roles and Manage Channels together. */
+  | "manage_channels"
   | "hierarchy"
   | "membership"
   | "human"
@@ -191,6 +193,12 @@ export type FailureDetail =
       readonly id?: string;
       readonly name?: string;
       readonly world?: string;
+      /**
+       * The remedy, set only where the throw site's message is about TaruBot's own role position
+       * or channel permissions; the presenter shows a How to fix step only when it is named, so a
+       * refusal about the chosen role itself (an integration role, admin permissions) never gets one.
+       */
+      readonly fix?: "hierarchy" | "channel_permissions";
     }
   /** The character is already linked to another Discord user, identified by `owner`. */
   | { readonly kind: "ownership"; readonly character: FailureCharacter; readonly owner: string }

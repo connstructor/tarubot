@@ -840,15 +840,18 @@ describe("effects modes (C5)", () => {
     }
   });
 
-  test("channel settings take effect now and say when posts resume; held work waits", () => {
+  test("a paused channel setting is the #26 card with its own sentence; held work waits", () => {
     for (const mode of PAUSED_MODES) {
-      const embed = onlyEmbed(changeReply({ ...R.ledgerSet, effectsMode: mode }, officer, { now }));
-      expect(embed.title).toBe("Ledger channel set");
-      expect(embed.description).toEndWith(
-        mode === "awaiting_activation"
-          ? "Posts start once this server is activated."
-          : "Posts start once Discord changes are turned back on.",
+      const embed = expectHouseStyle(
+        changeReply({ ...R.ledgerSet, effectsMode: mode }, officer, { now }),
+        { tone: "pending", title: "Saved, Discord changes paused", timestamp: false },
       );
+      expect(embed.footer?.text).toBe("Check progress any time with /sync status");
+      // The receipt's own sentence leads, then the #26 sentence says when held work applies.
+      expect(embed.description).toStartWith(
+        `Ledger deposits, withdrawals, adjustments and initializations will be posted in <#${CHANNEL.ledger}>.`,
+      );
+      expect(namesOf(embed).slice(0, 2)).toEqual(["Saved", "Discord changes"]);
       expect(fieldOf(embed, "Held work")).toBe(
         mode === "awaiting_activation"
           ? "2 held jobs will retry once this server is activated"

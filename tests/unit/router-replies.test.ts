@@ -3,14 +3,24 @@
  * one approved card with 'Code · Ref', reported once at its category's level; update-mode clicks
  * edit only messages the presser owns; and nothing the router sends can reject handle().
  */
-import { expect, test } from "bun:test";
-import { InteractionResponseType, MessageFlags, SlashCommandBuilder } from "discord.js";
+import { expect, spyOn, test } from "bun:test";
+import {
+  ApplicationCommandOptionType,
+  DiscordjsError,
+  DiscordjsErrorCodes,
+  GatewayOpcodes,
+  GatewayRateLimitError,
+  InteractionResponseType,
+  MessageFlags,
+  SlashCommandBuilder,
+} from "discord.js";
 import type { APIEmbed } from "discord.js";
 import { defineCommand } from "../../src/bot/command.js";
 import { Component, defineComponent, type ComponentOptions } from "../../src/bot/component.js";
 import type { BotContext } from "../../src/bot/context.js";
 import { InteractionRouter } from "../../src/bot/router.js";
 import { Services } from "../../src/bot/services.js";
+import { DiscordGateway } from "../../src/discord/gateway.js";
 import { dataReply, reply, type Presented } from "../../src/discord/presenters/reply.js";
 import type { ReportOptions } from "../../src/domain/failures.js";
 import type { Actor } from "../../src/domain/policy.js";
@@ -36,6 +46,14 @@ let next: unknown = new Error("unset");
 /** A slash command that throws `next`. */
 const failing = defineCommand({
   data: new SlashCommandBuilder().setName("boom").setDescription("Failing fixture"),
+  execute() {
+    throw next;
+  },
+});
+
+/** A /config command that throws `next`, so a failure is scoped '/config roles officer'. */
+const configuring = defineCommand({
+  data: new SlashCommandBuilder().setName("config").setDescription("Config fixture"),
   execute() {
     throw next;
   },
@@ -118,6 +136,7 @@ function harness(overrides: Partial<BotContext> = {}, actor: Actor = MEMBER) {
     },
     new Map([
       [failing.name, failing],
+      [configuring.name, configuring],
       [working.name, working],
       [legacy.name, legacy],
       [suggesting.name, suggesting],
@@ -301,6 +320,68 @@ test("raw Discord errors in interactions are classified, presented and reported 
     expect(embedOf(fixture.requests.at(-1)).title).toBe("Not available here");
   } finally {
     await fixture.close();
+  }
+});
+
+test("a member list Discord won't return (rate limit, timeout) is the member-list card at warn", async () => {
+  // discord.js 14.27 rejects a full member request with GatewayRateLimitError when Discord
+  // answers RATE_LIMITED, and with GuildMembersTimeout when chunks stop arriving.
+  const limited = new GatewayRateLimitError(
+    {
+      opcode: GatewayOpcodes.RequestGuildMembers,
+      retry_after: 29.5,
+      meta: { guild_id: "100", nonce: "fixture" },
+    },
+    {},
+  );
+  const timeout: unknown = Reflect.construct(DiscordjsError, [
+    DiscordjsErrorCodes.GuildMembersTimeout,
+  ]);
+  for (const raised of [limited, timeout]) {
+    const gateway = new DiscordGateway();
+    let fetches = 0;
+    const guild = {
+      id: "100",
+      memberCount: 3,
+      members: {
+        fetch: async () => {
+          fetches++;
+          throw raised;
+        },
+      },
+    };
+    spyOn(gateway.client.guilds, "fetch").mockImplementation(async () => guild as never);
+    // The gateway stops at the first refusal instead of re-requesting into another rate limit.
+    next = await gateway.members("100").then(
+      () => new Error("Expected members() to fail"),
+      (error: unknown) => error,
+    );
+    expect(fetches).toBe(1);
+    await gateway.client.destroy();
+    const { fixture, reports, router } = harness({}, OFFICER);
+    try {
+      const interaction = fixture.slash("config", [
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: "roles",
+          options: [
+            { type: ApplicationCommandOptionType.Subcommand, name: "officer", options: [] },
+          ],
+        },
+      ]);
+      await router.handle(interaction);
+      const embed = embedOf(fixture.requests.at(-1));
+      expect(embed).toMatchObject({
+        title: "Couldn't read the member list",
+        footer: { text: `Code incomplete · Ref ${interaction.id}` },
+      });
+      expect(embed.fields?.map((item) => item.name)).toContain("Tip");
+      expect(reports.map((report) => report.options)).toEqual([
+        { level: "warn", scope: "/config roles officer" },
+      ]);
+    } finally {
+      await fixture.close();
+    }
   }
 });
 

@@ -198,9 +198,10 @@ test("ambiguous rooms, insufficient authority, dangerous roles and superseded wr
       code: "ambiguous",
       detail: { kind: "matches", resource: "channel", name: "lobby", ids: [lobby.id, twin.id] },
     });
+    // The three-permission channel check has its own scope, so the reply can name Manage Channels.
     await expect(fixture.port.check("100", "400")).rejects.toMatchObject({
       code: "forbidden",
-      detail: { kind: "scope", scope: "manager" },
+      detail: { kind: "scope", scope: "manage_channels" },
     });
     const role = fixture.roles.find((role) => role.id === "201");
     if (!role) throw new Error("Missing member role");

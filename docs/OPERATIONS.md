@@ -124,7 +124,7 @@ On App Platform, search the `tarubot` worker's runtime logs for the same string 
 | `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim and apply limits) | A limit, contention, a temporary Discord change or shutdown | None; the reply gives the retry time |
 | `eligible` | No application needed | The visitor already qualifies for access | None |
 | `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
-| `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply's Affected and How to fix name, then `/config validate` |
+| `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
 | `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`) | Activate the guild or re-enable effects |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
 

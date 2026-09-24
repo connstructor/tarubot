@@ -700,6 +700,17 @@ export const CONFIG_CASES = {
         { now },
       ),
   },
+  // A channel setting saved while Discord changes are paused is the #26 card like any change.
+  "channel.paused": {
+    spec: "errors-and-style#26",
+    audience: "officer",
+    concept: "paused_save",
+    tone: "pending",
+    title: "Saved, Discord changes paused",
+    timestamp: false,
+    render: () =>
+      changeReply({ ...R.ledgerSet, effectsMode: "awaiting_activation" }, VIEWERS.officer, { now }),
+  },
   "rank.set": {
     spec: "configuration#30",
     audience: "manager",

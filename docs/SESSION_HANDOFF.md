@@ -23,13 +23,17 @@ The handoff's documentation version is not evidence of a deployed image. **2.12.
 
 **Update later on 2026-09-23:** DevBot now runs the published 2.12.1 images on schema 004, new guest reviews go to officer-chat, and the first unverified-visitor approval passed; see [DEV_GUILD.md](DEV_GUILD.md). The table above is the original snapshot.
 
-**Update, 2.13.0 (current version):**
-- **Branch.** `feat/launch-policy-2.13.0` starts from `main` at `341c6ed` (2.12.3, PR #10). It implements the owner's launch decisions of 2026-09-23, recorded in [REQUIREMENTS.md](../REQUIREMENTS.md) under "Approved launch amendments", and adds migration `005_launch_access_policy.sql`.
-- **Status.** Not yet merged, published, or deployed. DevBot still runs the last recorded release; recheck it.
+**Update, 2.13.0:**
+- **Branch.** `feat/launch-policy-2.13.0` started from `main` at `341c6ed` (2.12.3, PR #10). It implements the owner's launch decisions of 2026-09-23, recorded in [REQUIREMENTS.md](../REQUIREMENTS.md) under "Approved launch amendments", and adds migration `005_launch_access_policy.sql`.
+- **Status.** Merged ([PR #11](https://github.com/connstructor/tarubot/pull/11), `2e3f27c`), published, and deployed to DevBot on schema 005 on 2026-09-23 (backup, rehearsal, migration, registration and guard refusals in [DEV_GUILD.md](DEV_GUILD.md#2130-rollout--2026-09-23)). The layout-switch, multi-character union and closed-applications checks remain.
 - **Cutover.** The production cutover follows the rewritten [MIGRATION.md](MIGRATION.md) on App Platform with the managed PostgreSQL cluster, using a release at or above 2.15.0 (2.14.0 reply presentation, then 2.15.0 OPS-10/OPS-11).
-- **Owner action.** Before local tools run against DevBot, the owner points the DevBot `.env` `DATABASE_URL` at `…/tarubot_dev`. The DevBot tool profile refuses `…/tarubot`.
+- **Owner action.** Done: the DevBot `.env` `DATABASE_URL` names `…/tarubot_dev`, which the DevBot tool profile requires (it refuses `…/tarubot`).
 
-**Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock; the recovery command below is available if that recurs. This documentation branch has not been pushed or given a PR at this checkpoint.
+**Update, 2.14.0 (current version):**
+- **Branch.** `feat/reply-presenters-2.14.0` starts from `main` at `2e3f27c` (2.13.0, PR #11). It replaces every JSON reply with the owner-approved embeds ([REPLIES.md](REPLIES.md)). No migration: the schema stays `005_launch_access_policy.sql`.
+- **Status.** Not yet merged, published, or deployed. Once published, deploy it to DevBot (no migration), re-register commands (the `/ledger history` `before` description changed) and run the reply session in `test-plans/current.json`, including the pass with Discord changes paused.
+
+**Local handoff checkpoint:** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. Check `git status` and the latest signed commit next session. The first signing attempt required a local GPG unlock (historical: commits are now signed with the SSH key described below). This documentation branch has not been pushed or given a PR at this checkpoint.
 
 ### Verified runtime observations
 
@@ -167,11 +171,11 @@ Take a fresh backup for the next migration. Keep `.env`, supplied dumps, backups
 - Repository: `/Users/connstruct/Documents/Projects/tarubot/new`; GitHub: `connstructor/tarubot`. Work within this repository.
 - Use Bun and the existing discovered command/event/component modules. Initialize `vendor/nodestone` before installing/building. Nodestone updates go through `bun run nodestone:update` and include the submodule pointer, lockfile, and revision metadata together.
 - Every coherent change, including documentation, increments SemVer/changelog and synchronized version references. Use feature branches and PRs; never commit directly to main or bypass required checks.
-- Commit verified milestones with the configured GPG key. Do not push, rewrite history, or change Git configuration without explicit authorization.
-- Signing key: `EF3EDB6D6B9A738181020AFC37991B2AA2A4862D`. If signing fails with `Inappropriate ioctl for device`, ask the owner to unlock it locally; never substitute an unsigned commit:
+- Commit verified milestones with the configured SSH signing key. Do not push, rewrite history, or change Git configuration without explicit authorization.
+- Signing key: `~/.ssh/id_git` (ED25519 `SHA256:Y7SmEUtV87C2xwDvDSYNS/f/BV3gT3yt2tkxCKkJTcc`, with `gpg.format=ssh`, verified locally through `~/.ssh/allowed_signers`). It must also be registered on GitHub as a *Signing Key* so pushed commits show Verified; check verification on the PR before merging. If signing fails, ask the owner; never substitute an unsigned commit. Check the latest commit with:
 
   ```sh
-  GPG_TTY=$(tty) gpg --yes --local-user EF3EDB6D6B9A738181020AFC37991B2AA2A4862D --detach-sign --output /dev/null AGENTS.md
+  git log --show-signature -1
   ```
 
 - Applied migrations are immutable. Use Drizzle and `orm(client)` for application transactions, keeping state/audit/outbox together and remote I/O outside those transactions.
@@ -181,4 +185,4 @@ Take a fresh backup for the next migration. Keep `.env`, supplied dumps, backups
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. Check the 2.13.0 branch or pull request, its publication, and the running DevBot state. After 2.13.0 is published, run its DevBot validation session (migration 005, the layout switch, the multi-character union, closed applications, and the tool-guard refusals). Then deliver 2.14.0 (the owner-approved reply embeds replacing JSON dumps; plan in the 2026-09-23 session) and 2.15.0 (OPS-10/OPS-11), and follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover. Preserve automatic registered Guest access, excluded community resources, and the owner's launch decisions in REQUIREMENTS.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. Check the 2.14.0 branch or pull request, its publication, and the running DevBot state (2.13.0 on schema 005). Finish the remaining 2.13.0 DevBot checks (the layout switch, the multi-character union and the closed-applications refusal). After 2.14.0 is published, deploy it to DevBot (no migration), re-register commands, and run its reply session from test-plans/current.json, including the pass with Discord changes paused. Then deliver 2.15.0 (OPS-10/OPS-11), and follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover. Preserve automatic registered Guest access, excluded community resources, and the owner's launch decisions in REQUIREMENTS.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.

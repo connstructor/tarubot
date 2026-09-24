@@ -555,24 +555,25 @@ describe("controls", () => {
       },
     ]);
     // A typed cursor that isn't a multiple of ten: 9 newer entries, the next newer page is the
-    // newest one, and the oldest page is reached (Older disabled).
+    // newest one, and the oldest page is reached (Older disabled). Latest follows Older, as
+    // approved in ledger#21 and #23.
     const middle = ledgerPager({ scope: "h", fcId: FC.id, above: 9, newer: "latest", older: null });
     expect(middle.map((button) => [button.label, "disabled" in button && button.disabled])).toEqual(
       [
-        ["Latest", false],
         ["Newer", false],
         ["Older", true],
+        ["Latest", false],
       ],
     );
     expect(middle.map((button) => ("customId" in button ? button.customId : ""))).toEqual([
-      `ledger:latest:h:${FC.id}`,
       `ledger:newer:h:${FC.id}`,
       `ledger:older:h:${FC.id}`,
+      `ledger:latest:h:${FC.id}`,
     ]);
     // Past the newest entry's range: an empty page still offers Latest and Newer.
     const past = ledgerPager({ scope: "c", fcId: FC.id, above: 43, newer: 44n, older: null });
-    expect(past.map((button) => button.label)).toEqual(["Latest", "Newer", "Older"]);
-    expect(past[1]).toMatchObject({ disabled: false, customId: `ledger:newer:c:${FC.id}:44` });
+    expect(past.map((button) => button.label)).toEqual(["Newer", "Older", "Latest"]);
+    expect(past[0]).toMatchObject({ disabled: false, customId: `ledger:newer:c:${FC.id}:44` });
     // IDs stay unique inside one message, so the reply builder accepts them.
     for (const buttons of [middle, past])
       expectHouseStyle(reply({ tone: "info", title: "Ledger history · Example", buttons }));

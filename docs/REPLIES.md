@@ -59,7 +59,8 @@ These rules settle the cases where the approved cards and the swatches could be 
 
 | State | Tone |
 | --- | --- |
-| A committed change, removals included (unlink, revoke, every clear, layout off, deny, `/unclaim`, `/unassign`) | success |
+| A committed change with nothing left to fix, removals included (unlink, revoke, every clear, layout off, deny, `/unclaim`, `/unassign`) | success |
+| A change saved with a caveat the user or an officer must fix: server-owner nickname, no FC linked (leader role, ledger channel, officer rank), no officer rank (officer role, `adopt_holders:false`), no Officer role (officer rank), no Guest role (review channel, guest grant) | warning |
 | A change saved while Discord changes are paused | pending, titled "Saved, Discord changes paused" (errors-and-style#26), unless something is also blocked or failed |
 | Any other view showing `‖ PAUSED` | pending, unless something is also blocked or failed |
 | Officer `/sync status` overview | pending while runs are active or anything is queued, even with a failed job (guests#44); warning only when the view is focused on blocked or failed work (#45) |
@@ -111,7 +112,7 @@ The approved job line (errors-and-style#28) is shared by `/guest status`, `/sync
 - User text is escaped for where it renders and cut on grapheme boundaries: 100 characters for character names, 300 for notes and reasons in fields. Titles and footers use their own plain-text escaping.
 - A character reads "Example Character @ Diabolos". Ledger titles use the plain FC name (`fcTitleName`, C10); the tagged name (`fcName`) appears only where an approved card shows it, such as the receipt footers of ledger#0 and #2.
 - `<@id>`, `<#id>` and `<@&id>` render names and never ping inside embeds. Every message is sent with `allowedMentions: { parse: [] }`, which the router forces last. Officers also see a member's raw ID in code, because a departed user renders as unknown.
-- Titles never contain IDs. Members never see job, run or entry UUIDs unless they need one as input. Full IDs stay complete and copyable wherever a follow-up option needs them (`run_id`, `application`, `entry`, `before`), in inline code unless the approved card shows them plain (the `/refresh` run, guests#36), and `shortId` is only a label. Member receipts show the entry number `#seq`; officer receipts, history and posts carry the full entry UUID (LEDGER-08).
+- Titles never contain IDs. Members never see job, run or entry UUIDs unless they need one as input. Full IDs stay complete and copyable wherever a follow-up option needs them (`run_id`, `application`, `entry`, `before`), in inline code unless the approved card shows them plain (the `/refresh` run, guests#36), and `shortId` is only a label. Member `/sync status` run lines show only the short label, so their footer names where the full `run_id` comes from (the `/refresh` reply) instead of treating the label as input. Member receipts show the entry number `#seq`; officer receipts, history and posts carry the full entry UUID (LEDGER-08).
 
 ### Saved versus delivered (UX-02)
 
@@ -146,7 +147,7 @@ Every button custom ID is built and parsed by one codec, `src/discord/custom-ids
 | I've added it — verify now (`verify:claim`) | `/claim` | new reply, so the token message is never edited |
 | Check again (`verify:again`) | the pending-token card | updates its own card; refused within 15 seconds of that card's last render |
 | View history (`ledger:open`) | `/ledger balance` | new reply, so the balance stays visible |
-| Latest, Newer, Older (`ledger:latest`, `ledger:newer`, `ledger:older`) | `/ledger history` | updates the page in place; Newer and Latest are enabled whenever a newer entry exists (C1) |
+| Newer, Older, Latest (`ledger:newer`, `ledger:older`, `ledger:latest`) | `/ledger history` | updates the page in place; Newer and Latest are enabled whenever a newer entry exists (C1), and Latest is hidden on the newest page (ledger#21, #23) |
 | Run health check, Re-check (`config:validate`) | `/config show`, `/config validate` | updates the view in place with the checklist |
 | Check sync status (`sync:status`) | `/setup` | new reply |
 | Full details (JSON) (`details:*`) | officer read views below | new reply with a file |
@@ -182,7 +183,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | input | `input`, `invalid_data` | input | Check your input | Check your input | warning | info |
 | forbidden.officer | `forbidden` {officer} | forbidden | Officers only | Officers only | error | info |
 | forbidden.owner | `forbidden` {owner} | forbidden | Only your own records | Only your own records | error | info |
-| forbidden.manager | `forbidden` {manager, manage_roles} | forbidden | Server managers only | Server managers only | error | info |
+| forbidden.manager | `forbidden` {manager, manage_roles, manage_channels} | forbidden | Server managers only | Server managers only | error | info |
 | forbidden.hierarchy | `forbidden` {hierarchy} | forbidden | That role is above yours | That role is above yours | error | info |
 | forbidden.membership | `forbidden` {membership} | forbidden | FC membership needed | FC membership needed | warning | info |
 | forbidden.context | `forbidden` {human, current_member} | forbidden | Not available here | Not available here | error | info |
@@ -216,11 +217,11 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | upstream.member_list | `incomplete` {member_list} | upstream | Couldn't read the member list | Couldn't read the member list | warning | warn |
 | upstream.join_context | `incomplete` {join_context} | upstream | Couldn't read your join details | Couldn't read your join details; "Couldn't read that member's join details" when it names someone else (an `/assign` or `/officer` target, an applicant) | warning | warn |
 | upstream.discord | `unavailable` {api}; raw Discord 429 and 5xx | upstream | Discord isn't responding | Discord isn't responding | warning | warn |
-| blocked | `blocked`; raw Discord 50001, 50013, 10003, 10011 | blocked | Server setup issue | Discord permissions need attention, with Affected, How to fix and Then | warning | warn |
+| blocked | `blocked`; raw Discord 50001, 50013, 10003, 10011 | blocked | Server setup issue | Discord permissions need attention, with Affected and Then, plus How to fix when the refusal is about TaruBot's role position or channel permissions (errors-and-style#8) | warning | warn |
 | paused | `disabled` | paused | Discord changes paused | Discord changes paused | pending | warn |
 | unexpected | `unexpected` and the internal codes (`idempotency_conflict`, `invalid_job`, `lease_lost`, `ordered`, `dm_blocked`, `configuration`, `schema`, `test_plan`, `writer_lease`) | unexpected | Something went wrong | Something went wrong | error | error |
 
-Raw Discord Unknown Member and Unknown User errors (10007, 10013) in an interaction are `forbidden` {current_member}, "Not available here". A malformed Lodestone ID in sidecar output is `invalid_response` ("Unexpected Lodestone page"), never input, and a member list with any member lacking a join time is the member-list card. Every other error that is not a `Failure`, including a `ZodError`, is `unexpected`, with its class in the log's `source` field. Internal codes keep their own code in the footer while showing the unexpected card.
+Raw Discord Unknown Member and Unknown User errors (10007, 10013) in an interaction are `forbidden` {current_member}, "Not available here". A malformed Lodestone ID in sidecar output is `invalid_response` ("Unexpected Lodestone page"), never input, and a member list with any member lacking a join time is the member-list card, as is a full member request Discord rate limits (gateway `RATE_LIMITED`) or stops answering (`GuildMembersTimeout`). Every other error that is not a `Failure`, including a `ZodError`, is `unexpected`, with its class in the log's `source` field. Internal codes keep their own code in the footer while showing the unexpected card.
 
 Every time-bound refusal (cooldowns, rate limits, busy, transient and stopping) has a Try again field with a relative time. The input card's Example field shows the command with the option the user got wrong. A free-text member option asks to "Paste a Discord user ID or @mention"; "Pick one from the suggestions" is only for autocomplete options. `note()` checks name their option: "Add a note of 1–1,000 characters.", "Add a reason …", "Add a rank …".
 
@@ -246,7 +247,7 @@ Every place a shipped reply differs from a drawn approved card, and the authorit
 | configuration#18 | Drawn as a success card whose Discord changes read "Queued · applies after activation". Live, it ships as drawn with `` `… QUEUED` Server-wide role check ``; paused, it is the pending "Saved, Discord changes paused" card. | The drawn card shows a paused save as success, which errors-and-style#26 contradicts. | Owner decision O2 |
 | characters#31 | The officer card on `/assign` adds a "Linked to" field with the owner's mention and raw ID. Members' cards are unchanged. | The owner asked officers to see the current owner. | Owner decision O3 (2026-09-23) |
 | guests#7, #43, #44 | Their job lines use the errors-and-style#28 component: markers, and for officers the raw job kind and short ID (`` `✓ DONE` reconcile.user `4d3c2b1a` ``), instead of the plain "Role update · Done" words drawn on those cards. Role removals use U+2212. | The drawn cards contradict #28; one job line serves every status view. | Owner decision O2 (officer lines show raw kinds as in #28) |
-| guests#43 | Paused-only member work ships as pending instead of the drawn warning. "Paused-only" means every outstanding job is `‖ PAUSED`, every run is completed or paused, and nothing is blocked or failed. Runs read "Paused: N of M done", and the footer is the in-progress "Details for one run: /sync status run_id:<id>" instead of "Ask an officer if this doesn't clear." Blocked or failed member work still ships as drawn (warning, "Ask an officer" footer). | The drawn state groups paused with blocked and failed. The C4 tone table makes a paused view pending unless something is also blocked or failed. | Amendment C4 |
+| guests#43 | Paused-only member work ships as pending instead of the drawn warning. "Paused-only" means every outstanding job is `‖ PAUSED`, every run is completed or paused, and nothing is blocked or failed. Runs read "Paused: N of M done", and the footer is the in-progress "Details for one run: /sync status run_id: with the full ID from your /refresh reply" instead of "Ask an officer if this doesn't clear." Blocked or failed member work still ships as drawn (warning, "Ask an officer" footer). | The drawn state groups paused with blocked and failed. The C4 tone table makes a paused view pending unless something is also blocked or failed. | Amendment C4 |
 | characters#20, guests#7 | Add **Full details (JSON)**, which these drawn cards do not show. `/config show` and `validate` do not offer it, although the style guide's list names them, because their drawn button rows (#4, #7–#9) don't. | The drawn cards and the style guide's JSON list disagree. | Owner decision O2 (JSON only where the style guide lists it); please confirm the `/config` omission |
 | errors-and-style#1 | The note check reads "Add a note of 1–1,000 characters.", not "Add a **note** of 1–1,000 characters that explains the transaction." | One labelled `note()` wording serves notes, reasons and ranks. | Amendment C10 (the approved Rewrites text) |
 | errors-and-style#27 | The footer is `Code unexpected · Ref <id>`, and "Share the reference with an officer." moves into a member "What you can do" field; the Reference and Before retrying fields stay. | The house-style board and the Errors board say every error ends with its code and reference; the drawn #27 footer does not. | Needs owner sign-off |

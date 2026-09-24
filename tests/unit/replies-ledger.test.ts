@@ -608,9 +608,9 @@ describe("history", () => {
     expect(embed.description).toBe("Newest first · entries #34–#25 of 43");
     expect(embed.footer?.text).toBe("Page 2 of 5");
     expect(controlsOf(presented)).toEqual([
-      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
       { label: "Newer", id: "ledger:newer:c:9200000000000000001", disabled: false },
       { label: "Older", id: "ledger:older:c:9200000000000000001:25", disabled: false },
+      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
     ]);
   });
 
@@ -630,9 +630,9 @@ describe("history", () => {
     );
     expect(onlyEmbed(middle).footer?.text).toBe("Page 3 of 5");
     expect(controlsOf(middle)).toEqual([
-      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
       { label: "Newer", id: "ledger:newer:c:9200000000000000001:34", disabled: false },
       { label: "Older", id: "ledger:older:c:9200000000000000001:14", disabled: false },
+      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
     ]);
     const last = LEDGER_CASES["history.last"].render();
     expect(onlyEmbed(last)).toMatchObject({
@@ -640,9 +640,9 @@ describe("history", () => {
       footer: { text: "Page 5 of 5 · end of history" },
     });
     expect(controlsOf(last)).toEqual([
-      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
       { label: "Newer", id: "ledger:newer:c:9200000000000000001:14", disabled: false },
       { label: "Older", id: "ledger:older:c:9200000000000000001", disabled: true },
+      { label: "Latest", id: "ledger:latest:c:9200000000000000001", disabled: false },
     ]);
   });
 
@@ -654,9 +654,9 @@ describe("history", () => {
       footer: { text: "Past the end of history" },
     });
     expect(controlsOf(past).map(({ label, disabled }) => [label, disabled])).toEqual([
-      ["Latest", false],
       ["Newer", false],
       ["Older", true],
+      ["Latest", false],
     ]);
     expect(embedOf("history.empty")).toEqual({
       color: 0x99aab5,

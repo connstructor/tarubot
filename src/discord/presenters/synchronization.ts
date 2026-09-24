@@ -343,11 +343,13 @@ function memberOverview(
           value: jobLines(view.work, self, { effectsMode: mode }).join("\n"),
         },
       ],
+      // Run lines show only the short label, which the run_id option rejects, so the in-progress
+      // footer names where the full ID comes from instead of treating the label as input.
       footer: attention
         ? "Ask an officer if this doesn't clear."
         : !active && !done
           ? "Start one with /refresh"
-          : "Details for one run: /sync status run_id:<id>",
+          : "Details for one run: /sync status run_id: with the full ID from your /refresh reply",
     },
     options,
   );

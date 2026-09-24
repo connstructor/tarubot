@@ -6,14 +6,14 @@
  * Failures are never caught here: the router's failure presenter renders them. Pure; the clock is
  * injected for embed timestamps.
  *
- * Change receipts branch on effectsMode (C5). A change whose own effect is Discord work (roles,
- * the FC link, the officer rank, the role layout, /setup, an officer override) saved while Discord
- * changes are paused is the approved paused-save card (errors-and-style#26, owner decision O2):
- * pending, titled 'Saved, Discord changes paused', keeping the receipt's facts. Channel settings
- * take effect at once, so their cards stay as they are and say in words when posts resume. Live
- * Discord work reads '… QUEUED' as the style guide says, except where an approved card words it
- * (#37's Channel access line, #41's 'Assignment queued'). Every committed change is success,
- * removals included; repeats that change nothing are the info '= NO CHANGE' cards (C4).
+ * Change receipts branch on effectsMode (C5). Any change saved while Discord changes are paused
+ * (roles, the FC link, the channel settings, the officer rank, the role layout, /setup, an officer
+ * override) is the approved paused-save card (errors-and-style#26, owner decision O2): pending,
+ * titled 'Saved, Discord changes paused', keeping the receipt's sentence and facts. Live Discord
+ * work reads '… QUEUED' as the style guide says, except where an approved card words it (#37's
+ * Channel access line, #41's 'Assignment queued'). A committed change with nothing left to fix is
+ * success, removals included; one saved with a caveat an officer must fix (no FC, no officer rank,
+ * no Guest role) is warning; repeats that change nothing are the info '= NO CHANGE' cards (C4).
  *
  * The health checklist uses the approved bracket tokens ([OK] [WARN] [FAIL] [OFF] [WAIT]), which
  * belong to health checks only. /config show keeps the approved field-per-setting layout, which
@@ -91,6 +91,7 @@ const TIMESTAMP = {
   "channel.applications_no_role": true,
   "channel.applications_closed": true,
   "channel.unchanged": false,
+  "channel.paused": false,
   "rank.set": true,
   "rank.heads_up": true,
   "rank.cleared": true,
@@ -1142,71 +1143,71 @@ function roleChangeReply(
 }
 
 /**
- * /config ledger, officer_notifications and guest_applications (spec #23–#28). A channel setting
- * takes effect at once, so it is never the paused-save card; while Discord changes are held, the
- * description says when posts resume and held work says when it retries. Warning variants: a
+ * /config ledger, officer_notifications and guest_applications (spec #23–#28). Warning variants: a
  * ledger channel with no linked FC, and a review channel with no Guest role ('Review channel set;
  * Guest role still needed', since /apply stays closed). Closing applications quotes the exact
- * refusal /apply now shows.
+ * refusal /apply now shows. While Discord changes are paused, every channel change is the
+ * approved paused-save card (errors-and-style#26 covers any change), like the other /config
+ * receipts: it keeps the receipt's own sentence and facts, and held work says when it retries.
  */
 function channelChangeReply(
   change: SavedChange,
   field: keyof typeof CHANNEL_FIELDS,
+  viewer: Viewer,
   options: ConfigReplyOptions,
 ): Presented {
   const mode = change.effectsMode;
   const guild = change.guild;
   const held = heldWork(change.requeued, mode);
   const footer = revisionFooter(guild);
-  const resumes = (what: string): string => (paused(mode) ? ` ${what} ${whenApplied(mode)}.` : "");
+  // Live, the receipt's own card; paused, the same sentence and facts inside the #26 card, whose
+  // sentence already says when the held Discord work (posts, alerts, reviews) applies.
+  const done = (
+    kind: ConfigReplyKind,
+    spec: Omit<ReplySpec, "timestamp"> & { readonly description: string },
+  ): Presented =>
+    paused(mode)
+      ? heldCard("channel.paused", mode, viewer, spec.description, spec.fields ?? [], options)
+      : card(kind, spec, options);
   const channel = change.value ? mentionChannel(change.value) : null;
   if (field === "ledger_channel_id") {
     if (!channel)
-      return card(
-        "channel.ledger_cleared",
-        {
-          tone: "success",
-          title: "Ledger channel cleared",
-          description: "Ledger commands are unavailable until a ledger channel is set again.",
-          fields: [
-            {
-              name: "Queued posts",
-              value: "Ledger posts already queued wait, and are sent once a channel is set.",
-            },
-            held,
-          ],
-          footer,
-        },
-        options,
-      );
-    const noFc = guild.fc_id === null;
-    return card(
-      noFc ? "channel.ledger_no_fc" : "channel.ledger",
-      {
-        tone: noFc ? "warning" : "success",
-        title: "Ledger channel set",
-        description: `Ledger deposits, withdrawals, adjustments and initializations will be posted in ${channel}.${resumes("Posts start")}`,
+      return done("channel.ledger_cleared", {
+        tone: "success",
+        title: "Ledger channel cleared",
+        description: "Ledger commands are unavailable until a ledger channel is set again.",
         fields: [
-          noFc && {
-            name: "Free Company",
-            value:
-              "Not linked, so ledger commands stay unavailable. Link one with /config fc link.",
+          {
+            name: "Queued posts",
+            value: "Ledger posts already queued wait, and are sent once a channel is set.",
           },
           held,
         ],
         footer,
-      },
-      options,
-    );
+      });
+    const noFc = guild.fc_id === null;
+    return done(noFc ? "channel.ledger_no_fc" : "channel.ledger", {
+      tone: noFc ? "warning" : "success",
+      title: "Ledger channel set",
+      description: `Ledger deposits, withdrawals, adjustments and initializations will be posted in ${channel}.`,
+      fields: [
+        noFc && {
+          name: "Free Company",
+          value: "Not linked, so ledger commands stay unavailable. Link one with /config fc link.",
+        },
+        held,
+      ],
+      footer,
+    });
   }
   if (field === "officer_notifications_channel_id")
-    return card(
+    return done(
       channel ? "channel.notifications" : "channel.notifications_cleared",
       channel
         ? {
             tone: "success",
             title: "Officer notifications channel set",
-            description: `Officer alerts will be posted in ${channel}.${resumes("Alerts start")}`,
+            description: `Officer alerts will be posted in ${channel}.`,
             fields: [held],
             footer,
           }
@@ -1218,67 +1219,54 @@ function channelChangeReply(
             fields: [held],
             footer,
           },
-      options,
     );
   if (!channel)
-    return card(
-      "channel.applications_closed",
-      {
-        tone: "success",
-        title: "Guest applications closed",
-        description: `/apply now refuses before the form opens: “${GUEST_APPLICATIONS_CLOSED}”`,
-        fields: [
-          {
-            name: "Pending applications",
-            value: "Applications already posted stay reviewable in their original channel.",
-          },
-          {
-            name: "Other Guest access",
-            value:
-              "/guest grant still works, and people with a verified character still receive Guest.",
-          },
-          held,
-        ],
-        footer,
-      },
-      options,
-    );
+    return done("channel.applications_closed", {
+      tone: "success",
+      title: "Guest applications closed",
+      description: `/apply now refuses before the form opens: “${GUEST_APPLICATIONS_CLOSED}”`,
+      fields: [
+        {
+          name: "Pending applications",
+          value: "Applications already posted stay reviewable in their original channel.",
+        },
+        {
+          name: "Other Guest access",
+          value:
+            "/guest grant still works, and people with a verified character still receive Guest.",
+        },
+        held,
+      ],
+      footer,
+    });
   const privacy: FieldSpec = {
     name: "Keep it private",
     value:
       "Applicants' answers are visible to anyone who can read this channel. Use a staff-only channel.",
   };
   if (guild.guest_role_id === null)
-    return card(
-      "channel.applications_no_role",
-      {
-        tone: "warning",
-        title: "Review channel set; Guest role still needed",
-        description: `${channel} will receive applications, but /apply stays closed until a Guest role is set.`,
-        fields: [
-          privacy,
-          { name: "Next step", value: "Set the Guest role with /config roles guest role:@Guest." },
-          held,
-        ],
-        footer,
-      },
-      options,
-    );
-  return card(
-    "channel.applications_open",
-    {
-      tone: "success",
-      title: "Guest applications open",
-      description: `/apply is open. Each application is posted in ${channel} with Approve and Deny buttons.${resumes("New applications are posted")}`,
+    return done("channel.applications_no_role", {
+      tone: "warning",
+      title: "Review channel set; Guest role still needed",
+      description: `${channel} will receive applications, but /apply stays closed until a Guest role is set.`,
       fields: [
         privacy,
-        { name: "Guest role", value: mentionRole(guild.guest_role_id), inline: true },
+        { name: "Next step", value: "Set the Guest role with /config roles guest role:@Guest." },
         held,
       ],
       footer,
-    },
-    options,
-  );
+    });
+  return done("channel.applications_open", {
+    tone: "success",
+    title: "Guest applications open",
+    description: `/apply is open. Each application is posted in ${channel} with Approve and Deny buttons.`,
+    fields: [
+      privacy,
+      { name: "Guest role", value: mentionRole(guild.guest_role_id), inline: true },
+      held,
+    ],
+    footer,
+  });
 }
 
 /**
@@ -1318,7 +1306,7 @@ export function changeReply(
         CHANNEL_FIELDS[field].noun,
         options,
       );
-    return channelChangeReply(result, field, options);
+    return channelChangeReply(result, field, viewer, options);
   }
   // configure() saves only allowlisted fields, so anything else is a presenter/service mismatch.
   throw new Error(`No configuration receipt for field ${field}.`);
