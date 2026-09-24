@@ -36,7 +36,7 @@ The **2.15.0** reply-session fixes, with the review-round fixes of `07af9d8` and
 
 The same commit adds command-level autocomplete tests: `/characters` and `/guest status` offer a member only themselves while officers see everyone, and `/guest grant|revoke|reset`, `/assign` and `/unassign` refuse a non-officer before any lookup. It also updates the `scripts/activate.ts` header for `--guest-applications`.
 
-2.15.0 adds two command paths, `/officer reset` and `/guest reset`, so the inventory is **43 paths across 19 root commands**. It requires `SCHEMA_VERSION=006_guest_application_switch.sql`; 2.14.x required 005. PR #14 merged 2.15.0 as `974bd27`, publish run 36002040486 published its images, and DevBot has run it on schema 006 since 2026-09-24 ([DEV_GUILD.md](DEV_GUILD.md#2150-rollout--2026-09-24)); live verification waits for the 2.15.0 session in `test-plans/current.json`.
+2.15.0 adds two command paths, `/officer reset` and `/guest reset`, so the inventory is **43 paths across 19 root commands**. It requires `SCHEMA_VERSION=006_guest_application_switch.sql`; 2.14.x required 005. PR #14 merged 2.15.0 as `974bd27`, publish run 36002040486 published its images, and DevBot has run it on schema 006 since 2026-09-24 ([DEV_GUILD.md](DEV_GUILD.md#2150-rollout--2026-09-24)); the owner's DevBot session that day confirmed D1, D2, D4, D7 and D9 live and accepted the remaining steps ([DEV_GUILD.md](DEV_GUILD.md#2150-session--2026-09-24)).
 
 2.15.0 adds this coverage for the owner's decisions from the 2.14.0 reply session (D1–D9 in [DEV_GUILD.md](DEV_GUILD.md#2140-reply-session--2026-09-24)):
 
