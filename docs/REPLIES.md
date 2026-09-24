@@ -323,7 +323,7 @@ Channel posts and DMs are built with `post()` from stored data by the gateway, s
 
 Two messages are documented exclusions from the presenters:
 
-- **`officer.notify`** stays escaped plain text in 2.14.0 and 2.15.0. This is a deferral, not a limitation: its job payload can gain optional fields under the current payload version. The redesign comes with operational alerting (OPS-11), so the notices aren't restyled first. On 2026-09-24, OPS-10/OPS-11 moved from 2.15.0 to 2.16.0.
+- **`officer.notify`** stays escaped plain text in 2.14.0 and 2.15.0. This is a deferral, not a limitation: its job payload can gain optional fields under the current payload version. The redesign comes with operational alerting (OPS-11), so the notices aren't restyled first. On 2026-09-24, OPS-10/OPS-11 moved from 2.15.0 to 2.16.0, and then, to launch that day, to 2.17.0.
 - The **DevBot test-session announcement** (`src/application/test-session.ts`) already sends an embed, with its own layout: a content line above one embed whose three checklist fields its schema sizes to fit. It is not a user-facing reply, so it keeps that layout.
 
 ## Deviations from approved
@@ -373,7 +373,7 @@ A short record of how the 2.14.0 plan resolved design conflicts, with the amendm
 - **Buttons.** Every approved button ships in 2.14.0. `/refresh` has none, as approved (guests#36).
 - **Pre-modal check.** `beforeModal` returns `Presented | null`, fails open within 1.5 seconds, is never reported, and the acknowledgement is spread last so its flags can't be overridden.
 - **Channel posts.** The Discord port carries view data and the gateway renders it; jobs never import presenters. Ledger posts are embed-only with content `''`.
-- **officer.notify** stays plain text until 2.16.0 (OPS-11) — a deferral; the payload could gain optional fields. The plan said 2.15.0; OPS-10/OPS-11 moved to 2.16.0 on 2026-09-24.
+- **officer.notify** stays plain text until 2.17.0 (OPS-11) — a deferral; the payload could gain optional fields. The plan said 2.15.0; OPS-10/OPS-11 moved to 2.16.0 and then to 2.17.0 on 2026-09-24.
 - **Guest application gate.** Open only when both the review channel and the Guest role are set, through one domain predicate shared by the pre-form check, `apply()`, activation and the preview tool (C9). From 2.15.0 the same predicate also requires the applications switch (owner decision, 2026-09-24).
 - **Stale titles.** "This control is out of date" for any obsolete command or button; "Please reopen /apply" for a bad form or missing join context before the form; "Couldn't read your join details" when the gateway lacks the viewer's join time ("Couldn't read that member's join details" for someone else's); "This review message is out of date".
 - **Ambiguity titles.** "Several characters match"; "Choose which role to use" or "Choose which channel to use".

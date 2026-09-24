@@ -260,7 +260,7 @@ The owner ran the plan's first steps from 14:22 to 14:25 UTC, and at 18:00 UTC m
 - **D9.** `/officer reset member:PigeonMuffin` (`1552687267439444039`) replied "Officer override removed", audited as `officer.reset` with `previous: granted`.
   - It removed the manual grant from the 2.14.0 session (`officer.grant`, 05:06:23 UTC, "Pity."). Earlier notes said PigeonMuffin was still revoked; that was wrong, because the grant had restored him.
   - He now has no override and is an officer by rank. Its `reconcile.user` and `channels.access` jobs succeeded.
-- **Routine roster read.** The 17:31 UTC roster read accepted 105 members with no departures and posted the plain-text roster notice (`1552734198656143421`). Officer notices stay plain text until 2.16.0.
+- **Routine roster read.** The 17:31 UTC roster read accepted 105 members with no departures and posted the plain-text roster notice (`1552734198656143421`). Officer notices stay plain text until 2.17.0 (OPS-11).
 - **Logs.** From 13:02 to 18:00 UTC there were no warn or error log lines (595 info lines), and every job succeeded.
 - **Accepted without a live record.** The owner accepted these steps; no further command replies were captured after 14:24 UTC:
   - `/nickname enabled:false`;

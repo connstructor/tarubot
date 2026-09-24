@@ -6,6 +6,10 @@
  *
  * --restore-rehearsal is DevBot's pre-migration rehearsal on its restored copy (docs/OPERATIONS.md):
  * the deployment guard then accepts DATABASE_URL only when it names a *_restore_test database.
+ *
+ * Pending migrations also take the database writer lease for their one transaction: the run waits
+ * up to MIGRATE_WRITER_WAIT_SECONDS (default 90) for a stopping bot, then refuses while any bot
+ * holds it. Stop the bot before migrating (docs/OPERATIONS.md).
  */
 import { assertToolScope, type ToolScope } from "../src/config/deployment.js";
 import { Failure } from "../src/domain/values.js";
@@ -43,7 +47,19 @@ if (import.meta.main) {
   if (!url) throw new Error("DATABASE_URL is required");
   const db = new Database(url);
   try {
-    await db.migrate();
+    // MIGRATE_WRITER_WAIT_SECONDS bounds the wait for a stopping bot to release the writer lease.
+    const wait = Number(process.env.MIGRATE_WRITER_WAIT_SECONDS ?? 90);
+    if (!Number.isInteger(wait) || wait < 0 || wait > 600)
+      throw new Failure(
+        "input",
+        "MIGRATE_WRITER_WAIT_SECONDS must be a whole number from 0 to 600.",
+      );
+    const report = await db.migrate("migrations", { writerWaitMs: wait * 1000 });
+    // The lease time is the restore point: no bot wrote after it (docs/OPERATIONS.md).
+    if (report.applied.length)
+      console.log(
+        `Migration writer lease acquired at ${report.leaseAcquiredAt}; applied ${report.applied.join(", ")}; committing at ${report.committingAt}.`,
+      );
     await db.schema();
     console.log("Schema ready.");
   } finally {

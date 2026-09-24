@@ -16,6 +16,7 @@ import {
   orm,
   SCHEMA_VERSION,
   SESSION_OPTIONS,
+  WRITER_LEASE_LOCK,
 } from "../../src/infrastructure/postgres/database.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -384,5 +385,75 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
         )[0],
       ).toEqual({ enabled: false });
     });
+  });
+});
+
+describe.skipIf(!url)("the migration guard (writer lease)", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  test("pending migrations never run while a bot holds the writer lease; nothing pending ignores it", async () => {
+    const schema = "migration_guard";
+    const staged = await mkdtemp(join(tmpdir(), "tarubot-guard-"));
+    const confined = new URL(url);
+    confined.searchParams.set("options", `${SESSION_OPTIONS} -c search_path=${schema}`);
+    const runner = new Database(confined.toString());
+    // A separate session holds the lease the way a running bot does (a session advisory lock).
+    const bot = await db.pool.connect();
+    const head = "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1";
+    try {
+      await db.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await db.query(`CREATE SCHEMA ${schema}`);
+      for (const file of await baseline())
+        await copyFile(join(directory, file), join(staged, file));
+      // Nothing holds the lease yet: the baseline applies and reports the lease window.
+      const first = await runner.migrate(staged);
+      expect(first.applied).toEqual(await baseline());
+      expect(first.leaseAcquiredAt).not.toBeNull();
+      expect(first.committingAt).not.toBeNull();
+      expect(Date.parse(first.leaseAcquiredAt ?? "")).toBeLessThanOrEqual(
+        Date.parse(first.committingAt ?? ""),
+      );
+
+      await bot.query("SELECT pg_advisory_lock($1::bigint)", [WRITER_LEASE_LOCK]);
+      const pid = (await bot.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid;
+      // Pending 005 and 006 wait out the bound, then refuse and name the holder; nothing changes.
+      const refused = runner.migrate(directory, { writerWaitMs: 300, writerRetryMs: 50 });
+      await expect(refused).rejects.toMatchObject({ code: "busy" });
+      await expect(refused).rejects.toThrow(`database process ${pid}`);
+      expect(await runner.query(head)).toEqual([{ version: (await baseline()).at(-1) }]);
+      // With nothing pending the lease is never touched, so a pre-deploy job succeeds beside a bot.
+      expect(await runner.migrate(staged, { writerWaitMs: 0 })).toEqual({
+        applied: [],
+        leaseAcquiredAt: null,
+        committingAt: null,
+      });
+
+      // A bot that stops within the bound: the migration waits for it, then applies everything.
+      const waiting = runner.migrate(directory, { writerWaitMs: 5000, writerRetryMs: 50 });
+      await Bun.sleep(200);
+      await bot.query("SELECT pg_advisory_unlock($1::bigint)", [WRITER_LEASE_LOCK]);
+      const report = await waiting;
+      expect(report.applied).toEqual((await migrationFiles()).filter((name) => name >= LAUNCH));
+      expect(await runner.query(head)).toEqual([{ version: SCHEMA_VERSION }]);
+      // The transaction-scoped lock ended at COMMIT: a bot can take the lease again at once.
+      expect(
+        (
+          await bot.query<{ locked: boolean }>(
+            "SELECT pg_try_advisory_lock($1::bigint) AS locked",
+            [WRITER_LEASE_LOCK],
+          )
+        ).rows[0]?.locked,
+      ).toBe(true);
+    } finally {
+      await bot.query("SELECT pg_advisory_unlock_all()");
+      bot.release();
+      await runner.close();
+      await db.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await rm(staged, { recursive: true, force: true });
+    }
   });
 });

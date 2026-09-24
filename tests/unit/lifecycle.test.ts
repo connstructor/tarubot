@@ -8,6 +8,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { type LifecycleOptions, WRITER_LEASE_LOCK } from "../../src/application/lifecycle.js";
+import { Failure } from "../../src/domain/values.js";
 import { Database } from "../../src/infrastructure/postgres/database.js";
 import {
   eventually,
@@ -323,4 +324,30 @@ test("a shutdown that hangs still exits at the deadline, with status 1 after a l
   expect(stopping.reports).toEqual([]);
   expect(held.released).toBe(false);
   expect(heldOrder).toEqual(["close"]);
+});
+
+test("a writer checks the schema again once it holds the lease, and refuses a migrated database", async () => {
+  // An old release that passed its first check and then waited on the lease while a migration
+  // committed must not log in: the second check fails, and stop() releases the lease unlocked.
+  const client = new FakeLeaseClient();
+  client.available = true;
+  let checks = 0;
+  const database = instance(Database, {
+    healthy: true,
+    schema: async () => {
+      checks++;
+      if (checks > 1) throw new Failure("schema", "Schema version/checksum mismatch.");
+    },
+    pool: { connect: async () => client },
+    close: async () => {},
+  });
+  const created = lifecycleHarness(database, {});
+  running.push(created);
+  await expect(created.lifecycle.prepare()).rejects.toMatchObject({ code: "schema" });
+  expect(checks).toBe(2);
+  expect(created.logs.some((line) => line.msg === "Database writer lease acquired")).toBe(true);
+  expect(created.queueStarts()).toBe(0);
+  await created.lifecycle.stop();
+  expect(client.statements.at(-1)).toContain("pg_advisory_unlock");
+  expect(client.released).toBe(false);
 });

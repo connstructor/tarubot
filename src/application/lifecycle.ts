@@ -4,7 +4,12 @@ import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
 import type { Configuration } from "../config/env.js";
 import type { DiscordGateway } from "../discord/gateway.js";
 import { Failure } from "../domain/values.js";
-import { orm, type Database } from "../infrastructure/postgres/database.js";
+import {
+  orm,
+  type Database,
+  WRITER_LEASE_HOLDER,
+  WRITER_LEASE_LOCK,
+} from "../infrastructure/postgres/database.js";
 import { and, eq, notInArray } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
 import {
@@ -18,13 +23,8 @@ import type { Service } from "./service.js";
 import type { Synchronization } from "./synchronization.js";
 import { capabilityMetrics } from "./metrics.js";
 
-/**
- * Session advisory lock key that makes one bot process the database's only writer (amendment C3).
- * It is distinct from the transaction locks for migrations (714882490), character claims (714882491)
- * and legacy import (714882492). Operators probe it in pg_locks before migrate, import, activate or
- * restore; docs/OPERATIONS.md has the query.
- */
-export const WRITER_LEASE_LOCK = 714882494;
+/** The writer-lease key; defined beside migrate(), which also takes it, and re-exported here. */
+export { WRITER_LEASE_LOCK };
 
 /** Writer-lease timing and the lost-lease exit; production uses the defaults, tests shorten them. */
 export interface LifecycleOptions {
@@ -60,11 +60,8 @@ const LIFECYCLE_DEFAULTS: LifecycleOptions = {
   exit: (code) => process.exit(code),
 };
 
-/** Only pg_locks identifies the holder; a single bigint key is classid 0, objid key, objsubid 1. */
-const LEASE_HOLDER = `SELECT pid FROM pg_locks
-  WHERE locktype = 'advisory' AND granted
-    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-    AND classid = 0 AND objid = $1::bigint::oid AND objsubid = 1`;
+/** Only pg_locks identifies the holder (shared with migrate()'s refusal). */
+const LEASE_HOLDER = WRITER_LEASE_HOLDER;
 
 /** The periodic lease check: does this very session (pg_backend_pid) still hold the lock? */
 const LEASE_HELD = `SELECT EXISTS (SELECT 1 FROM pg_locks
@@ -139,7 +136,7 @@ export class ApplicationLifecycle {
   }
 
   /**
-   * Check migrations, then wait for the single-writer lease. main.ts logs in only after this
+   * Check migrations, wait for the single-writer lease, then check them again. main.ts logs in only after this
    * resolves, so no gateway event, startup write or queue worker runs before the lease is held.
    */
   async prepare(): Promise<void> {
@@ -147,6 +144,11 @@ export class ApplicationLifecycle {
     this.databaseReady = true;
     this.leasing ??= this.acquireWriterLease();
     await this.leasing;
+    // Check again while holding the lease. A bot that passed the first check and then waited
+    // (for example an old release restarting during a migration) could otherwise take the lease
+    // after the migration commits and write with old code; this refuses it, and main.ts stops,
+    // which releases the lease, and exits non-zero.
+    await this.db.schema();
   }
 
   /**

@@ -53,15 +53,36 @@ const failing = defineCommand({
 
 /** A /config command that throws `next`, so a failure is scoped '/config roles officer'. */
 const configuring = defineCommand({
-  data: new SlashCommandBuilder().setName("config").setDescription("Config fixture"),
+  data: new SlashCommandBuilder()
+    .setName("config")
+    .setDescription("Config fixture")
+    .addSubcommandGroup((group) =>
+      group
+        .setName("roles")
+        .setDescription("Roles fixture")
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("officer")
+            .setDescription("Officer fixture")
+            .addBooleanOption((option) =>
+              option.setName("unset_role").setDescription("Unset fixture"),
+            ),
+        ),
+    ),
   execute() {
+    executions++;
     throw next;
   },
 });
 
 /** A slash command whose autocomplete suggests one choice. */
 const suggesting = defineCommand({
-  data: new SlashCommandBuilder().setName("suggest").setDescription("Autocomplete fixture"),
+  data: new SlashCommandBuilder()
+    .setName("suggest")
+    .setDescription("Autocomplete fixture")
+    .addStringOption((option) =>
+      option.setName("query").setDescription("Query fixture").setAutocomplete(true),
+    ),
   autocomplete: () => [{ name: "Example", value: "1" }],
   execute: () => reply({ tone: "info", title: "Suggested" }),
 });
@@ -614,6 +635,87 @@ test("officer details arrive as a JSON attachment in a new reply", async () => {
       method: "patch",
       files: ["tarubot-sample.json"],
       body: { embeds: [{ title: "Full details · sample" }] },
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a subcommand or option this release doesn't declare gets the stale card, never the handler", async () => {
+  // Another release's registration can deliver shapes this one doesn't define; handlers that read
+  // them would guess (the pre-2.16 /officer handler treated any other subcommand as a revoke).
+  for (const [label, options] of [
+    [
+      "an undeclared subcommand",
+      [
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: "roles",
+          options: [{ type: ApplicationCommandOptionType.Subcommand, name: "leader", options: [] }],
+        },
+      ],
+    ],
+    [
+      "an undeclared option",
+      [
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: "roles",
+          options: [
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: "officer",
+              options: [{ type: ApplicationCommandOptionType.Boolean, name: "clear", value: true }],
+            },
+          ],
+        },
+      ],
+    ],
+    [
+      "an option with another type",
+      [
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: "roles",
+          options: [
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: "officer",
+              options: [
+                { type: ApplicationCommandOptionType.String, name: "unset_role", value: "x" },
+              ],
+            },
+          ],
+        },
+      ],
+    ],
+    ["a missing subcommand", []],
+  ] as const) {
+    const { fixture, reports, router } = harness({}, OFFICER);
+    try {
+      executions = 0;
+      const interaction = fixture.slash("config", [...options]);
+      await router.handle(interaction);
+      expect(executions, label).toBe(0);
+      expect(embedOf(fixture.requests.at(-1)), label).toMatchObject({
+        title: "This control is out of date",
+        footer: { text: `Code stale · Ref ${interaction.id}` },
+      });
+      expect(reports.map((report) => report.options?.level)).toEqual(["info"]);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+test("autocomplete for an option this release doesn't declare suggests nothing", async () => {
+  const { fixture, router } = harness();
+  try {
+    await router.handle(fixture.autocomplete("suggest", "other"));
+    expect(fixture.requests.at(-1)?.body).toMatchObject({ data: { choices: [] } });
+    await router.handle(fixture.autocomplete("suggest"));
+    expect(fixture.requests.at(-1)?.body).toMatchObject({
+      data: { choices: [{ name: "Example", value: "1" }] },
     });
   } finally {
     await fixture.close();

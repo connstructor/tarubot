@@ -46,7 +46,7 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.15.1** source adds no migration and requires `SCHEMA_VERSION=006_guest_application_switch.sql`, introduced in **2.15.0**. It is additive and needs no superuser privileges:
+The current **2.16.0** source adds no migration and requires `SCHEMA_VERSION=006_guest_application_switch.sql`, introduced in **2.15.0**. It is additive and needs no superuser privileges:
 
 - **Applications switch.** It adds `guilds.guest_applications_enabled boolean NOT NULL DEFAULT false`, separate from `guest_application_channel_id`. `/apply` opens only while the switch is on and a review channel and a Guest role are set.
 - **Backfill.** Guilds with a review channel whose `guest_grandfather` is not `pending` get the switch on, so DevBot's applications stay open. Guilds without a channel, and imported guilds still awaiting first activation, stay off. On an empty database the update is a no-op. Guilds created later start off: `/setup` turns the switch on, and the importer stores the legacy review channel with the switch off.
