@@ -1,8 +1,8 @@
 {
-  "title": "Session: 2.14.0 embed replies instead of JSON",
-  "objective": "Validate 2.14.0 on DevBot: every command, button and notice answers with one house-style embed instead of a JSON dump. Errors end with Code · Ref matching the bot log, member views hide job and entry IDs, officer views add delivery detail, and nothing pings anyone. A second pass with Discord changes paused checks what imported guilds show at launch. Replies are public here to compare with the approved mockups.",
+  "title": "Session: 2.14 embed replies instead of JSON",
+  "objective": "Validate 2.14.0 or later on DevBot: every command, button and notice answers with one house-style embed instead of a JSON dump. Errors end with Code · Ref matching the bot log, member views hide job and entry IDs, officer views add delivery detail, and nothing pings anyone. A second pass with Discord changes paused checks what imported guilds show at launch. Replies are public here to compare with the approved mockups.",
   "user": [
-    "Deploy 2.14.0 (no migration) and register commands; run `/version`, `/ping`, `/channel`, `/config show` and `/config validate`.",
+    "Deploy 2.14.0 or later (no migration) and register commands; run `/version`, `/ping`, `/channel`, `/config show` and `/config validate`.",
     "`/claim` a test character, `/verify` before and after publishing the token, then `/characters`, `/main`, `/nickname enabled:true` and `/unclaim`.",
     "`/ledger deposit` as a member; as an officer, an oversized then a valid `/ledger withdraw`; then `/ledger balance` and `/ledger history` with Older.",
     "`/guest status` as member and as officer with member:, `/guest grant`, `/guest revoke`; clear guest_applications, try `/apply`, then restore it.",
@@ -18,7 +18,7 @@
     "Record deviations with command, audience and message ID in docs/DEV_GUILD.md, fix them, and re-run the affected step."
   ],
   "bot": [
-    "Run compiled 2.14.0 on schema 005 with the same decisions as 2.13.0; held work now resumes when the bot restarts with effects on.",
+    "Run compiled 2.14.0 or later on schema 005 with the same decisions as 2.13.0; held work now resumes when the bot restarts with effects on.",
     "Answer each interaction with one house-style embed, public in this test guild and ephemeral elsewhere, with no parsed mentions.",
     "Post ledger entries and decision DMs as embeds and move review messages to one embed on their next update; officer notices stay plain text until 2.15.0.",
     "Hold Discord changes during the paused pass, then requeue the held work and reconcile the guild again when it restarts with effects on.",

@@ -1,6 +1,16 @@
 # Version history
 
-The current application version is **2.14.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.14.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.14.1 — Foreground Claude reviews and sidecar test clock
+
+A CI and test patch: no runtime source changes, no migration (the schema stays `005_launch_access_policy.sql`), and no command changes, so nothing needs re-registering. DevBot runs 2.14.0 and need not redeploy.
+
+- Fix Claude Code Review runs that passed in about 40 seconds with nothing posted. Since Claude Code 2.1.198 a subagent starts in the background unless Claude asks otherwise. The plugin's gating agent started in the background, the main agent ended its turn to wait for it, and `claude-code-action` stops reading at the first result message, so the step passed while the gating agent was still running (run 35948050785; [anthropics/claude-code-action#1499](https://github.com/anthropics/claude-code-action/issues/1499)). The review step now sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so every subagent runs in the foreground and the only result arrives after the review finishes. The 2.14.1 PR's own review is skipped because it changes the workflow, so the fix can only be confirmed on the next ready, same-repository PR to `main` (see OPEN_ITEMS.md).
+- Print the review transcript (`show_full_output`) only when debug logging is on: a re-run with debug logging, or the `ACTIONS_STEP_DEBUG` secret or variable. The temporary 2.13.0 setting printed it on every run into the public Actions log.
+- Add a "Check that the review finished" step. It prints the turns, duration, cost, subagent counts and permission denials by tool from the action's execution file, and fails the job when a subagent started in the background or never reported back, or when the review produced no result message. It is skipped when the action produced no execution file, as on a pull request that changes the workflow.
+- Measure transport start spacing in the sidecar contract test with `performance.now()`, the monotonic clock the sidecar reserves starts on, instead of `Date.now()`, allowing 10 ms for the in-process hop between reserving a start and calling the transport. The wall clock measured the enforced 1,000 ms gap as 999 ms in the amd64 image build of 2.14.0's publish run 35948831624, whose failed jobs were re-run and published. Unspaced starts land a few milliseconds apart, so the test still catches missing spacing.
+- Record the DevBot 2.14.0 rollout (backup and exact restore, no migration, 19 roots / 41 paths, the startup plan) in DEV_GUILD.md, OPEN_ITEMS.md, VERIFICATION.md and SESSION_HANDOFF.md, describe the review workflow's new behavior in CI_CD.md, correct README.md's `/version` marker (`✓ verified` since 2.14.0) and DEV_GUILD.md's note on the production application, and keep the 2.14 reply session in `test-plans/current.json` for 2.14.0 or later.
 
 ## 2.14.0 — Embed replies instead of JSON
 
