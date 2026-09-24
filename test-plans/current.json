@@ -1,29 +1,20 @@
 {
-  "title": "Session: 2.15 reply-session fixes and the guest-application switch",
-  "objective": "Validate 2.15.0 or later on DevBot after migration 006 and command re-registration: each 2.14.0 reply-session decision (D1–D9) works live. FC tags show once, repeats reply = NO CHANGE, every option has an Example, member options suggest server members, a re-link becomes the main, the owner's nickname is skipped, guest applications have their own switch, and /officer reset and /guest reset return to the automatic rules.",
+  "title": "Session: 2.16.0 cutover safeguards",
+  "objective": "Validate 2.16.0 on DevBot before the production cutover (MIGRATION.md E1): the bot starts on schema 006, checks the schema again once it holds the writer lease, a migration run beside the running bot changes nothing, and everyday commands answer as before. No migration and no command change.",
   "user": [
-    "Approve any rollout; `/config show` and `/config validate` show the FC tag once.",
-    "`/main` on your main; `/nickname enabled:true` twice, `enabled:false` twice; `/config officer_rank rank:Officer`. Repeats are = NO CHANGE.",
-    "`/ledger adjust` with `entry:5`, `entry:#5` and an unknown entry; `/sync status run_id:nope`. Failures show an Example.",
-    "Type names into every `member:` option; as a non-officer, `/characters member:` someone else.",
-    "A tester with no link left re-links: the character becomes their main and, with sync on, their nickname.",
-    "`/config guest_applications enabled:false`, `/apply` as a member, `enabled:true` twice; `channel:` with `unset_channel:true` is refused.",
-    "`enabled:false channel:` a scratch channel, delete it: `enabled:true` is refused; `enabled:true channel:#officer-chat` reopens.",
-    "`/officer reset member:PigeonMuffin` restores his rank access; repeat it; a manager below the Officer role is refused. `/guest reset` a member, check `/guest status`."
+    "Approve the rollout, then run `/version`: 2.16.0, linked to deconfined/tarubot.",
+    "Run `/config show`, `/characters`, `/ledger balance` and `/sync status` as usual; each answers as it did on 2.15.",
+    "If a card ever says \"This command is from a different version of TaruBot\", note the command and when."
   ],
   "assistant": [
-    "Roll out with the owner's go-ahead: stop, back up, check the restore at its schema head and rehearse any migration on it, then migrate `tarubot_dev` and deploy. 2.15.0 applied 006; 2.15.1 adds none.",
-    "Register guild commands when they change (2.15.0 did, 2.15.1 does not); `commands.js list` reads 19 roots / 43 paths and no /config option is named clear.",
-    "Check readiness and `writerLease`, no warn or error lines and no blocked job after the owner's `/nickname`; `guest_applications_enabled` is true for DevBot (006 backfilled it and left revision 13).",
-    "Compare replies with REPLIES.md and the D1–D9 decisions (the FC tag once in ledger footers too); match Refs and Codes to the log; NO CHANGE repeats and the refused `enabled:true` save, audit and queue nothing.",
-    "Confirm `/guest reset` keeps ended grants as history and `/officer reset` leaves no override; record results in docs/DEV_GUILD.md."
+    "Roll out with the owner's go-ahead: stop, back up, check the restore at 006, then deploy 2.16.0 (no migration, no re-registration).",
+    "With DevBot running, run `migrate.js`: nothing is pending, so it prints `Schema ready.` without touching the writer lease.",
+    "Check readiness and `writerLease`, one lease holder, and no warn or error lines: the log shows the lease acquired, then `TaruBot ready`.",
+    "Record the rollout and the smoke test in docs/DEV_GUILD.md as E1's DevBot validation of 2.16.0."
   ],
   "bot": [
-    "Run compiled 2.15.0 or later on schema 006; guest applications stay open on DevBot because a review channel was set.",
-    "Suggest server members on every member option from the member cache, then Discord's member search.",
-    "Skip the server owner's nickname instead of blocking the job; make a new link the main when there's no main and no other active link.",
-    "Validate a newly named review channel, and the stored one when applications switch on; switching off alone checks nothing.",
-    "Reconcile the member after each reset; officer notices stay plain text until 2.16.0.",
+    "Run compiled 2.16.0 on schema 006, and check the schema again after taking the writer lease.",
+    "Answer any subcommand or option this release doesn't declare with the stale card, and suggest nothing for it.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

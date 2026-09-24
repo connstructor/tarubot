@@ -110,6 +110,8 @@ docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
 docker compose run --rm --no-deps tarubot bun dist/scripts/register.js --guild YOUR_TEST_GUILD_ID
 ```
 
+Stop the `tarubot` service before migrating an existing database: since 2.16.0, `migrate.js` refuses to apply a pending migration while a running bot holds the database writer lease ([OPERATIONS.md](docs/OPERATIONS.md#single-database-writer)).
+
 For a fresh test guild, set `TEST_GUILD_ID` and `ENABLE_EFFECTS=true`, then:
 
 ```sh

@@ -1,6 +1,30 @@
 # Version history
 
-The current application version is **2.15.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.16.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.16.0 — Deployment safeguards for the cutover
+
+The owner approved the App Platform deploy-workflow proposal (`docs/proposals/app-platform-deploy-workflow.md`) on 2026-09-24 and wants v2 live that day. 2.16.0 is the proposal's Release A: safeguards that production starts with, so that migrations, restarts and command registration can later be automated safely. No migration (the schema stays `006_guest_application_switch.sql`) and no command change, so nothing needs re-registering. OPS-10/OPS-11 (telemetry and officer alerts) move to 2.17.0, after launch, and the cutover floor stays 2.16.0 (owner decision).
+
+- **Migration guard.** `Database.migrate` verifies every applied file first, then applies all pending files in one transaction, as before.
+  - When anything is pending, it also takes the database writer lease (`714882494`) for that transaction with `pg_try_advisory_xact_lock`. That lock conflicts with a bot's session lock on the same key and ends at COMMIT or ROLLBACK.
+  - It waits up to `MIGRATE_WRITER_WAIT_SECONDS` (default 90, at most 600) for a stopping bot, then refuses with `busy`, naming the holder's database process, and changes nothing.
+  - With nothing pending it never touches the lease, so a deployment's pre-deploy job succeeds while the previous bot still runs.
+  - `migrate.js` prints `Migration writer lease acquired at <time>; applied <files>; committing at <time>.` from the database clock. The first time is the migration's restore point.
+- **Schema check after the lease.** `ApplicationLifecycle.prepare` checks the schema again once it holds the writer lease, before logging in. A bot that waited, for example an old release restarting during a migration, would otherwise take the lease after the commit and write with old code. On a mismatch it releases the lease and exits with status 1.
+- **Undeclared command shapes.** Discord can deliver another release's commands, for example after a registration or a rollback. The router now compares each invocation with the command's declared options (`src/bot/shape.ts`). An undeclared subcommand group, subcommand or option, a different option type, or a missing required subcommand gets the stale card ("This command is from a different version of TaruBot") instead of running the handler. Autocomplete for such a shape suggests nothing. The pre-2.16 `/officer` handler, for example, treated any subcommand other than `grant` and `reset` as a revoke.
+- **Deferred to the deploy workflow.** `commands.js declared` and `check` and the `app-spec.ts` digest rules move to that release (Release B), because only the workflow uses them.
+- **Tests:**
+  - every discovered command path (43) fits its own shape, and shapes another release could send are refused;
+  - the router never runs a handler for an undeclared shape;
+  - a bot that passes its first schema check and then finds a migrated database refuses and unlocks;
+  - on PostgreSQL, the guard refuses pending migrations under a held lease (with the holder named and nothing changed), ignores the lease when nothing is pending, waits for a bot that stops within the bound, and releases the lease at COMMIT.
+- **Docs:**
+  - OPERATIONS.md: the guard and the second schema check;
+  - README.md: stop `tarubot` before migrating;
+  - CONFIGURATION.md: `MIGRATE_WRITER_WAIT_SECONDS`;
+  - the release plan in REQUIREMENTS.md, MIGRATION.md, REPLIES.md, CLAUDE.md, SESSION_HANDOFF.md and OPEN_ITEMS.md;
+  - the approved proposal is committed under `docs/proposals/`.
 
 ## 2.15.1 — Follow the GitHub account rename
 

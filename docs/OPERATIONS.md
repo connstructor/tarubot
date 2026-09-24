@@ -165,9 +165,10 @@ Members see labels (Role update, Server-wide role check, FC roster check, Depart
 
 ## Single database writer
 
-Exactly one bot process writes to a database. The bot enforces this with a PostgreSQL session advisory lock, the **writer lease**, key **`714882494`** (`WRITER_LEASE_LOCK` in `src/application/lifecycle.ts`). Other fixed keys are transaction locks: `714882490` serializes migrations, `714882491` character claims, and `714882492` legacy import.
+Exactly one bot process writes to a database. The bot enforces this with a PostgreSQL session advisory lock, the **writer lease**, key **`714882494`** (`WRITER_LEASE_LOCK`, defined in `src/infrastructure/postgres/database.ts` and used by the lifecycle and by `migrate()`). Other fixed keys are transaction locks: `714882490` serializes migrations, `714882491` character claims, and `714882492` legacy import.
 
 - **Startup.** After the schema check, the bot checks out one dedicated pool connection and runs `pg_try_advisory_lock(714882494)` every 5 seconds until it succeeds. It holds that connection for the life of the process; it is one of the pool's 12 connections. The queue does not start and the bot does not log in to Discord until the lease is held. Each attempt, and each probe of the holder, has the same 10-second client-side deadline as the lease check below. If the connection stops answering or fails while the bot waits, the bot logs an error, destroys that connection and exits with status 1, so its supervisor restarts it with a fresh connection instead of leaving it live but unready until TCP gives up.
+- **Schema check again.** Once it holds the lease, the bot checks the schema a second time before it logs in. A bot that passed the first check and then waited, for example an old release restarting while a migration ran, would otherwise take the lease after the migration committed and write with old code. On a mismatch it releases the lease and exits with status 1 (since 2.16.0).
 - **While waiting.** Each attempt logs `Waiting for the database writer lease…` with the holder's backend `holderPid`, at info for the first 60 seconds and at warn after that. `/health/live` stays 200, so App Platform's liveness check keeps the waiting process; `/health/ready` is 503 with `writerLease: false`, so the Compose health check reports it unhealthy (Compose does not restart it for that). An overlapping deployment therefore waits for the previous writer to stop instead of running beside it.
 - **Shutdown.** SIGTERM wakes a waiting process at once, and it exits without logging in. A running writer unlocks after its workers and Discord client stop and before its pool closes, so the next writer acquires within one retry. A process that is killed releases the lease when PostgreSQL ends its session: at once for a normal kill, and after a lost host or network partition once the server's TCP keepalive gives up (about 60 seconds with the pool's session settings). Shutdown has a 27-second deadline, after which the process exits anyway: with status 0 for an ordinary stop, and with status 1 after a lost lease.
 - **Lost session.** If the lease connection ends (database restart, failover or a terminated backend), PostgreSQL frees the lock. The bot logs an error, shuts down and exits with status 1, so its supervisor restarts it and it waits for the lease again.
@@ -186,7 +187,14 @@ WHERE l.locktype = 'advisory' AND l.granted
   AND l.classid = 0 AND l.objid = 714882494 AND l.objsubid = 1;
 ```
 
-A single bigint advisory key appears in `pg_locks` as `classid` (high 32 bits), `objid` (low 32 bits) and `objsubid = 1`. A role without `pg_read_all_stats` sees null `client_addr` and `backend_start` for other roles' sessions; the `pid` row alone means a writer is connected. The tools themselves do not take the lease, so this check is the operator's.
+A single bigint advisory key appears in `pg_locks` as `classid` (high 32 bits), `objid` (low 32 bits) and `objsubid = 1`. A role without `pg_read_all_stats` sees null `client_addr` and `backend_start` for other roles' sessions; the `pid` row alone means a writer is connected. Import, activate and restore don't take the lease, so the gate is the operator's for them.
+
+**Migration guard (since 2.16.0).** `migrate.js` applies every pending migration in one transaction and, when anything is pending, takes the writer lease for that transaction with a transaction-scoped lock (`pg_try_advisory_xact_lock(714882494)`). That lock conflicts with a bot's session lock on the same key and ends at COMMIT or ROLLBACK.
+- **A running bot blocks it.** The run waits up to `MIGRATE_WRITER_WAIT_SECONDS` (default 90, at most 600) for a stopping bot, retrying every 2 seconds, then refuses with `busy`, naming the holder's database process, and changes nothing. So stop the bot before migrating, on every host: Compose, DevBot and App Platform.
+- **With nothing pending,** it never touches the lease, so a deployment's pre-deploy job succeeds while the previous bot still runs.
+- **Restore point.** When it applies files, it prints `Migration writer lease acquired at <time>; applied <files>; committing at <time>.` from the database clock. No bot wrote after the first time, so it is the point-in-time-recovery restore point for that migration.
+
+The gate above still comes first for a migration: the guard is a safety net, not a replacement for stopping the writer.
 
 ## Shutdown and restart
 

@@ -18,6 +18,7 @@ import type { Command } from "./command.js";
 import { rendersSourceInPlace, type AcknowledgeMode, type Component } from "./component.js";
 import type { BotContext } from "./context.js";
 import { ServiceKey } from "./services.js";
+import { undeclaredShape } from "./shape.js";
 import { replyAcknowledgement } from "./reply-visibility.js";
 
 /**
@@ -179,6 +180,15 @@ export class InteractionRouter {
         );
       if (interaction.isChatInputCommand()) {
         const command = this.commands.get(interaction.commandName);
+        // A subcommand or option this release doesn't declare comes from another release's
+        // registration; running the handler would make it guess, so refuse like an unknown command.
+        if (command && undeclaredShape(command.toJSON().options, interaction.options.data) !== null)
+          throw new Failure(
+            "stale",
+            "This command is from a different version of TaruBot. Run it again in a moment. If it keeps happening, ask a server manager to redeploy the commands.",
+            0,
+            { kind: "stale", what: "control" },
+          );
         if (command?.modal) {
           // A pre-modal check can refuse a closed feature before the user writes answers that
           // cannot be submitted. The refusal is the interaction's only acknowledgement; the
@@ -345,7 +355,11 @@ export class InteractionRouter {
         return;
       }
       const module = this.commands.get(interaction.commandName);
-      if (!module?.autocomplete) {
+      // No suggestions for a shape this release doesn't declare (another release's registration).
+      if (
+        !module?.autocomplete ||
+        undeclaredShape(module.toJSON().options, interaction.options.data) !== null
+      ) {
         await interaction.respond([]);
         return;
       }

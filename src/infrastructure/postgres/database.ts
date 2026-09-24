@@ -28,6 +28,37 @@ export function orm(connection: Connection): Orm {
 export const SCHEMA_VERSION = "006_guest_application_switch.sql";
 /** Numbered migration filenames, as stored in schema_migrations.version. */
 export const MIGRATION_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
+
+/**
+ * Session advisory lock key that makes one bot process the database's only writer (amendment C3).
+ * It is distinct from the transaction locks for migrations (714882490), character claims (714882491)
+ * and legacy import (714882492). The lifecycle holds it for a bot's lifetime; migrate() takes it
+ * for the migration transaction whenever a migration is pending. docs/OPERATIONS.md has the probe.
+ */
+export const WRITER_LEASE_LOCK = 714882494;
+
+/** Only pg_locks identifies a lock's holder; a single bigint key is classid 0, objid key, objsubid 1. */
+export const WRITER_LEASE_HOLDER = `SELECT pid FROM pg_locks
+  WHERE locktype = 'advisory' AND granted
+    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    AND classid = 0 AND objid = $1::bigint::oid AND objsubid = 1`;
+
+/** How long migrate() waits for a stopping bot to release the writer lease, and how often it retries. */
+export interface MigrateOptions {
+  writerWaitMs?: number;
+  writerRetryMs?: number;
+}
+
+/**
+ * What one migrate() run did. With files applied, `leaseAcquiredAt` and `committingAt` are the
+ * database clock (clock_timestamp()) when the migration took the writer lease and just before its
+ * COMMIT: no bot wrote after the first, so it is the point-in-time-recovery restore point.
+ */
+export interface MigrationReport {
+  applied: string[];
+  leaseAcquiredAt: string | null;
+  committingAt: string | null;
+}
 /** The pool is application-owned; remote Discord/Lodestone work stays outside transactions. */
 /** Per-session settings every pooled connection starts with; tests that set their own URL options restate them. */
 export const SESSION_OPTIONS =
@@ -121,13 +152,26 @@ export class Database {
       throw error;
     }
   }
-  /** Serialize migration runners and reject edits to any previously applied migration. */
-  async migrate(directory = "migrations"): Promise<void> {
-    await this.transaction(async (client) => {
+  /**
+   * Serialize migration runners, reject edits to any previously applied migration, and apply every
+   * pending file in one transaction, so a failure leaves the schema exactly as it was.
+   *
+   * Pending work also takes the writer lease with a transaction-scoped lock, which conflicts with
+   * a bot's session lock on the same key and ends at COMMIT or ROLLBACK. A migration therefore
+   * never runs while a bot writes: it waits up to `writerWaitMs` for a stopping bot, then refuses
+   * and names the holder. With nothing pending the lease is never touched, so a deployment's
+   * pre-deploy job succeeds while the previous bot still runs.
+   */
+  async migrate(directory = "migrations", options: MigrateOptions = {}): Promise<MigrationReport> {
+    const waitMs = options.writerWaitMs ?? 90_000;
+    const retryMs = options.writerRetryMs ?? 2_000;
+    return await this.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(714882490)");
       await client.query(
         "CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())",
       );
+      // Verify every applied file before changing anything, and collect the pending ones in order.
+      const pending: { file: string; sql: string; checksum: string }[] = [];
       for (const file of (await readdir(directory))
         .filter((name) => name.endsWith(".sql"))
         .sort()) {
@@ -142,12 +186,43 @@ export class Database {
             throw new Error(`Modified applied migration: ${file}`);
           continue;
         }
+        pending.push({ file, sql, checksum });
+      }
+      if (!pending.length) return { applied: [], leaseAcquiredAt: null, committingAt: null };
+      const started = performance.now();
+      for (;;) {
+        const attempt = await client.query<{ locked: boolean }>(
+          "SELECT pg_try_advisory_xact_lock($1::bigint) AS locked",
+          [WRITER_LEASE_LOCK],
+        );
+        if (attempt.rows[0]?.locked) break;
+        if (performance.now() - started >= waitMs) {
+          const holder = await client.query<{ pid: number }>(WRITER_LEASE_HOLDER, [
+            WRITER_LEASE_LOCK,
+          ]);
+          throw new Failure(
+            "busy",
+            `A TaruBot writer (database process ${holder.rows[0]?.pid ?? "unknown"}) holds the writer lease, so ${pending.length} pending migration(s) were not applied. Stop the bot, then migrate again.`,
+          );
+        }
+        await Bun.sleep(retryMs);
+      }
+      const clock = async () =>
+        (await client.query<{ at: string }>("SELECT clock_timestamp()::text AS at")).rows[0]?.at ??
+        null;
+      const leaseAcquiredAt = await clock();
+      for (const { file, sql, checksum } of pending) {
         await client.query(sql);
         await client.query("INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)", [
           file,
           checksum,
         ]);
       }
+      return {
+        applied: pending.map(({ file }) => file),
+        leaseAcquiredAt,
+        committingAt: await clock(),
+      };
     });
   }
   /** Drain idle/returned clients during process shutdown and one-shot tooling completion. */
