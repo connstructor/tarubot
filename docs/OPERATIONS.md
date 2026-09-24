@@ -27,6 +27,8 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 
 Request, worker, retry, body, pagination, and region settings are in [NODESTONE.md](NODESTONE.md). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
 
+Production runs on a Linode Docker host with [`docker-compose.production.yml`](../docker-compose.production.yml), attached to Linode managed PostgreSQL. [HOSTING.md](HOSTING.md) covers its layout, updates, backups, and rollback. The App Platform notes on this page describe the superseded setup.
+
 App Platform uses [`.do/app.yaml`](../.do/app.yaml), which attaches the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`). Follow [APP_PLATFORM.md](APP_PLATFORM.md) for provider prerequisites, bound credentials/CA, the worker-free deployment phases, and the update procedure that stops the old worker before pre-deploy migrations and a replacement worker start. Production maintenance tools run from a clean build of the deployed release with an explicit production env file ([MIGRATION.md](MIGRATION.md) E0), never from a checkout's `.env`.
 
 ## Inspect and repair

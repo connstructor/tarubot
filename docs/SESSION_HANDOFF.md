@@ -1,10 +1,10 @@
 # Session handoff — v2 release readiness
 
-**Snapshot: 2026-09-23, updated 2026-09-24. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and [ROADMAP.md](ROADMAP.md) records the owner's v2–v6 plan.
+**Snapshot: 2026-09-23, updated 2026-09-24 after the production cutover. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and [ROADMAP.md](ROADMAP.md) records the owner's v2–v6 plan.
 
 ## 1. Where we stopped
 
-The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check.
+The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)).
 
 | Layer | State at handoff |
 | --- | --- |
@@ -72,14 +72,26 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Owner action.** Register `connstructor` again as a placeholder account, and create no `tarubot` repository under it, so nobody else can publish images or a repository under the old name and the old-name redirects keep working.
 - **Status.** Merged ([PR #15](https://github.com/deconfined/tarubot/pull/15), `529990f`) and published by run 36039049542 as `ghcr.io/deconfined/tarubot:2.15.1` and `tarubot-nodestone:2.15.1`. DevBot stayed on 2.15.0.
 
-**Update, 2.16.0 (current version):**
+**Update, 2.16.0:**
 - **Why.** The owner approved the App Platform deploy-workflow proposal ([proposals/app-platform-deploy-workflow.md](proposals/app-platform-deploy-workflow.md)) and wants v2 live on 2026-09-24. 2.16.0 is the proposal's Release A: the safeguards that make migrations, restarts and command registration safe to automate later. OPS-10/OPS-11 move to 2.17.0 after launch; the cutover floor stays 2.16.0.
 - **Branch.** `feat/release-a-2.16.0` starts from `main` at `529990f` (2.15.1, PR #15).
 - **Migration guard.** `Database.migrate` applies every pending file in one transaction and, when anything is pending, takes the writer lease with a transaction-scoped lock, waiting up to `MIGRATE_WRITER_WAIT_SECONDS` (90) for a stopping bot and then refusing (`busy`, naming the holder). With nothing pending it ignores the lease. `migrate.js` prints the lease and commit times, the restore point.
 - **Schema re-check.** `ApplicationLifecycle.prepare` checks the schema again once it holds the lease.
 - **Undeclared shapes.** The router answers a subcommand or option the release doesn't declare with the stale card, and autocomplete with no suggestions (`src/bot/shape.ts`).
 - **Deferred to Release B.** `commands.js declared`/`check` and the `app-spec.ts` image rules, which only the deploy workflow uses.
-- **Status.** Not yet pushed. No migration and no command change.
+- **Status.** Merged ([PR #16](https://github.com/deconfined/tarubot/pull/16), `c812d4d`) and published by run 36057348161. It was deployed to DevBot at 20:55 UTC: stopped-writer backup, exact restore at 006, no migration, and no re-registration. Then `migrate.js` ran beside the running bot and changed nothing, and the startup plan was posted as message `1552785518171787365`. The owner's smoke test passed ([DEV_GUILD.md](DEV_GUILD.md#2160-rollout--2026-09-24)).
+
+**Update, the production cutover and the move to Linode (2026-09-24):**
+- **Cutover.** Run with 2.16.0 following [MIGRATION.md](MIGRATION.md): foundation app at 21:18 UTC, rehearsal, window 21:50–22:02, activation at 22:00:39 (plan `aaef7f2f…`, 2 grandfathered grants, 3 role changes), 19 roots / 43 paths registered globally, and the worker ready at 22:02. [The record](MIGRATION.md#record-of-the-2026-09-24-cutover) has the steps and evidence.
+- **Lodestone block.** On App Platform every profile refresh failed: the Lodestone answers DigitalOcean's addresses with HTTP 403. The owner chose a Linode Docker host with Linode managed PostgreSQL. The move (22:38–22:40 UTC, about 90 s down) stopped the App Platform worker, copied the database with `pg_dump`/`pg_restore`, and verified it with `check-restore.js`. Production now runs `docker-compose.production.yml` on `tarubot@tarubot.deconfined.com` ([HOSTING.md](HOSTING.md)). REQUIREMENTS.md records the "Approved hosting amendment".
+- **After the move.** One lease holder on Linode, and reconciliation caught up. The first profile burst hit Lodestone 429s. Investigating those found a retry storm: the 30-second scheduler pulls a backing-off profile job's `due_at` to now, and re-creates the job each time one fails. It also found that a 404 is retried like an outage, and that a private profile's 403 is reported as `unavailable`. 2.17.0 is proposed to fix these, and the owner asked that characters the Lodestone no longer has be unclaimed automatically ([OPEN_ITEMS.md](OPEN_ITEMS.md#implementation-work)).
+
+**Update, 2.16.1 (current version):**
+- **Branch.** `chore/linode-hosting-2.16.1` starts from `main` at `c812d4d` (2.16.0, PR #16). No migration, no command change, and no bot behavior change.
+- **Tool guard.** The production profile accepts the Linode cluster's direct port 27520, and refuses its 27521 pool and the `akmadmin` login. DigitalOcean's 25060 and `doadmin` rules stay until that cluster is deleted. Until 2.16.1, production tools refused the Linode database, which blocked `retry.js` and `preview.js --late-joiners`.
+- **Production Compose file.** `docker-compose.production.yml` runs the bot and Nodestone only, with the release pinned by a required `TARUBOT_IMAGE_TAG`, required database and token settings, and bounded logs. A unit test checks it against `docker-compose.yml`, and CI validates it.
+- **Docs.** HOSTING.md (new), the MIGRATION.md cutover record, the superseded notes and the `app:` trusted-source correction in APP_PLATFORM.md, the REQUIREMENTS.md hosting amendment, and CLAUDE.md, README.md and OPERATIONS.md.
+- **Status.** Committed locally; not yet pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -142,13 +154,11 @@ Keep these owner-approved decisions intact:
 
 ## 3. First actions next session
 
-1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history and the latest signed commit, and fetch remote state; local `main` may lag `origin/main`. Check that `git remote -v` names `deconfined/tarubot` (see the 2.15.1 update). Check whether `chore/repository-rename-2.15.1` was pushed, and whether its PR was opened, merged and published as `ghcr.io/deconfined/tarubot:2.15.1` and `tarubot-nodestone:2.15.1`. Raise the open owner questions from the 2.15.0 update above if they are still unanswered.
-2. When the owner asks, push `chore/repository-rename-2.15.1` and open the 2.15.1 PR. Merge once CI, CodeQL and the Claude review pass, then confirm the 2.15.1 images were published under `ghcr.io/deconfined`. 2.15.1 has no migration and no command change, so DevBot needs no redeploy for it. The first Compose `up` from a 2.15.1 checkout recreates both containers (see the 2.15.1 update), so treat that as a restart and do it with the owner's go-ahead.
-3. Owner action: register `connstructor` again as a placeholder account and create no `tarubot` repository under it (see the 2.15.1 update).
-4. The deploy-workflow proposal (`docs/proposals/app-platform-deploy-workflow.md`) is approved; its Release A is 2.16.0. Releases B (the workflow) and C (off-site backups) come after the cutover. The 2.15.0 session is done ([DEV_GUILD.md](DEV_GUILD.md#2150-session--2026-09-24)).
-5. Finish the earlier DevBot checks that remain: from the 2.13.0 plan (message `1552411775201316946`), the layout switch and the union through `/assign` with numeric IDs. The 2.12.3 `/assign`/`/unassign`, Member/Guest removals and drift repair also remain. The 2.14.0 session covered the closed `/apply`, Guest revoke and grant, `/ledger adjust` and the non-officer denials.
-6. Merge and publish 2.16.0, roll it out to DevBot (no migration; re-registration not needed), then provision the managed database and follow [MIGRATION.md](MIGRATION.md) for the rehearsal and the cutover with 2.16.0.
-7. After launch: 2.17.0 (OPS-10/OPS-11 officer alerts and telemetry, and a restyled `officer.notify`), then the deploy workflow (Release B) and backups (Release C).
+1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.16.1 (`chore/linode-hosting-2.16.1`) was pushed, merged and published.
+2. With the owner's go-ahead, deploy 2.16.1 to production ([HOSTING.md](HOSTING.md#updating-to-a-release)) and DevBot. On the host, `~/tarubot/docker-compose.production.yml` is an untracked copy from the move; it differs from 2.16.1's only in a header comment. Remove it before `git pull --ff-only`, which would otherwise refuse to overwrite it. Then run `preview.js --late-joiners` and retry the failed profile jobs from the operator clone (`~/tarubot-cutover/src`, checked out at the release).
+3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): the W14 and W15 officer configuration, the DigitalOcean cleanup, rotating the legacy MariaDB login, and the reports repository and token.
+4. Get the owner's answers on the 2.17.0 Lodestone hardening: the unlink guard (a second 404 at least an hour later), and the order, with hardening before the 2.18.0 issue reporter. Then build it.
+5. After that, the issue reporter, OPS-10/OPS-11, and a deploy workflow re-planned for the Compose host.
 
 Useful read-only starting checks from the repository:
 
@@ -174,9 +184,13 @@ If your shell isn't in the `docker` group, run each `docker` command through `sg
 - [x] Merge and publish 2.13.0 (launch policy, migration 005) and 2.14.0 (reply embeds), and deploy both to DevBot.
 - [x] Merge and publish 2.14.1 (Claude review in the foreground, sidecar test clock; PR #13, run 35958526053). No DevBot deploy needed.
 - [x] Merge and publish 2.15.0 (reply-session fixes, migration 006; PR #14, `974bd27`, publish run 36002040486, where the Claude review fix was confirmed), and roll it out to DevBot with the backup, restore check, migration rehearsal and migration, re-registering the guild commands (19 roots / 43 paths).
-- [ ] **2.15.1 (GitHub account rename to `deconfined`):** with the owner's go-ahead, push `chore/repository-rename-2.15.1`, open the PR, merge and publish. No migration and no command change.
-- [ ] **P1 — Officer operational alerts (OPS-11 / DB-07), 2.17.0 after launch:** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
-- [ ] **P1 — Telemetry (OPS-10), 2.17.0 after launch:** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
+- [x] **2.15.1 (GitHub account rename to `deconfined`):** merged and published (PR #15, `529990f`).
+- [x] **2.16.0 (deployment safeguards):** merged and published (PR #16, `c812d4d`), deployed to DevBot, and used for the production cutover.
+- [ ] **2.16.1 (Linode hosting):** push, PR, merge and publish, then deploy to production and DevBot.
+- [ ] **P1 — 2.17.0 Lodestone hardening (proposed):** stop the retry storm, treat 404s as final and unlink confirmed-deleted characters, report private profiles as `private`, and add sidecar backoff after a 429.
+- [ ] **P1 — 2.18.0 issue reporter (proposed):** automatic GitHub issues in a private reports repository, and `/issue`.
+- [ ] **P1 — Officer operational alerts (OPS-11 / DB-07), after launch:** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
+- [ ] **P1 — Telemetry (OPS-10), after launch:** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
 - [ ] **P2 — Burst handling:** rehearse role-event coalescing and member-enumeration backoff at representative guild size; fix any remaining rate-limit/recovery problems.
 
 ### Live acceptance
@@ -194,13 +208,12 @@ If your shell isn't in the `docker` group, run each `docker` command through `sg
 
 ### Hosting, recovery, and production cutover
 
-- [ ] Establish recurring backups and operational ownership for alerts, failures, and upstream updates.
-- [ ] Rehearse backup/restore on the current schema with representative ledger/link/guest/job state. Recovery must retain acknowledged decisions newer than the original legacy import; establish WAL/PITR or an equivalent replay/reconciliation procedure.
-- [ ] Provision the owner-authorized **Managed PostgreSQL cluster** `tarubot-pg` (database/user `tarubot`, public-schema grants, trusted sources) and create the worker-free `foundation` app; prove verified TLS, the pre-deploy migration, internal Nodestone routing, backups/PITR plus independent exports, and single-writer updates ([APP_PLATFORM.md](APP_PLATFORM.md)). The spec and its phases are validated offline, but no DO resources have been created.
-- [ ] In the production maintenance window, stop the legacy writer and freeze managed-role changes; obtain a fresh consistent dump and complete production Discord snapshot.
-- [ ] Import with effects disabled, reconcile actual counts/balances, and preserve ownership, existing guest grants, nicknames, and provenance. The supplied historical fixture is rehearsal input, not automatically the final production state.
-- [ ] Validate production identities/permissions/configuration, acquire a fresh roster, review role/nickname deltas, and resolve blocked resources before activation.
-- [ ] Follow the rewritten [MIGRATION.md](MIGRATION.md) runbook (E0 conventions, E1 preconditions, E2 rehearsal, E3 window W1–W16, E4 recovery limits). Activate with the confirmed grandfathering checksum, then register the global commands, clear guild leftovers, start the single worker, and run the smoke checks and officer configuration.
+- [x] Provision the managed cluster, create the foundation app, rehearse, and run the cutover ([MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover)). Activation, global registration and the worker all completed on 2026-09-24.
+- [x] Move production to the Linode Docker host and Linode managed PostgreSQL ([HOSTING.md](HOSTING.md)).
+- [ ] W14 smoke checks and W15 officer configuration (owner).
+- [ ] Late-joiner report and profile-job retries (needs 2.16.1).
+- [ ] DigitalOcean cleanup: the app, then the cluster and its trusted-source rule (owner).
+- [ ] Establish recurring off-site backups and restore rehearsals for the Linode cluster, and ownership of alerts, failures and upstream updates.
 
 ## 5. Evidence and implementation pointers
 
@@ -255,4 +268,4 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. The GitHub account is `deconfined` (renamed from `connstructor` on 2026-09-24): use `deconfined/tarubot` and `ghcr.io/deconfined/*`, and check that `git remote -v` names the new URL. Check the 2.15.1 branch (chore/repository-rename-2.15.1) or its pull request, its publication, and the running DevBot state (2.15.0, `974bd27`, on schema 006 with 19 roots / 43 paths, on the Linux machine; use sg docker if the shell lacks the docker group). Raise the open owner questions in docs/OPEN_ITEMS.md (late joiners after /guest reset, the REPLIES deviation-table framing) and remind the owner to hold the `connstructor` name with a placeholder account. When the owner asks, push the 2.15.1 branch and open its pull request; merge and publish it once its checks pass. It has no migration and no command change. The 2.15.0 DevBot session is done. Finish the remaining 2.13.0 DevBot checks (the layout switch and the multi-character union), and help the owner decide on the deploy-workflow proposal (docs/proposals/app-platform-deploy-workflow.md, not yet committed). Then deliver 2.16.0 (OPS-10/OPS-11). Follow docs/MIGRATION.md for the managed-cluster rehearsal and cutover with a published release at or above 2.16.0. Preserve automatic registered Guest access, excluded community resources, and the owner's launch and reply-session decisions in REQUIREMENTS.md and docs/DEV_GUILD.md. Keep the future roadmap in docs/ROADMAP.md for after the v2 launch.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. TaruBot v2 has been live in Woven Souls since 2026-09-24. It runs on the Linode Docker host `tarubot@tarubot.deconfined.com` with Linode managed PostgreSQL (docs/HOSTING.md). The App Platform setup is superseded because the Lodestone refuses DigitalOcean. Check whether 2.16.1 (`chore/linode-hosting-2.16.1`) was merged and published. With the owner's go-ahead, deploy it to production and DevBot, then run the late-joiner report and retry the failed profile jobs. Raise the owner's open items in docs/OPEN_ITEMS.md ("Production after the cutover"). Next is 2.17.0, the Lodestone hardening: stop the scheduler from collapsing retry backoff, make 404s final and unlink characters confirmed deleted, report private profiles as `private`, and add sidecar 429 backoff. Then 2.18.0, the GitHub issue reporter and `/issue`, as the owner specified. Preserve the owner's launch, reply-session and hosting decisions in REQUIREMENTS.md.

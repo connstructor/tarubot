@@ -1,6 +1,28 @@
 # Version history
 
-The current application version is **2.16.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.16.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.16.1 — Production on a Linode Docker host
+
+The production cutover ran on 2026-09-24 with 2.16.0 and went live on App Platform. Every profile refresh then failed: the Lodestone answers DigitalOcean's addresses with HTTP 403. That evening the owner moved production to a Linode Docker host with Linode managed PostgreSQL; the move took about 90 seconds of downtime. 2.16.1 brings the repository in line with that. It has no migration (the schema stays `006_guest_application_switch.sql`), no command change and no bot behavior change.
+
+- **Tool guard.** The production and rehearsal profiles accept the Linode cluster's direct port 27520. They refuse its 27521 connection pool, like DigitalOcean's 25061, because a pool can't hold the writer lease. They also refuse the `akmadmin` administrator login, like `doadmin`. The DigitalOcean rules stay until that cluster is deleted, so it remains usable as a fallback and a restore source. Until now, production tools refused the Linode database, which blocked the post-cutover `retry.js` and `preview.js --late-joiners` runs.
+- **`docker-compose.production.yml`.** The production host's self-contained Compose file:
+  - only `nodestone` and `tarubot`, with no bundled PostgreSQL;
+  - the release pinned by a required `TARUBOT_IMAGE_TAG`, never `latest`;
+  - required `DATABASE_URL`, `DATABASE_CA_CERT` and `DISCORD_TOKEN`;
+  - production scoping fixed in the file: the production application, `TARUBOT_ENVIRONMENT=production`, effects on, and no test guild;
+  - `restart: unless-stopped`, a readiness health check, and json-file logs capped at 5 × 10 MB per container.
+
+  A unit test checks those rules and that every setting the registry `docker-compose.yml` passes also reaches production. CI validates the file with placeholder values.
+- **`production.env.example`** points at the Linode cluster's direct port.
+- **Docs:**
+  - HOSTING.md (new): the production host's layout, everyday checks, updates with and without a migration, rollback, backups, and the DigitalOcean leftovers;
+  - MIGRATION.md: a record of the cutover and the move;
+  - APP_PLATFORM.md is marked superseded, with its trusted-source step corrected: App Platform did not add the app's `app:` rule by itself, and the first pre-deploy migration timed out until it was added;
+  - REQUIREMENTS.md: the owner's "Approved hosting amendment";
+  - CLAUDE.md, README.md and OPERATIONS.md now point at the host;
+  - SESSION_HANDOFF.md, OPEN_ITEMS.md and DEV_GUILD.md record the 2.16.0 rollout, the cutover and the post-cutover backlog. That backlog includes the Lodestone retry storm found after the move, proposed for 2.17.0.
 
 ## 2.16.0 — Deployment safeguards for the cutover
 

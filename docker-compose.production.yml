@@ -1,0 +1,73 @@
+# Production host: the bot and its Nodestone sidecar against the external managed PostgreSQL.
+# Self-contained (no bundled postgres service). Pin the release and start both services with:
+#   TARUBOT_IMAGE_TAG=X.Y.Z docker compose -f docker-compose.production.yml up -d --wait
+# The project directory's .env (mode 600, never committed) supplies the token, DATABASE_URL and CA;
+# see docs/HOSTING.md. Exactly one bot process may write to the database: the writer lease
+# makes any second one wait, and migrate.js refuses pending migrations while this bot runs.
+x-logging: &logging
+  # Bounded local logs so a busy day can't fill the disk.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  nodestone:
+    image: ${NODESTONE_IMAGE:-ghcr.io/deconfined/tarubot-nodestone:${TARUBOT_IMAGE_TAG:?Set TARUBOT_IMAGE_TAG to the release}}
+    environment:
+      PORT: "8080"
+      PAGE_REGION: ${PAGE_REGION:-na}
+      LODESTONE_CONCURRENCY: ${LODESTONE_CONCURRENCY:-2}
+      LODESTONE_START_MS: ${LODESTONE_START_MS:-1000}
+      LODESTONE_TIMEOUT_MS: ${LODESTONE_TIMEOUT_MS:-15000}
+      LODESTONE_BODY_BYTES: ${LODESTONE_BODY_BYTES:-2000000}
+      NODESTONE_UPSTREAM_CHECK_SECONDS: ${NODESTONE_UPSTREAM_CHECK_SECONDS:-3600}
+    healthcheck:
+      test: [CMD, bun, -e, "const r=await fetch('http://localhost:8080/health');process.exit(r.ok?0:1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging
+
+  tarubot:
+    image: ${TARUBOT_IMAGE:-ghcr.io/deconfined/tarubot:${TARUBOT_IMAGE_TAG:?Set TARUBOT_IMAGE_TAG to the release}}
+    environment:
+      # The managed cluster's direct connection, verified with its CA.
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the managed tarubot database}
+      DATABASE_CA_CERT: ${DATABASE_CA_CERT:?Set DATABASE_CA_CERT to the managed cluster CA}
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN}
+      DISCORD_APPLICATION_ID: "965294750741692416"
+      # Tools run inside this container (docker compose run) resolve the production profile.
+      TARUBOT_ENVIRONMENT: production
+      NODESTONE_URL: http://nodestone:8080
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HEALTH_PORT: "3000"
+      ENABLE_EFFECTS: "true"
+      # Production never carries development scoping.
+      TEST_GUILD_ID: ""
+      PUBLIC_TEST_RESPONSES: "false"
+      TEST_PLAN_CHANNEL_ID: ""
+      ROSTER_INTERVAL_SECONDS: ${ROSTER_INTERVAL_SECONDS:-21600}
+      PROFILE_INTERVAL_SECONDS: ${PROFILE_INTERVAL_SECONDS:-86400}
+      VERIFICATION_SECONDS: ${VERIFICATION_SECONDS:-1800}
+      GUEST_COOLDOWN_SECONDS: ${GUEST_COOLDOWN_SECONDS:-86400}
+      LODESTONE_REQUEST_TIMEOUT_MS: ${LODESTONE_REQUEST_TIMEOUT_MS:-35000}
+      LODESTONE_JOB_TIMEOUT_MS: ${LODESTONE_JOB_TIMEOUT_MS:-300000}
+      LODESTONE_ATTEMPTS: ${LODESTONE_ATTEMPTS:-3}
+      LODESTONE_MAX_PAGES: ${LODESTONE_MAX_PAGES:-100}
+      NODESTONE_RESPONSE_BYTES: ${NODESTONE_RESPONSE_BYTES:-8000000}
+    depends_on:
+      nodestone:
+        condition: service_started
+    healthcheck:
+      test: [CMD, bun, -e, "const r=await fetch('http://localhost:3000/health/ready');process.exit(r.ok?0:1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # A new bot waits (unready) for the writer lease while a previous one stops.
+      start_period: 60s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging

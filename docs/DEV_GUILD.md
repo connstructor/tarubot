@@ -274,6 +274,21 @@ The owner ran the plan's first steps from 14:22 to 14:25 UTC, and at 18:00 UTC m
 
   The unit and PostgreSQL suites cover each of them ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
 
+### 2.16.0 rollout — 2026-09-24
+
+This was E1's DevBot validation of the cutover release.
+
+- PR #16 merged as `c812d4d` after every check passed. The Claude review found no issues. Publish run 36057348161 published `ghcr.io/deconfined/tarubot:2.16.0` (`sha256:325322ba…`) and `tarubot-nodestone:2.16.0` (`sha256:1fced412…`), with revision label `c812d4d`.
+- **Before the update:** readiness was 200, with nothing pending or blocked. The writer stopped at 20:54:59 UTC (exit 0; all 441 jobs succeeded; no connections and no lease holders; head 006).
+- **Backup and restore check:** the backup `.cache/backups/tarubot_dev-before-2.16.0-c812d4d.dump` is 114,827 bytes, sha256 `f8aecd12d4f00b871c9fb04cd51105b4ee3a6f4d2664beed811b3f855a366923`. It was restored into `tarubot_dev_restore_test`, where the 2.16.0 `check-restore.js` matched all 26 tables at 006. The copy was then dropped.
+- **Start:** there was no migration. `up -d --wait` at 20:55:13 recreated both containers from the `ghcr.io/deconfined` paths, and they were healthy at 20:55:30. Readiness was 200, with database, writer lease, Discord and effects all true. The lease was acquired on the first attempt (1 ms). No warn or error log lines.
+- **Migration guard check:** `migrate.js` ran beside the running bot and printed `Schema ready.` with nothing pending. The bot kept the lease, so there was one holder: with nothing pending, the guard leaves the lease alone.
+- **Commands:** `commands.js list` exited 0 and clean (19 roots in the dev guild, none global). No re-registration was needed.
+- **Startup plan:** posted at 20:55:16 UTC as message `1552785518171787365`, "Session: 2.16.0 cutover safeguards", with fields of 304, 499 and 269 characters and no mentions.
+- **Owner's smoke test (20:57 UTC):** `/version` (v2.16.0, `deconfined/tarubot`, all commits verified), `/config show`, `/characters`, `/ledger balance` and `/sync status` all answered. There were no stale cards, and the log had info lines only.
+
+Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover)). DevBot stays on 2.16.0 until 2.16.1 is published. 2.16.1 changes no bot behavior.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.
