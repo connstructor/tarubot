@@ -1562,7 +1562,12 @@ export class Service {
       };
     });
   }
-  /** Persist explicit primary/nickname intent and let the worker safely project or restore it. */
+  /**
+   * Persist explicit primary/nickname intent and let the worker safely project or restore it. A
+   * request that would change nothing (/main naming the current main, or turning sync on or off
+   * when it already is) saves nothing, queues no reconciliation and returns 'unchanged', so the
+   * reply never implies a change (owner decision, 2026-09-24).
+   */
   async preferences(
     actor: Actor,
     character: string | null,
@@ -1575,8 +1580,12 @@ export class Service {
         eq(t.guildUsers.guild_id, actor.guildId),
         eq(t.guildUsers.user_id, actor.userId),
       );
-      await db
-        .select({ user_id: t.guildUsers.user_id })
+      const [current] = await db
+        .select({
+          primary: t.guildUsers.primary_character_id,
+          enabled: t.guildUsers.nickname_enabled,
+          suspended: t.guildUsers.nickname_suspended,
+        })
         .from(t.guildUsers)
         .where(scope)
         .for("update");
@@ -1600,13 +1609,27 @@ export class Service {
             0,
             { kind: "resource", resource: "link", id: character },
           );
+      }
+      if (enabled === true && !current?.primary && !character)
+        throw new Failure(
+          "input",
+          "Choose a main character with /main before turning on nicknames.",
+          0,
+          { kind: "option", option: "enabled" },
+        );
+      // Resuming sync that a manual nickname suspended is a change; on-and-not-suspended is not.
+      const mainChanges = character !== null && current?.primary !== character;
+      const syncChanges =
+        enabled !== null &&
+        current !== undefined &&
+        (enabled ? !current.enabled || current.suspended : current.enabled);
+      if (mainChanges)
         await db
           .update(t.guildUsers)
           .set({ primary_character_id: character, nickname_restore: false })
           .where(scope);
-      }
-      if (enabled !== null) {
-        const updated = await db
+      if (syncChanges)
+        await db
           .update(t.guildUsers)
           .set({
             nickname_enabled: enabled,
@@ -1614,27 +1637,9 @@ export class Service {
             nickname_restore: !enabled,
             nickname_baseline_set: enabled ? false : t.guildUsers.nickname_baseline_set,
           })
-          .where(and(scope, enabled ? isNotNull(t.guildUsers.primary_character_id) : undefined))
-          .returning({ user_id: t.guildUsers.user_id });
-        // Turning sync off for someone TaruBot has never tracked changes nothing, so it is a
-        // no-op rather than a refusal; turning it on still needs a main character first.
-        if (!updated.length && !enabled)
-          return {
-            status: "unchanged",
-            effects: "unchanged",
-            effectsMode: this.effectsMode(guild),
-            primary: null,
-            nickname: { enabled: false, suspended: false },
-          };
-        if (!updated.length)
-          throw new Failure(
-            "input",
-            "Choose a main character with /main before turning on nicknames.",
-            0,
-            { kind: "option", option: "enabled" },
-          );
-      }
-      await reconcileUser(client, actor.guildId, actor.userId);
+          .where(scope);
+      const changed = mainChanges || syncChanges;
+      if (changed) await reconcileUser(client, actor.guildId, actor.userId);
       const [saved] = await db
         .select({
           enabled: t.guildUsers.nickname_enabled,
@@ -1647,8 +1652,8 @@ export class Service {
         .leftJoin(t.characters, eq(t.characters.id, t.guildUsers.primary_character_id))
         .where(scope);
       return {
-        status: "saved",
-        effects: "queued",
+        status: changed ? "saved" : "unchanged",
+        effects: changed ? "queued" : "unchanged",
         effectsMode: this.effectsMode(guild),
         primary:
           saved?.id && saved.name !== null && saved.world !== null

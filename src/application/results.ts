@@ -173,7 +173,10 @@ export interface CharactersResult {
   readonly characters: readonly CharacterRow[];
 }
 
-/** /main and /nickname: the saved preferences, or 'unchanged' when there was nothing to turn off. */
+/**
+ * /main and /nickname: the saved preferences, or 'unchanged' when the request matched what was
+ * already saved (the current main, or sync already on or off); an unchanged result queued nothing.
+ */
 export interface PreferencesResult {
   readonly status: "saved" | "unchanged";
   readonly effects: "queued" | "unchanged";

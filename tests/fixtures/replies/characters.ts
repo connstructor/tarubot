@@ -168,6 +168,14 @@ export const CHARACTER_RESULTS = {
     primary: null,
     nickname: { enabled: false, suspended: false },
   },
+  /** /main naming the current main, or /nickname enabled:true while sync is already on. */
+  preferencesUnchanged: {
+    status: "unchanged",
+    effects: "unchanged",
+    effectsMode: "live",
+    primary: CHARACTER,
+    nickname: { enabled: true, suspended: false },
+  },
   assigned: {
     status: "assigned",
     link: LINK_ID,
@@ -326,6 +334,20 @@ export const CHARACTER_CASES = {
     render: () =>
       preferencesReply(R.mainSaved, VIEWERS.member, { command: "main", guildOwner: false, now }),
   },
+  "main.unchanged": {
+    spec: null,
+    audience: "member",
+    noOp: true,
+    tone: "info",
+    title: "Already your main character",
+    timestamp: false,
+    render: () =>
+      preferencesReply(R.preferencesUnchanged, VIEWERS.member, {
+        command: "main",
+        guildOwner: false,
+        now,
+      }),
+  },
   "main.paused": {
     spec: "errors-and-style#26",
     audience: "member",
@@ -370,6 +392,20 @@ export const CHARACTER_CASES = {
     timestamp: true,
     render: () =>
       preferencesReply(R.nicknameOff, VIEWERS.member, {
+        command: "nickname",
+        guildOwner: false,
+        now,
+      }),
+  },
+  "nickname.already_on": {
+    spec: null,
+    audience: "member",
+    noOp: true,
+    tone: "info",
+    title: "Nickname sync already on",
+    timestamp: false,
+    render: () =>
+      preferencesReply(R.preferencesUnchanged, VIEWERS.member, {
         command: "nickname",
         guildOwner: false,
         now,

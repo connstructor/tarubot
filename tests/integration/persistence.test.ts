@@ -4785,6 +4785,47 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       code: "not_found",
       detail: { kind: "resource", resource: "link", id: "77989999" },
     });
+    // A request that matches what is saved changes nothing and queues no reconciliation: naming
+    // the current main, or turning sync on or off when it already is (owner decision, 2026-09-24).
+    const reconcileWork = async () =>
+      (
+        await db.query<{ rows: string; generations: string }>(
+          "SELECT count(*)::text AS rows, coalesce(sum(generation),0)::text AS generations FROM jobs WHERE dedupe_key=$1",
+          [`user:${guildId}:${self.userId}`],
+        )
+      )[0];
+    const before = await reconcileWork();
+    expect(await service.preferences(self, "77980002", null)).toEqual({
+      status: "unchanged",
+      effects: "unchanged",
+      effectsMode: "live",
+      primary: { id: "77980002", name: "Assigned Character", world: "Diabolos" },
+      nickname: { enabled: true, suspended: false },
+    });
+    expect(await service.preferences(self, null, true)).toMatchObject({
+      status: "unchanged",
+      nickname: { enabled: true, suspended: false },
+    });
+    expect(await reconcileWork()).toEqual(before);
+    expect(await service.preferences(self, null, false)).toMatchObject({
+      status: "saved",
+      effects: "queued",
+      nickname: { enabled: false },
+    });
+    expect(await service.preferences(self, null, false)).toMatchObject({
+      status: "unchanged",
+      effects: "unchanged",
+      nickname: { enabled: false },
+    });
+    // Resuming sync that a manual nickname suspended is a change, not a repeat.
+    await db.query(
+      "UPDATE guild_users SET nickname_enabled=true, nickname_suspended=true WHERE guild_id=$1 AND user_id=$2",
+      [guildId, self.userId],
+    );
+    expect(await service.preferences(self, null, true)).toMatchObject({
+      status: "saved",
+      nickname: { enabled: true, suspended: false },
+    });
     // Turning nickname sync off for someone TaruBot never tracked is a no-op, not a refusal.
     const untracked = { ...self, userId: "98010" };
     expect(await service.preferences(untracked, null, false)).toEqual({

@@ -7,6 +7,7 @@ The current application version is **2.15.0**, with `package.json` as the source
 The owner's 2.14.0 reply session on DevBot (2026-09-24) compared every reply with the approved mockups; this release ships its findings and the decisions the owner made during it. The officer alerts and telemetry planned as 2.15.0 (OPS-10/OPS-11) move to **2.16.0**, and the production cutover now requires a published release at or above 2.16.0.
 
 - Show an FC's tag once. The Lodestone delivers tags with their guillemets (`«Souls»`) and the stored row keeps them, so `/config show`, `/config validate`, `/config fc link|unlink` and the ledger receipt footers rendered `Woven Souls ««Souls»»`. One helper, `fcTagText`, removes a surrounding pair before every presenter adds its own; bare tags render as before.
+- Never imply a change where none occurred (owner decision). `/main` naming your current main replies "Already your main character", `/nickname enabled:true` while sync is already on replies "Nickname sync already on", and turning sync off when it is already off gets the approved "Nickname sync already off" card; each is an info or neutral `= NO CHANGE` card, and `Service.preferences` saves nothing and queues no reconciliation for them. Resuming sync that a manual nickname suspended is still a change.
 
 ## 2.14.1 — Foreground Claude reviews and sidecar test clock
 

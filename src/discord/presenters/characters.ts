@@ -73,11 +73,13 @@ const TIMESTAMP = {
   "characters.officer": false,
   "characters.officer_empty": false,
   "main.saved": true,
+  "main.unchanged": false,
   "main.paused": false,
   "nickname.on": true,
   "nickname.on_owner": true,
   "nickname.off": true,
   "nickname.unchanged": false,
+  "nickname.already_on": false,
   "nickname.paused": false,
   "assign.assigned": true,
   "assign.delegated": true,
@@ -641,8 +643,10 @@ function mainNickname(
 /**
  * /main (characters#24) and /nickname on (approved characters#26) and off (#27). The server owner
  * turning sync on gets the warning variant with the owner caveat, since Discord refuses bots that
- * change. Turning off sync that TaruBot never managed is the approved neutral '= NO CHANGE' card.
- * Paused effects give the paused-save card.
+ * change. Turning off sync that is already off is the approved neutral '= NO CHANGE' card. A /main
+ * naming the current main, or turning on sync that is already on, is an info '= NO CHANGE' card
+ * that never implies a change (owner decision, 2026-09-24). Paused effects give the paused-save
+ * card; a no-op saves nothing, so it never does.
  */
 export function preferencesReply(
   result: PreferencesResult,
@@ -653,6 +657,17 @@ export function preferencesReply(
   const held = paused(mode) ? pausedSave(mode, viewer) : null;
   if (options.command === "main") {
     const primary = result.primary;
+    if (result.status === "unchanged" && primary)
+      return card(
+        "main.unchanged",
+        {
+          tone: "info",
+          title: "Already your main character",
+          description: `${marker("unchanged")} ${bold(primary)} is already your main character in this server.`,
+          footer: "Switch to another linked character with /main",
+        },
+        options,
+      );
     const saved = primary
       ? `${bold(primary)} is now your main character in this server.`
       : "Your main character is saved.";
@@ -677,6 +692,22 @@ export function preferencesReply(
       options,
     );
   }
+  if (result.status === "unchanged" && result.nickname.enabled)
+    return card(
+      "nickname.already_on",
+      {
+        tone: "info",
+        title: "Nickname sync already on",
+        description: `${marker("unchanged")} ${
+          result.primary
+            ? `Your server nickname already follows your main, ${nicknameText(result.primary)}.`
+            : "Your server nickname already follows your main."
+        }`,
+        fields: [options.guildOwner && SERVER_OWNER],
+        footer: "Turn off anytime with /nickname enabled:false",
+      },
+      options,
+    );
   if (result.status === "unchanged")
     return card(
       "nickname.unchanged",
