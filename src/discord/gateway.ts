@@ -63,6 +63,7 @@ export class DiscordGateway implements DiscordPort {
       nickname: member.nickname,
       roles: [...member.roles.cache.keys()],
       bot: member.user.bot,
+      owner: member.guild.ownerId === member.id,
     };
   }
   /** Refresh role definitions and membership so cached permissions cannot authorize a new action. */

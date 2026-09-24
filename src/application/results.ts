@@ -112,8 +112,15 @@ export type VerifyResult =
       readonly effects: "queued";
       readonly effectsMode: EffectsMode;
       readonly character: CharacterRef;
-      /** True when this became the member's first link, so it is their main character. */
+      /**
+       * True when this link became the member's main character: their first link, or a new link
+       * while they had no main and no other active link.
+       */
       readonly primary: boolean;
+      /** Their first link in this server, which also turned nickname sync on. */
+      readonly firstLink: boolean;
+      /** Whether nickname sync is on after linking. */
+      readonly nicknameSync: boolean;
       readonly roster: RosterEvidence;
     }
   | { readonly status: "already_verified"; readonly character: CharacterRef };
@@ -127,8 +134,15 @@ export interface AssignResult {
   readonly character: CharacterRef;
   readonly owner: string;
   readonly reason: string;
-  /** True when this became the member's first link, so it is their main character. */
+  /**
+   * True when this link became the member's main character: their first link, or a new link
+   * while they had no main and no other active link.
+   */
   readonly primary: boolean;
+  /** Their first link in this server, which also turned nickname sync on. */
+  readonly firstLink: boolean;
+  /** Whether nickname sync is on after linking. */
+  readonly nicknameSync: boolean;
   /** Whether the assigning officer may vouch for officer authority (a server manager). */
   readonly officerAuthority: boolean;
   readonly roster: RosterEvidence;

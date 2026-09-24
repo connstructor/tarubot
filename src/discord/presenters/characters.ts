@@ -265,9 +265,11 @@ export function verifyReply(
   const facts: FieldSpec[] = [
     {
       name: "Main character",
-      value: result.primary
-        ? "Set as your main because it's your first linked character."
-        : `Unchanged. Switch with ${cmd("main", { character: character.id })}.`,
+      value: !result.primary
+        ? `Unchanged. Switch with ${cmd("main", { character: character.id })}.`
+        : result.firstLink
+          ? "Set as your main because it's your first linked character."
+          : "Set as your main because you didn't have one.",
       inline: true,
     },
   ];
@@ -275,10 +277,13 @@ export function verifyReply(
     facts.push({
       name: "Nickname",
       // A receipt never promises Discord work that can't happen: the gateway always refuses the
-      // server owner's nickname, so the owner reads mainNickname's caveat instead of a change.
+      // server owner's nickname, so the owner reads mainNickname's caveat instead of a change. A
+      // re-link keeps the member's sync setting, so sync that is off says how to turn it on.
       value: options.guildOwner
         ? OWNER_NICKNAME
-        : `Changes to ${nicknameText(character)} ${whenApplied(mode)}. Turn this off with \`/nickname enabled:false\`.`,
+        : result.nicknameSync
+          ? `Changes to ${nicknameText(character)} ${whenApplied(mode)}. Turn this off with \`/nickname enabled:false\`.`
+          : "Nickname sync is off. Turn it on with `/nickname enabled:true` to use this name.",
       inline: true,
     });
   const waiting = result.roster.fresh ? null : rosterEvidence(result.roster, mode);
@@ -804,7 +809,10 @@ export function assignReply(
   const delegated = !result.officerAuthority;
   const effects = [
     !held && "Role and nickname update queued for this member. Track it with `/sync status`.",
-    result.primary && "It's their first link, so it's also their main, with nickname sync on.",
+    result.primary &&
+      (result.firstLink
+        ? "It's their first link, so it's also their main, with nickname sync on."
+        : "They had no main character, so it's now their main."),
   ].filter((sentence): sentence is string => Boolean(sentence));
   const fields: (FieldSpec | false | null)[] = [
     ...identity,

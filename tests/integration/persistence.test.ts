@@ -1447,6 +1447,40 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0]?.nickname_suspended,
     ).toBe(true);
   });
+  test("the server owner's nickname is skipped, never a blocked job (2.14.0 reply session)", async () => {
+    const serverOwner = "90012";
+    await service.assign(
+      actor,
+      serverOwner,
+      { id: "77777783", name: "Owner Nickname", world: "Diabolos", dc: "Crystal", fcId: null },
+      "Server owner fixture",
+    );
+    const member = await discord.member(guild, serverOwner);
+    if (!member) throw new Error("Missing member");
+    member.owner = true;
+    const before = member.nickname;
+    const queue = new Queue(db, dispatcher(service, sync, access), () => {});
+    // Discord would refuse the write (modelled by nicknameBlocked); the worker never attempts it.
+    nicknameBlocked = true;
+    try {
+      const key = await enqueue(
+        db.pool,
+        "reconcile.user",
+        `user:${guild}:${serverOwner}`,
+        {},
+        guild,
+        serverOwner,
+      );
+      await queue.perform(await leased(key));
+      expect(
+        (await db.query<{ status: string }>("SELECT status FROM jobs WHERE id=$1", [key]))[0]
+          ?.status,
+      ).toBe("succeeded");
+    } finally {
+      nicknameBlocked = false;
+    }
+    expect(member.nickname).toBe(before);
+  });
   test("replacement, tuple binding and expiry prevent invalid proof completion", async () => {
     const owner = { ...actor, userId: "90013", officer: false };
     const identity = {
@@ -4857,6 +4891,24 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       ["77980002", false],
     ]);
     for (const row of history.characters) expect(row.ended_at).toBeInstanceOf(Date);
+    // With no main and no active link left, a new link becomes the main again but keeps the
+    // member's sync setting (owner decision, 2026-09-24: a re-link used to leave no main).
+    expect(await service.preferences(self, null, false)).toMatchObject({ status: "saved" });
+    expect(
+      await service.assign(manager, self.userId, character("77980004", "Relinked"), "Came back"),
+    ).toMatchObject({ status: "assigned", primary: true, firstLink: false, nicknameSync: false });
+    expect(
+      (
+        await db.query<{ primary_character_id: string | null; nickname_enabled: boolean }>(
+          "SELECT primary_character_id,nickname_enabled FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guildId, self.userId],
+        )
+      )[0],
+    ).toEqual({ primary_character_id: "77980004", nickname_enabled: false });
+    // A second link while the main is set leaves it alone.
+    expect(
+      await service.assign(manager, self.userId, character("77980005", "Second"), "Alt"),
+    ).toMatchObject({ status: "assigned", primary: false, firstLink: false });
   });
 
   test("claim limits carry retry timing and which limit refused", async () => {

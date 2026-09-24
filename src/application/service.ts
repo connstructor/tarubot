@@ -189,8 +189,15 @@ interface TrustResult {
   readonly id: string;
   /** False when the same owner already held this link (an idempotent repeat). */
   readonly created: boolean;
-  /** The owner's first link in this guild, which therefore became their main character. */
+  /** The owner's first link in this guild, which became their main and turned nickname sync on. */
   readonly firstLink: boolean;
+  /**
+   * The link became the owner's main character: their first link, or a new link while they had no
+   * main and no other active link (owner decision, 2026-09-24). Imported users keep their state.
+   */
+  readonly becameMain: boolean;
+  /** Whether the owner's nickname sync is on after this link. */
+  readonly nicknameSync: boolean;
   /** Fresh roster evidence listed the character, so FC membership was recorded now. */
   readonly listed: boolean;
   readonly character: CharacterRef;
@@ -1065,31 +1072,40 @@ export class Service {
         id: linked.id,
         created: false,
         firstLink: false,
+        becameMain: false,
+        nicknameSync: false,
         listed: false,
         character: identity,
       };
     }
-    const previous =
-      (
-        await db
-          .select({ id: t.links.id })
-          .from(t.links)
-          .where(and(eq(t.links.guild_id, actor.guildId), eq(t.links.user_id, owner)))
-          .limit(1)
-      ).length > 0 ||
-      (
-        await db
-          .select({ user_id: t.guildUsers.user_id })
-          .from(t.guildUsers)
-          .where(
-            and(
-              eq(t.guildUsers.guild_id, actor.guildId),
-              eq(t.guildUsers.user_id, owner),
-              eq(t.guildUsers.imported, true),
-            ),
-          )
-          .limit(1)
-      ).length > 0;
+    // Before this insert: whether the owner ever had a link here, still has an active one, and
+    // what their guild row says. An imported user keeps the legacy state (no automatic main).
+    const [state] = await db
+      .select({
+        imported: t.guildUsers.imported,
+        primary: t.guildUsers.primary_character_id,
+        nicknameEnabled: t.guildUsers.nickname_enabled,
+      })
+      .from(t.guildUsers)
+      .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)))
+      .for("update");
+    const ownerLinks = (active: boolean) =>
+      db
+        .select({ id: t.links.id })
+        .from(t.links)
+        .where(
+          and(
+            eq(t.links.guild_id, actor.guildId),
+            eq(t.links.user_id, owner),
+            active ? eq(t.links.active, true) : undefined,
+          ),
+        )
+        .limit(1);
+    const imported = state?.imported === true;
+    const firstLink = !imported && (await ownerLinks(false)).length === 0;
+    // After removing every link, a new one becomes the main again, but sync keeps its setting.
+    const becameMain =
+      firstLink || (!imported && !state?.primary && (await ownerLinks(true)).length === 0);
     await db
       .delete(t.membership)
       .where(
@@ -1171,10 +1187,14 @@ export class Service {
         })
         .onConflictDoNothing();
     }
-    if (!previous)
+    if (becameMain)
       await db
         .update(t.guildUsers)
-        .set({ primary_character_id: character, nickname_enabled: true, nickname_suspended: false })
+        .set(
+          firstLink
+            ? { primary_character_id: character, nickname_enabled: true, nickname_suspended: false }
+            : { primary_character_id: character },
+        )
         .where(and(eq(t.guildUsers.guild_id, actor.guildId), eq(t.guildUsers.user_id, owner)));
     await audit(client, actor.guildId, actor.userId, "character.link", link.id, {
       character,
@@ -1186,7 +1206,9 @@ export class Service {
     return {
       id: link.id,
       created: true,
-      firstLink: !previous,
+      firstLink,
+      becameMain,
+      nicknameSync: firstLink || state?.nicknameEnabled === true,
       listed: evidence !== undefined,
       character: identity,
     };
@@ -1402,7 +1424,9 @@ export class Service {
         effects: "queued",
         effectsMode: this.effectsMode(guild),
         character: link.character,
-        primary: link.firstLink,
+        primary: link.becameMain,
+        firstLink: link.firstLink,
+        nicknameSync: link.nicknameSync,
         roster: await this.rosterEvidence(db, guild, link.listed),
       };
     });
@@ -1447,7 +1471,9 @@ export class Service {
         character: link.character,
         owner,
         reason,
-        primary: link.firstLink,
+        primary: link.becameMain,
+        firstLink: link.firstLink,
+        nicknameSync: link.nicknameSync,
         officerAuthority,
         roster: await this.rosterEvidence(orm(client), guild, link.listed),
       };
