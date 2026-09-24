@@ -19,7 +19,7 @@ Update `CHANGELOG.md` in the same commit, regenerate `bun.lock` when affected, a
 
 The owner requests frequent local commits to track changes and iterations. Commit each coherent, verified change or milestone rather than accumulating the entire session. Use concise imperative messages that explain the change; preserve actual chronology rather than inventing historical phases.
 
-Use feature branches and pull requests for all future work. PRs run CI and CodeQL; merge to `main` after the required build, test, security, and code-quality checks pass. Merges trigger container builds/publication. Do not commit directly to `main` or bypass required checks. Sign commits with the configured GPG key; if it is locked, request a local unlock rather than silently creating an unsigned commit.
+Use feature branches and pull requests for all future work. PRs run CI and CodeQL; merge to `main` after the required build, test, security, and code-quality checks pass. Merges trigger container builds/publication. Do not commit directly to `main` or bypass required checks. Sign commits with the configured SSH signing key (`~/.ssh/id_git`, `gpg.format=ssh`); if signing fails, stop and ask the owner rather than silently creating an unsigned commit.
 
 Before committing, inspect status, staged and unstaged diffs, and recent history. Stage intended source, tests, and documentation explicitly. Keep credentials, `.env`, supplied database dumps, backups, generated output, and local coding-tool state out of Git. The documented `.env.example` is safe to track.
 
