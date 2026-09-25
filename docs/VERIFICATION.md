@@ -23,6 +23,7 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 **2.18.0** (issue reports, migration 008, `/issue`) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.18.0 above 2.17.0). New cases:
 - **Helpers:** redaction of Discord and GitHub tokens, Authorization values, URL passwords, PEM blocks and the deployment's own secret values; stable fingerprints; repository-relative first-party stack frames; bounded bodies, safe fences and escaped tables; the recent-log buffer.
+- **Review-round regressions:** a GitHub 403 whose message names a secondary rate limit waits a minute as `rate_limited`, while a permission 403 stays `configuration` (contract). `/issue` waits for another server's uncommitted report from the same member and then refuses (PostgreSQL); that test fails without the member lock.
 - **The Nodestone client** (contract, review round): a deadline during a retry backoff ends as `unavailable` and is not counted as a Lodestone answer. The test fails against the previous client.
 - **The GitHub client** (contract, against a local fake): issue creation, comments and state reads with the Bearer token and API version. 429s and exhausted 403s become `rate_limited` with the wait, 5xx `unavailable`, 401 and 404 `configuration`, 422 `invalid_data`, and an answer without a number `invalid_response`.
 - **The command surface:** `/issue` passes the member, reporter, Ref and description, and the surface is 20 roots and 44 paths. "Report received", "Report saved" and `wait.issue` render in the house style.
@@ -34,7 +35,7 @@ Live registration, gateway connection/restart, complete member enumeration, hier
   - A repeat of a closed issue is held back by the new-issue cap, with no GitHub call (review round).
   - Migration 008 accepts only the four sources and creates its indexes, and the catalog comparison covers the new table.
 
-`bun run test:unit` passed **1,130 tests** and `bun run test:contract` **24**. The full container run passed **1,252 tests / 37,292 assertions** with no failures (1,130 unit, 24 contract and 98 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture, after the review-round fixes.
+`bun run test:unit` passed **1,130 tests** and `bun run test:contract` **24**. The full container run passed **1,252 tests / 37,295 assertions** with no failures (1,130 unit, 24 contract and 98 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture, after the review-round fixes.
 
 **2.17.0 rollouts (2026-09-25).** DevBot applied migration 007 after a restore check and a rehearsal on the copy. Production applied it with about 31 s of downtime (restore point 00:34:35.012502 UTC), with an independent backup kept off Linode. The two private profiles then completed as private instead of failing. [DEV_GUILD.md](DEV_GUILD.md#2170-rollout--2026-09-25) has the details.
 

@@ -73,8 +73,12 @@ export class GitHubIssues {
       throw new Failure("unavailable", "GitHub didn't answer the issue report in time.");
     }
     if (response.ok) return response.status === 204 ? null : response.json();
-    // GitHub's own words can echo the request; only the status reaches diagnostics.
-    await response.body?.cancel();
+    // GitHub's own words can echo the request, so they only classify a 403 and never reach
+    // diagnostics: a secondary rate limit can arrive as a 403 with no rate-limit headers, and only
+    // its message ("You have exceeded a secondary rate limit") tells it from a refused token.
+    const secondary =
+      response.status === 403 && /rate limit/iu.test((await response.text()).slice(0, 4096));
+    if (response.status !== 403) await response.body?.cancel();
     const retry = Number(response.headers.get("retry-after"));
     const reset = Number(response.headers.get("x-ratelimit-reset"));
     const exhausted = response.headers.get("x-ratelimit-remaining") === "0";
@@ -84,8 +88,12 @@ export class GitHubIssues {
         : exhausted && Number.isFinite(reset)
           ? Math.max(1, reset - Math.floor(Date.now() / 1000))
           : 60;
-    // Primary and secondary rate limits arrive as 429, or 403 with rate-limit headers.
-    if (response.status === 429 || (response.status === 403 && (exhausted || retry > 0)))
+    // Primary and secondary rate limits arrive as 429, or as 403 with rate-limit headers or a
+    // rate-limit message; with neither header, GitHub asks for at least a minute's wait.
+    if (
+      response.status === 429 ||
+      (response.status === 403 && (exhausted || retry > 0 || secondary))
+    )
       throw new Failure("rate_limited", "GitHub is rate limiting issue reports.", retryAfter);
     if (response.status >= 500)
       throw new Failure("unavailable", `GitHub answered ${response.status}.`, 60);

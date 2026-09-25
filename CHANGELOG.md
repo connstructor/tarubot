@@ -30,6 +30,9 @@ The owner asked for an "unexpected behavior handler" that opens GitHub issues wi
   - One failed Lodestone request followed by an hour of quiet looked like an hour-long outage. The client now records its last attempt, and an outage is reported only while attempts keep failing (the last within 30 minutes).
   - A CONFIGURATION.md sentence was corrected.
   - The re-review found that a job deadline expiring during the client's retry backoff escaped as a raw `AbortError`. That counted as a Lodestone answer, which reset the outage clock, and read as an unexpected error. It now ends as `unavailable`, like a deadline caught before the backoff, and anything other than a page that says something about the request counts as unanswered.
+  - The third pass found two more issues:
+    - `/issue` took only a per-server lock, so one member in two servers at once could pass the per-member limit twice. It now takes the member's lock first, then the server's.
+    - A GitHub secondary rate limit can be a bare 403 without rate-limit headers, and was reported as a token problem. A 403 whose message mentions a rate limit is now `rate_limited` with GitHub's minimum one-minute wait. Other 403s stay `configuration`, so a truly refused token still fails instead of waiting forever.
 - **Tests:**
   - redaction of every secret shape, fingerprints, stack frames, bounds and Markdown, and the log buffer;
   - the GitHub client's requests and failure mapping against a local fake;

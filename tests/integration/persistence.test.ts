@@ -6294,6 +6294,33 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       detail: { kind: "limit", limit: "issue" },
       retryAfter: expect.any(Number),
     });
+    // The member's limit spans servers (2.18.0 review). Another server's report for the same
+    // member holds the member lock with its row not yet committed: this one must wait for it and
+    // then refuse, rather than read past the uncommitted row as a server-only lock would.
+    const racer = "90035";
+    const held = await db.pool.connect();
+    try {
+      await held.query("BEGIN");
+      await held.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `issue:user:${racer}`,
+      ]);
+      await held.query(
+        "INSERT INTO issue_reports (fingerprint, source, title, body, guild_id, user_id) VALUES ('user:held', 'user', 't', 'b', '666666666666666698', $1)",
+        [racer],
+      );
+      const waiting = reports.user(
+        { ...reporter, userId: racer },
+        "racer",
+        "1300000000000000012",
+        "Sent while another server's report is still committing.",
+      );
+      await Bun.sleep(300);
+      await held.query("COMMIT");
+      await expect(waiting).rejects.toMatchObject({ code: "cooldown" });
+    } finally {
+      held.release();
+      await db.query("DELETE FROM issue_reports WHERE user_id=$1", [racer]);
+    }
     // Twenty reports in a day fill the server's allowance for everyone.
     for (let index = 0; index < 19; index++)
       await db.query(

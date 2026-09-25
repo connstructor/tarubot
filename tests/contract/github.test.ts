@@ -200,6 +200,24 @@ describe("issue reports client (2.18.0)", () => {
           }),
         { code: "rate_limited" },
       ],
+      // A secondary rate limit can be a bare 403; its message tells it from a refused token,
+      // and GitHub asks for at least a minute's wait (2.18.0 review).
+      [
+        () =>
+          Response.json(
+            { message: "You have exceeded a secondary rate limit. Please wait a few minutes." },
+            { status: 403 },
+          ),
+        { code: "rate_limited", retryAfter: 60 },
+      ],
+      [
+        () =>
+          Response.json(
+            { message: "Resource not accessible by personal access token" },
+            { status: 403 },
+          ),
+        { code: "configuration" },
+      ],
       // Outages retry; a refused token or missing repository needs the operator.
       [() => new Response("", { status: 502 }), { code: "unavailable" }],
       [() => new Response("", { status: 401 }), { code: "configuration" }],

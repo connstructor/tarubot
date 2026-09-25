@@ -163,7 +163,12 @@ export class IssueReports {
     const title = `[${this.environment}] /issue: ${oneLine(redact(text, this.secrets), 80)}`;
     await this.db.transaction(async (client) => {
       const db = orm(client);
-      // One report at a time per server, so two simultaneous reports can't both pass the limits.
+      // Serialize both limits: the member's (across every server) and the server's. Every /issue
+      // takes the member lock first, then the server's, so two reports can't both pass either
+      // limit, and the fixed order can't deadlock.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `issue:user:${actor.userId}`,
+      ]);
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
         `issue:${actor.guildId}`,
       ]);
