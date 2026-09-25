@@ -27,7 +27,8 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER bun
 STOPSIGNAL SIGTERM
 
-# The bundled worker contains the pinned parser source and selector assets.
+# The bundled worker contains the pinned parser source; it loads the live selector set (2.19.0),
+# falling back to the bundled copy in dist/sidecar/selectors-baseline.json.
 FROM runtime AS nodestone
 EXPOSE 8080
 CMD ["bun", "dist/sidecar/server.js"]

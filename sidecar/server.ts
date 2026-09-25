@@ -1,6 +1,8 @@
 /** Private Nodestone HTTP service with bounded workers, real transport throttling, and cancellation. */
 import { z } from "zod";
+import { tmpdir } from "node:os";
 import { LodestoneGate } from "./gate.js";
+import { SelectorStore } from "./selectors.js";
 import { revisionsSchema, UpstreamMonitor } from "./upstreams.js";
 import {
   requestSchema,
@@ -16,16 +18,21 @@ const environment = z
     LODESTONE_START_MS: z.coerce.number().int().min(1000).max(60000).default(1000),
     LODESTONE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
     LODESTONE_BODY_BYTES: z.coerce.number().int().min(1024).max(8000000).default(2000000),
+    // Every 15 minutes since 2.19.0: a new selector HEAD goes live within one check.
     NODESTONE_UPSTREAM_CHECK_SECONDS: z.coerce
       .number()
       .int()
       .min(0)
       .refine((value) => value === 0 || value >= 300)
-      .default(3600),
+      .default(900),
+    // Where downloaded selector sets live; parser workers inherit it (sidecar/selector-runtime.ts).
+    NODESTONE_SELECTORS_DIR: z.string().min(1).default(`${tmpdir()}/tarubot-selectors`),
   })
   .parse(process.env);
-// Workers inherit this before importing Nodestone's import-time region constant.
+// Each parser worker receives these (see execute()): the region before Nodestone reads its
+// import-time constant, and the directory of the active selector set.
 process.env.PAGE_REGION = environment.PAGE_REGION;
+process.env.NODESTONE_SELECTORS_DIR = environment.NODESTONE_SELECTORS_DIR;
 let active = 0;
 // Capacity, request-start pacing and the 429 cooldown are process-wide across every parser worker.
 const processGate = new LodestoneGate(environment.LODESTONE_START_MS);
@@ -35,6 +42,7 @@ let stopping = false;
 const shutdown = new AbortController();
 const fetchMessage = z.object({ type: z.literal("fetch"), url: z.string().url() });
 let updates: UpstreamMonitor | undefined;
+let selectors: SelectorStore | undefined;
 /** Injectable transport/worker paths keep normal contract tests independent of live Lodestone. */
 export interface ExecutionOptions {
   transport?: (url: URL, options: RequestInit) => Promise<Response>;
@@ -154,7 +162,15 @@ export async function execute(
   signal: AbortSignal,
   options: ExecutionOptions = {},
 ): Promise<unknown> {
-  const worker = new Worker(options.workerURL ?? new URL("./worker.js", import.meta.url).href);
+  // Bun workers otherwise see the environment from process start: pass the current one, so the
+  // region and the selector directory set at startup (or in a test) reach the parser.
+  const worker = new Worker(options.workerURL ?? new URL("./worker.js", import.meta.url).href, {
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
+  });
   const controller = new AbortController();
   const combined = AbortSignal.any([
     signal,
@@ -219,6 +235,7 @@ export function serve(port = environment.PORT, options: ExecutionOptions = {}) {
           ready: !stopping,
           active,
           lodestone: (options.gate ?? processGate).status(),
+          selectors: selectors?.status() ?? null,
           upstream: updates?.status() ?? null,
         });
       // A stopping sidecar is unavailable; a full one is `busy`, never the Lodestone's rate limit.
@@ -249,17 +266,50 @@ if (import.meta.main) {
   const revisions = revisionsSchema.parse(
     await Bun.file(new URL("./upstream-revisions.json", import.meta.url)).json(),
   );
-  updates = new UpstreamMonitor(revisions, undefined, (state) => {
-    console.log(
-      JSON.stringify({
-        service: "nodestone",
-        event: "upstream_status",
-        ...state,
-        updateCommand:
-          state.status === "update_available" ? "bun run nodestone:update --deploy" : undefined,
-      }),
-    );
-  });
+  const store = new SelectorStore(environment.NODESTONE_SELECTORS_DIR);
+  selectors = store;
+  await store.restore();
+  // Each new selector HEAD is activated live; a rejected one is logged once, then retried quietly.
+  let rejected: string | undefined;
+  const live = {
+    package: "lodestone-css-selectors",
+    async activate(latest: string, signal: AbortSignal): Promise<string> {
+      const before = store.status().revision;
+      try {
+        const after = await store.activate(latest, signal);
+        if (after !== before) log({ event: "selectors_updated", from: before, to: after });
+        rejected = undefined;
+        return after;
+      } catch (error) {
+        if (rejected !== latest)
+          log({
+            event: "selectors_rejected",
+            revision: latest,
+            active: before,
+            reason: error instanceof Error ? error.message : "unknown",
+          });
+        rejected = latest;
+        return store.status().revision;
+      }
+    },
+  };
+  updates = new UpstreamMonitor(
+    revisions,
+    undefined,
+    (state) => {
+      console.log(
+        JSON.stringify({
+          service: "nodestone",
+          event: "upstream_status",
+          ...state,
+          // Selectors update themselves; only a parser update still needs a release.
+          updateCommand:
+            state.status === "update_available" ? "bun run nodestone:update --deploy" : undefined,
+        }),
+      );
+    },
+    live,
+  );
   updates.start(environment.NODESTONE_UPSTREAM_CHECK_SECONDS);
   const server = serve();
   for (const event of ["SIGINT", "SIGTERM"] as const)

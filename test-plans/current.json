@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.18.1 readable issue reports",
-  "objective": "Check that issue reports read well on GitHub: 2.18.1 changes only how a report is laid out (tables, UTC times, compact log lines, fences on their own lines). No migration and no command change.",
+  "title": "Session: 2.19.0 live Lodestone selectors",
+  "objective": "Check that the sidecar keeps xivapi/lodestone-css-selectors at its latest commit by itself: 2.19.0 loads selectors at runtime, activates each new upstream HEAD after validating it, and shows the live revision in /health and issue reports. No migration and no command change.",
   "user": [
-    "Approve the restart, then run `/issue description:` with a short test note (the 10-minute limit applies).",
-    "Open the new issue in deconfined/tarubot-reports: sections render as tables, the description and logs as code blocks, and nothing below them renders as code.",
-    "Say what still reads poorly, if anything."
+    "Approve the restart, then run `/claim` or `/refresh` as usual; answers read as before.",
+    "Optional: run `/issue` and check the Lodestone section shows the selectors commit.",
+    "Say if anything parses differently."
   ],
   "assistant": [
-    "Restart DevBot and production on 2.18.1 with the owner's go-ahead (no migration, no registration).",
-    "Check readiness, one lease holder and the plan in #chat.",
+    "Restart DevBot and production on 2.19.0 with the owner's go-ahead (no migration, no registration).",
+    "Check the sidecar's /health: selectors at the latest upstream commit and the upstream status current.",
     "Record both restarts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.18.1 on schema 008.",
-    "Lay reports out as tables with UTC times and compact log lines, every code fence on its own line.",
+    "Run compiled 2.19.0 on schema 008.",
+    "Parse with the live selector set, following upstream HEAD every 15 minutes.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

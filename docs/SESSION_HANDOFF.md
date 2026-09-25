@@ -112,10 +112,21 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Token.** The owner created the repository and an Issues-only token for it, saved as `~/tarubot-cutover/github-reports.token` (0600). The token was also pasted in chat, so it should be regenerated once the reporter runs. DevBot's `.env` needs `GITHUB_REPORTS_TOKEN` (owner action), and the production host's `.env` gets it at the deploy.
 - **Status.** Merged ([PR #19](https://github.com/deconfined/tarubot/pull/19), `98552d9`) after three review rounds, which found five real bugs, all fixed. Published by run 36088537989. On 2026-09-25 it was deployed with migration 008 to DevBot at 03:07 UTC and to production at 03:09 UTC (about 30 s down), with `/issue` registered in DevBot's guild and globally ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)). Both `.env` files hold `GITHUB_REPORTS_TOKEN`. The owner's test `/issue` opened issue #1 in `deconfined/tarubot-reports`.
 
-**Update, 2.18.1 (current version):**
+**Update, 2.18.1:**
 - **Why.** The owner's test report worked but was hard to read. A code fence that started mid-line (`Sidecar health: ```json`) made GitHub render everything after it as code. Readiness and sidecar health were raw JSON, times were raw ISO strings, booleans read `true`/`false`, the log records were raw pino JSON dominated by 30-second `Capability status` lines, and a member's report ended with an occurrence count.
 - **Change.** Single records are now two-column tables, times read `YYYY-MM-DD HH:MM:SS UTC`, and booleans read yes/no. The sidecar is a table with an upstream-component table, and log lines are compact, without the routine noise. Member reports carry no occurrence footer. Every fence starts its own line, and a test enforces it. A sample was checked through GitHub's Markdown renderer.
-- **Status.** Committed locally; not yet pushed. No migration and no command change: a plain restart on DevBot and production.
+- **Status.** Merged ([PR #20](https://github.com/deconfined/tarubot/pull/20), `6a3973d`, after one review round) and deployed on 2026-09-25 to DevBot (03:58 UTC) and production (03:59 UTC). The owner then rotated the reports token, and both `.env` files and containers were updated. Test report #3 was delivered as issue #2 and rendered correctly.
+
+**Update, 2.19.0 (current version):**
+- **Why.** The owner: "xivapi/lodestone-css-selectors should ALWAYS be the latest version available." The sidecar ran `1e9dd65`, while upstream was at `a96d68b`, because `bun.lock` pinned the selectors and the build bundled them.
+- **Change.**
+  - Selectors now load at runtime in each parser worker.
+  - The upstream monitor activates each new HEAD after downloading it at that commit and validating it structurally. The checks run every 15 minutes, and failures keep the active set.
+  - The bundled copy is the fallback, now `a96d68b`.
+  - `/health` and issue reports show the live revision.
+  - Parser workers now get the process environment explicitly.
+- **Next (owner request).** Drop Nodestone and parse with the selectors directly (2.20.0), then the robust, disposable host and SSH deploys.
+- **Status.** Committed locally; not yet pushed. No migration and no command change: a restart of the sidecar and bot on each deployment.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 

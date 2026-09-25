@@ -167,3 +167,55 @@ test(
   },
   workerTestTimeout,
 );
+
+test(
+  "a parser worker loads the active selector set, falling back to the bundled one (2.19.0)",
+  async () => {
+    const fcId = "9232097761132958152";
+    const page = `<div class="ldst__window"><div></div><div><a href="/lodestone/freecompany/${fcId}/"><div></div><div><p>x</p><p>x</p><p>Diabolos [Crystal]</p></div></a></div><section><p class="freecompany__text__name">Woven Souls</p><p class="freecompany__text freecompany__text__tag">Souls</p><p>x</p><p>x</p><p>x</p></section></div>`;
+    const parseName = async () => {
+      const result = responseSchema.parse(
+        await execute({ operation: "fc", id: fcId }, new AbortController().signal, {
+          workerURL,
+          transport: async () => new Response(page),
+          gate: new LodestoneGate(1),
+        }),
+      );
+      if (!result.ok) throw new Error(`Parse failed: ${result.code}`);
+      return (result.data as { Name?: unknown }).Name;
+    };
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const directory = await mkdtemp(`${tmpdir()}/selectors-contract-`);
+    const previous = process.env.NODESTONE_SELECTORS_DIR;
+    try {
+      // No active set: the bundled selectors read the name.
+      process.env.NODESTONE_SELECTORS_DIR = directory;
+      expect(await parseName()).toBe("Woven Souls");
+      // An activated set whose name selector points at the tag: the next worker follows it.
+      const baseline = await Bun.file(
+        new URL("../../dist/sidecar/selectors-baseline.json", import.meta.url),
+      ).json();
+      const revision = "3".repeat(40);
+      const files = structuredClone(baseline.files);
+      files["freecompany/freecompany.json"].NAME = {
+        selector: ".freecompany__text.freecompany__text__tag",
+        type: "string",
+      };
+      await writeFile(
+        `${directory}/selectors-${revision}.json`,
+        JSON.stringify({ revision, files }),
+      );
+      await writeFile(
+        `${directory}/active.json`,
+        JSON.stringify({ file: `selectors-${revision}.json`, revision }),
+      );
+      expect(await parseName()).toBe("Souls");
+    } finally {
+      if (previous === undefined) delete process.env.NODESTONE_SELECTORS_DIR;
+      else process.env.NODESTONE_SELECTORS_DIR = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+  workerTestTimeout,
+);

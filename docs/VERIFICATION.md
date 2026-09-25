@@ -21,6 +21,17 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.19.0** (live Lodestone selectors) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.19.0 above 2.18.1). New cases:
+- structural validation, including a real upstream regex that Nodestone can't compile, and a set that lost a key;
+- activation of a new revision pinned to its commit, with an atomic pointer, cleanup, a no-op repeat and a restore after restart;
+- download and validation failures leaving the active set;
+- the monitor activating HEAD and reporting what runs;
+- a real parser worker following an activated set: an FC's name parsed through a replaced selector, with the bundled fallback before it.
+
+`bun run test:unit` passed **1,138 tests** and `bun run test:contract` **25**. The full container run passed **1,261 tests / 37,336 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture. A one-off activation against the real upstream downloaded the 9 files at `a96d68b` in 710 ms, validated them (Beastmaster selectors included) and activated them. `bun run nodestone:update` refreshed the bundled copy to `a96d68b` and passed its own build, unit and contract checks.
+
+**2.18.1 rollouts and the token rotation (2026-09-25):** see [DEV_GUILD.md](DEV_GUILD.md#2181-rollout-and-reports-token-rotation--2026-09-25).
+
 **2.18.1** (readable issue reports) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.18.1 above 2.18.0). New cases:
 - two-column record tables, UTC times, durations and yes/no;
 - log records as readable lines, without routine `Capability status` records or per-process fields;

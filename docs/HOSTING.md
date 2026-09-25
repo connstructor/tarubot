@@ -32,7 +32,7 @@ docker compose -f docker-compose.production.yml exec -T nodestone \
   bun -e 'const r = await fetch("http://127.0.0.1:8080/health"); console.log(await r.text())'
 ```
 
-`lodestone.cooldownSeconds` above 0 means new Lodestone requests are paused after a 429. Jobs wait it out.
+`lodestone.cooldownSeconds` above 0 means new Lodestone requests are paused after a 429. Jobs wait it out. Since 2.19.0, `selectors` shows the live selector commit (`source: upstream`) or the bundled fallback.
 
 ## Updating to a release
 

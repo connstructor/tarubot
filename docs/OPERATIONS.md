@@ -185,6 +185,10 @@ SELECT id, name, world, profile_at, profile_retry_at, profile_missing_at
 
 To undo an automatic unlink (for example, a character that reappears after a rename or transfer glitch), the owner claims and verifies the character again, or an officer runs `/assign`.
 
+## Live selectors
+
+Since 2.19.0 the sidecar keeps `xivapi/lodestone-css-selectors` at its latest commit by itself ([NODESTONE.md](NODESTONE.md#live-selectors-2190)). To see which set is live, check the sidecar's health: `selectors.revision`, with `source` `upstream` or `bundled`. Issue reports show it too. Each switch logs one `{"event":"selectors_updated","from":…,"to":…}` line. A new revision that fails its download or validation logs `selectors_rejected` with the reason; the active set stays, and the next check retries. Nothing needs doing on a switch. A persistent rejection means upstream changed the selector format and the parser may need attention.
+
 ## Issue reports
 
 Since 2.18.0 (REQUIREMENTS.md "Approved issue-reporting amendments"), TaruBot opens issues in the private repository `GITHUB_REPORTS_REPO` (default `deconfined/tarubot-reports`) with `GITHUB_REPORTS_TOKEN`.

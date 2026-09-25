@@ -392,7 +392,7 @@
 
     "lodash.snakecase": ["lodash.snakecase@4.1.1", "", {}, "sha512-QZ1d4xoBHYUeuouhEq3lk3Uq7ldgyFXGBhg04+oRLnIz8o9T65Eh+8YdroUwn846zchkA9yDsDl5CVVaV2nqYw=="],
 
-    "lodestone-css-selectors": ["lodestone-css-selectors@github:xivapi/lodestone-css-selectors#1e9dd65", {}, "xivapi-lodestone-css-selectors-1e9dd65", "sha512-9x04HZMvO87IZtFsoW3lmXjhUdPVMSSmz2Y4JljHhcHtKPEUdh3LICcMxbf7DiNxaUrIADfGJlksU1FaG95+ew=="],
+    "lodestone-css-selectors": ["lodestone-css-selectors@github:xivapi/lodestone-css-selectors#a96d68b", {}, "xivapi-lodestone-css-selectors-a96d68b", "sha512-mexQTbRRV/HrXY3JPdOlsNzD2gXsboyRrJaSN2kGRNUSsSKtiqX6AXJNZ0FtgmjanlEI0VFs02UHhn4fWtkKgg=="],
 
     "logform": ["logform@2.7.0", "", { "dependencies": { "@colors/colors": "1.6.0", "@types/triple-beam": "^1.3.2", "fecha": "^4.2.0", "ms": "^2.1.1", "safe-stable-stringify": "^2.3.1", "triple-beam": "^1.3.0" } }, "sha512-TFYA4jnP7PVbmlBIfhlSe+WKxs9dklXMTEGcBCIvLhE/Tn3H6Gk1norupVW7m5Cnd4bLcr08AytbyV/xj7f/kQ=="],
 
