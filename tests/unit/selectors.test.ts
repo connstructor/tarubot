@@ -1,6 +1,7 @@
 /**
  * Live Lodestone selectors (2.19.0): the sidecar validates a new upstream selector revision and
- * activates it for new parser workers, or keeps the active set when it can't.
+ * activates it for new parser workers, or keeps the active set when it can't. Since 2.20.0 only the
+ * columns TaruBot's parser reads (sidecar/pages.ts) must survive.
  */
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -23,6 +24,11 @@ const baseline = {
     },
     "profile/character.json": {
       NAME: { selector: ".frame__chara__name", type: "string" },
+      FREE_COMPANY: {
+        ID: { selector: ".fc a", attribute: "href", regex: "/freecompany/(?P<ID>\\d+)/" },
+        NAME: { selector: ".fc a" },
+      },
+      // A column the parser never reads.
       CLASSJOB_ICONS: {
         ROOT: { selector: "li", multiple: true },
         ICON: { selector: "img", attribute: "src" },
@@ -84,8 +90,8 @@ test("a file that isn't a usable selector set is rejected with the reason", () =
   expect(() =>
     validateSelectorFile("f.json", { ...bundled, NAME: { selector: ".x", regex: 7 } }, bundled),
   ).toThrow("NAME is not a valid selector");
-  // A regex Nodestone can't translate only breaks its own column, as upstream's achievements
-  // ENTRY.NAME already does, so it isn't a reason to reject the set.
+  // A regex that doesn't compile only breaks its own column, as upstream's achievements ENTRY.NAME
+  // already does, so it isn't a reason to reject the set.
   const upstreamRegex = {
     selector: ".entry",
     regex: '(?P<NameDE>.*) aus der Kategorie „|.*[\\"「](?P<Name>.*)[\\"」]',
@@ -105,26 +111,42 @@ test("a file that isn't a usable selector set is rejected with the reason", () =
 
 test("a nested definition that vanishes or changes kind is a lost column too", () => {
   const bundled = baseline.files["profile/character.json"];
-  // Keeping CLASSJOB_ICONS but dropping its ICON would empty that column on every parse.
+  // Keeping FREE_COMPANY but dropping its ID would lose every character's FC on every parse.
   expect(() =>
     validateSelectorFile(
       "c.json",
-      { ...bundled, CLASSJOB_ICONS: { ROOT: bundled.CLASSJOB_ICONS.ROOT } },
+      { ...bundled, FREE_COMPANY: { NAME: bundled.FREE_COMPANY.NAME } },
       bundled,
     ),
-  ).toThrow("lost CLASSJOB_ICONS.ICON");
+  ).toThrow("lost FREE_COMPANY.ID");
   expect(() =>
     validateSelectorFile("c.json", { ...bundled, NAME: { FIRST: { selector: ".x" } } }, bundled),
   ).toThrow("lost NAME (now a group)");
   expect(() =>
-    validateSelectorFile("c.json", { ...bundled, CLASSJOB_ICONS: { selector: "li" } }, bundled),
-  ).toThrow("lost CLASSJOB_ICONS (now a selector)");
+    validateSelectorFile("c.json", { ...bundled, FREE_COMPANY: { selector: ".fc" } }, bundled),
+  ).toThrow("lost FREE_COMPANY (now a selector)");
   // New nested keys are fine.
   const grown = {
     ...bundled,
-    CLASSJOB_ICONS: { ...bundled.CLASSJOB_ICONS, LEVEL: { selector: ".level" } },
+    FREE_COMPANY: { ...bundled.FREE_COMPANY, CREST: { selector: ".crest", attribute: "src" } },
   };
   expect(validateSelectorFile("c.json", grown, bundled)).toBe(grown);
+});
+
+test("columns the parser never reads may change or go without holding back an update (2.20.0)", () => {
+  const bundled = baseline.files["profile/character.json"];
+  const { CLASSJOB_ICONS, ...withoutIcons } = bundled;
+  expect(validateSelectorFile("c.json", withoutIcons, bundled)).toBe(withoutIcons);
+  const reshaped = { ...bundled, CLASSJOB_ICONS: { ROOT: CLASSJOB_ICONS.ROOT } };
+  expect(validateSelectorFile("c.json", reshaped, bundled)).toBe(reshaped);
+  // Their definitions must still be well-formed, since the set is stored whole.
+  expect(() =>
+    validateSelectorFile(
+      "c.json",
+      { ...bundled, CLASSJOB_ICONS: { ICON: { selector: "" } } },
+      bundled,
+    ),
+  ).toThrow("CLASSJOB_ICONS.ICON is not a valid selector");
 });
 
 test("a valid new revision is downloaded at its commit, written, and activated atomically", async () => {
@@ -185,7 +207,7 @@ test("a restart adopts a saved set only when it is still there and valid", async
   damaged.files["profile/character.json"] = { NAME: { selector: ".x" } };
   await leave(JSON.stringify(damaged));
   const lost = restart();
-  expect(await lost.restore()).toContain("lost CLASSJOB_ICONS");
+  expect(await lost.restore()).toContain("lost FREE_COMPANY");
   expect(lost.status().source).toBe("bundled");
   expect(await pointerKept()).toBe(false);
   // Nor a pointer naming a different set than its revision's.
@@ -259,7 +281,7 @@ test("a download or validation failure leaves the active set untouched", async (
     ...baseline.files,
     "profile/character.json": { NAME: { selector: ".x" } },
   });
-  await expect(broken.store.activate(NEW)).rejects.toThrow("lost CLASSJOB_ICONS");
+  await expect(broken.store.activate(NEW)).rejects.toThrow("lost FREE_COMPANY");
   expect(broken.store.status().revision).toBe(OLD);
   await expect(broken.store.activate("not-a-sha")).rejects.toThrow("Invalid selector revision");
 });

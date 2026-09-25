@@ -5,17 +5,20 @@
  * them by rewriting a pointer file that every new parser worker reads (sidecar/selector-runtime.ts).
  * A download or validation failure keeps the active set and is reported; the set bundled at build
  * time remains the fallback. Parser code stays release-managed: selectors are data, the parser is code.
+ * Since 2.20.0 the parser is TaruBot's own (sidecar/lodestone.ts), and a new set only has to keep the
+ * columns it reads (sidecar/pages.ts).
  */
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { PARSED_KEYS } from "./pages.js";
 
 /** Each downloaded file is small; anything larger is not a selector file. */
 const FILE_BYTES = 512 * 1024;
 /** Selector files are published here at a commit, without the GitHub API's rate limit. */
 const RAW = "https://raw.githubusercontent.com";
 
-/** One selector definition: a CSS selector with Nodestone's optional extraction settings. */
+/** One selector definition: a CSS selector with the repository's optional extraction settings. */
 const definitionSchema = z
   .object({
     selector: z.string().min(1),
@@ -79,8 +82,8 @@ function isDefinition(node: unknown): boolean {
 
 /**
  * The definitions and groups of `bundled` that `candidate` lost, or turned from one kind into the
- * other, as dotted trails. Nested groups count too: CLASSJOB_ICONS keeping its ROOT but losing ICON
- * would silently empty that column on every parse.
+ * other, as dotted trails. Nested groups count too: FREE_COMPANY keeping its NAME but losing ID
+ * would silently drop every character's FC link on every parse.
  */
 function lostKeys(candidate: unknown, bundled: unknown, trail: string): string[] {
   if (isDefinition(bundled)) return isDefinition(candidate) ? [] : [`${trail} (now a group)`];
@@ -94,11 +97,12 @@ function lostKeys(candidate: unknown, bundled: unknown, trail: string): string[]
 
 /**
  * Throw when a downloaded file is not a usable selector file: every leaf is a definition with a
- * selector string and correctly typed options, and every definition and group the bundled copy has,
- * at any depth, is still present as the same kind, so no column the parsers use vanishes. Regexes are
- * not compiled here: Nodestone translates and applies them per column, and upstream already ships one
- * it can't compile (achievements' ENTRY.NAME), which only affects that column, so compiling them
- * would reject usable sets.
+ * selector string and correctly typed options, and every column the parser reads (PARSED_KEYS) that
+ * the bundled copy has is still present, with every definition and group inside it, at any depth, of
+ * the same kind, so no column the parser uses vanishes. Columns it never reads may change or go: the
+ * owner wants the latest selectors, and those don't affect TaruBot. Regexes are not compiled here:
+ * they are applied per column, and upstream already ships one that doesn't compile (achievements'
+ * ENTRY.NAME), which only affects that column, so compiling them would reject usable sets.
  */
 export function validateSelectorFile(
   path: string,
@@ -119,9 +123,12 @@ export function validateSelectorFile(
   };
   visit(candidate, "");
   // visit() has checked every node is an object, so the comparison only walks the bundled shape.
-  const missing = lostKeys(candidate, baseline, "");
+  const record = candidate as Record<string, unknown>;
+  const missing = PARSED_KEYS.filter((key) => key in baseline).flatMap((key) =>
+    key in record ? lostKeys(record[key], baseline[key], key) : [key],
+  );
   if (missing.length) throw new Error(`${path} lost ${missing.slice(0, 5).join(", ")}.`);
-  return candidate as Record<string, unknown>;
+  return record;
 }
 
 export class SelectorStore {

@@ -1,9 +1,8 @@
 /**
- * Selector loading inside each parser worker (2.19.0). The build rewrites Nodestone's static
- * `lodestone-css-selectors/*.json` imports into calls to selectorFile(), so a worker reads the
- * selectors that are active when it starts, not the ones bundled at build time. Every request runs in
- * a fresh worker, so a newly activated upstream revision applies from the next request, with no
- * rebuild or restart.
+ * Selector loading inside each parser worker (2.19.0). The parser reads its selector files through
+ * selectorFile() (sidecar/worker.ts), so a worker uses the selectors that are active when it starts,
+ * not the ones bundled at build time. Every request runs in a fresh worker, so a newly activated
+ * upstream revision applies from the next request, with no rebuild or restart.
  *
  * The server (sidecar/selectors.ts) downloads, validates and activates revisions, and exports their
  * directory as NODESTONE_SELECTORS_DIR. Here the active set is read once per worker; when there is
@@ -11,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 
-/** One selector set: every file Nodestone imports, by its path inside the repository. */
+/** One selector set: every file the parser reads (SELECTOR_FILES), by its path in the repository. */
 type SelectorFiles = Record<string, Record<string, unknown>>;
 
 let files: SelectorFiles | undefined;

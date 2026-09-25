@@ -2,8 +2,6 @@
 FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
-# The local dependency and parser bundle both use the initialized, parent-pinned submodule.
-COPY vendor/nodestone ./vendor/nodestone
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build && bun run typecheck && bun run test:unit && bun run test:contract
@@ -12,8 +10,6 @@ RUN bun run build && bun run typecheck && bun run test:unit && bun run test:cont
 FROM oven/bun:1.4.2 AS dependencies
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
-# Bun resolves the local dev-package manifest even when installing only runtime dependencies.
-COPY vendor/nodestone/package.json ./vendor/nodestone/package.json
 RUN bun install --frozen-lockfile --production
 
 # Both services execute compiled ESM as a non-root user.
@@ -27,7 +23,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER bun
 STOPSIGNAL SIGTERM
 
-# The bundled worker contains the pinned parser source; it loads the live selector set (2.19.0),
+# The bundled worker holds TaruBot's own Lodestone parser (2.20.0); it loads the live selector set,
 # falling back to the bundled copy in dist/sidecar/selectors-baseline.json.
 FROM runtime AS nodestone
 EXPOSE 8080

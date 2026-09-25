@@ -1,9 +1,4 @@
 {
-  "nodestone-upstream": {
-    "repository": "xivapi/nodestone",
-    "revision": "5b7eec64008ba40175ac0ff24f7f44ee1093f77e",
-    "sourceHash": "4485ce1c37718258288696436df3728dcc175d34fdcf5ba4fdd48a39bc7c42a7"
-  },
   "lodestone-css-selectors": {
     "repository": "xivapi/lodestone-css-selectors",
     "revision": "a96d68babf741a2f40637e99ae24c9309b15c9ef"

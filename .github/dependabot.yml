@@ -7,9 +7,9 @@
 # low pull-request limits keep the number of those version commits small.
 #
 # Deliberately not managed here:
-# - vendor/nodestone (git submodule) and lodestone-css-selectors: only `bun run nodestone:update`
-#   advances them, because it also rewrites sidecar/upstream-revisions.json and runs the contract
-#   suite. There is intentionally no gitsubmodule entry.
+# - lodestone-css-selectors: the sidecar follows its HEAD live, and only `bun run selectors:update`
+#   advances the bundled fallback, because it also rewrites sidecar/upstream-revisions.json and runs
+#   the contract suite. (Nodestone, and its submodule, were removed in 2.20.0.)
 # - The CI PostgreSQL service image and the digest-pinned doctl image in .github/workflows/ci.yml:
 #   Dependabot reads only `uses:` in workflows. tests/unit/runtime-pins.test.ts keeps the service
 #   image equal to docker-compose.yml.
@@ -31,9 +31,8 @@ updates:
       default-days: 7
       semver-major-days: 14
     ignore:
-      # Upstream HEAD dependencies; only `bun run nodestone:update` may move them.
+      # The selectors' bundled fallback moves only with `bun run selectors:update`.
       - dependency-name: "lodestone-css-selectors"
-      - dependency-name: "nodestone-upstream"
       # Bun's type definitions move with the runtime pin, which the docker entry proposes.
       - dependency-name: "@types/bun"
     groups:
