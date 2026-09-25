@@ -2,6 +2,22 @@
 
 A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies character ownership through Lodestone biographies, reconciles FC access from complete roster observations, manages guest applications and nicknames, and maintains an exact, transactional gil ledger.
 
+## Documentation
+
+**The documentation site is <https://deconfined.github.io/tarubot/>.** It describes the latest release on `main`:
+
+- [Use TaruBot](https://deconfined.github.io/tarubot/use/getting-started/): for members and visitors.
+- [Run a server](https://deconfined.github.io/tarubot/admin/add-to-server/): for officers and server managers, including the invite link and permissions.
+- [Deploy and operate](https://deconfined.github.io/tarubot/deploy/requirements/): for self-hosters, from requirements and installation to updates, backups and monitoring.
+- [Architecture and design](https://deconfined.github.io/tarubot/architecture/overview/): how the bot is built and why.
+- [Reference](https://deconfined.github.io/tarubot/reference/commands/): every command and option, and every reply code.
+
+The site's source is [`site/`](site/), a small Astro Starlight package built with pnpm; its pages are in `site/src/content/docs/`. Build it with `cd site && pnpm install --frozen-lockfile && pnpm run build`.
+
+Contributor detail lives in `docs/`: [MODULES](docs/MODULES.md), [PERSISTENCE](docs/PERSISTENCE.md), [LODESTONE](docs/LODESTONE.md), [CONFIGURATION](docs/CONFIGURATION.md), [CI_CD](docs/CI_CD.md), [REPLIES](docs/REPLIES.md) and [TEST_PLANS](docs/TEST_PLANS.md).
+
+Maintainer records live in `docs/` too; start with [SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md). Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
+
 ## Stack
 
 | Component | Pinned version |
@@ -12,11 +28,7 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 | Drizzle ORM / node-postgres | 0.45.3 / 8.23.0 |
 | PostgreSQL | 18.4 |
 
-The normal Compose services are `tarubot` and `postgres`. First-party production code is compiled ESM. The bot reads the Lodestone in process (since 2.21.0 there is no sidecar): TaruBot's own parser applies [`xivapi/lodestone-css-selectors`](https://github.com/xivapi/lodestone-css-selectors) directly in isolated workers, and follows the selectors' upstream HEAD live. See [the Lodestone adapter](docs/LODESTONE.md).
-
-**Production** runs on a Linode Docker host with [`docker-compose.production.yml`](docker-compose.production.yml). That file holds the bot only, pinned to one release and attached to Linode managed PostgreSQL. See [HOSTING.md](docs/HOSTING.md). DigitalOcean App Platform, where the cutover first went live, was retired in 2.21.0 because the Lodestone refuses DigitalOcean's addresses; [APP_PLATFORM.md](docs/APP_PLATFORM.md) remains as the record.
-
-Normal deployments pull **`ghcr.io/deconfined/tarubot:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
+The normal Compose services are `tarubot` and `postgres`, and deployments pull **`ghcr.io/deconfined/tarubot`**. Merges to `main` publish tested AMD64/ARM64 images; see [CI_CD.md](docs/CI_CD.md). The bot reads the Lodestone in process: TaruBot's own parser applies [`xivapi/lodestone-css-selectors`](https://github.com/xivapi/lodestone-css-selectors) in isolated workers and follows the selectors' upstream HEAD live. See [the Lodestone adapter](docs/LODESTONE.md).
 
 The bot checks the selector repository every 15 minutes and activates a new HEAD by itself; `/health/ready` and its logs show the live revision. To refresh the set bundled with a release as the fallback:
 
@@ -26,20 +38,6 @@ bun run selectors:update
 ```
 
 Merge the update PR and pull its published image.
-
-## Modular commands and events
-
-Add a `*.command.ts` under `src/commands/`, a `*.event.ts` under `src/events/`, or a `*.component.ts` under `src/components/`. Discovery is recursive. Each command keeps its definition, execution, and autocomplete together; event modules have typed Discord arguments and independent handler IDs. Both runtime and command deployment use the same discovered inventory.
-
-`src/bot/` provides the general module contracts, typed service registry, loader, and router. Modules can use Discord directly or declare injected capabilities. `src/main.ts` is the composition root. Builds clean generated output so removed modules cannot linger in production.
-
-See [MODULES.md](docs/MODULES.md) for complete command/event/component examples and service injection, and [CONFIGURATION.md](docs/CONFIGURATION.md) for configuration-code commentary.
-
-**Continuing in a new session? Start with [SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md)** for the current merged/published/deployed state and immediate next steps. [OPEN_ITEMS.md](docs/OPEN_ITEMS.md) tracks the remaining requirements-backed v2 release work; [ROADMAP.md](docs/ROADMAP.md) records the planned v3–v6 dashboard, ModMail, and profile milestones. Every coherent change set increments SemVer and updates [CHANGELOG.md](CHANGELOG.md).
-
-## Persistence
-
-Drizzle ORM provides typed table mappings and queries over the existing node-postgres pool. Transactional decisions, audit, and outbox writes share one checked-out client; external IDs, bigint money, and UTC instants retain their exact representations. Numbered, checksum-verified SQL migrations own the schema and PostgreSQL constraints/triggers. See [PERSISTENCE.md](docs/PERSISTENCE.md) for schema changes, transaction binding, JSON handling, and the limited raw-SQL boundary.
 
 ## Development install and check
 
@@ -66,69 +64,7 @@ TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/tarubot_test bun run test
 
 The integration suite recreates that test database's `public` schema. Tests use controlled Discord/Lodestone fixtures and real PostgreSQL; live Discord acceptance is described in [VERIFICATION.md](docs/VERIFICATION.md).
 
-## Discord setup
-
-1. Create a development Discord application and install it in the test guild. Production cutover reuses the existing production application.
-2. Install with the `bot` and `applications.commands` scopes.
-3. Enable **Server Members Intent** in the Discord Developer Portal and grant the permissions listed below.
-
-### Gateway intents
-
-| Intent | Reason required |
-| --- | --- |
-| `Guilds` | Receive guild, role, and channel lifecycle updates and maintain the guild context needed by commands and managed-role checks. |
-| `GuildMembers` — **Server Members Intent** (privileged) | Fetch complete member lists and observe joins, departures, role changes, and nickname changes for reconciliation. |
-
-### Bot permissions
-
-Grant the guild-level management permissions and the channel permissions in each configured destination.
-
-| Permission | Reason required |
-| --- | --- |
-| **Manage Roles** | Manage Member/Guest/Officer/FC Leader roles and channel permission overwrites; remove the public View Channel default when onboarding is enabled. |
-| **Manage Channels** | Create/reuse onboarding rooms, detach the lobby from gated categories, and maintain channel visibility. |
-| **Manage Nicknames** | Apply and restore character-based nicknames when users enable nickname management. |
-| **View Channel** | Access configured ledger, officer-notification, guest-review, and development test-plan channels. |
-| **Send Messages** | Deliver ledger and officer notifications, guest review messages, and startup test plans. |
-| **Embed Links** | Render startup-plan and `/version` embeds and other embedded bot responses. |
-| **Attach Files** | Deliver structured command results and retain explicit bot access in managed onboarding channels. |
-| **Read Message History** | Find existing bot-owned messages for notification deduplication and guest-review updates or repair. |
-
-Keep bot **Administrator** disabled. Place its role above all four managed roles and the members whose nicknames it will manage. Access roles must be distinct ordinary roles without Administrator, Manage Server, or Manage Roles; onboarding also excludes Manage Channels. Give the bot's own role View Channel and ensure it can view/manage every channel it will secure. Discord's configured community-updates channel and its parent category are excluded from onboarding and its permission preflight. See [SETUP.md](docs/SETUP.md) for authority checks and the onboarding visibility matrix.
-
-All commands are guild-only. Responses use the declared privacy defaults, with public replies enabled for the observed DevBot test guild through `PUBLIC_TEST_RESPONSES`. Review/ledger/officer messages go to their configured destinations. Notifications default to no parsed mentions.
-
-## Configure and start
-
-Create `.env` using `.env.example` and supply the token, application ID, and database password. Use a URL-safe PostgreSQL password; set the same credential in `DATABASE_URL` for local tools. Tokens are runtime configuration.
-
-```sh
-docker compose pull
-docker compose up -d --wait postgres
-docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
-docker compose run --rm --no-deps tarubot bun dist/scripts/register.js --guild YOUR_TEST_GUILD_ID
-```
-
-Stop the `tarubot` service before migrating an existing database: since 2.16.0, `migrate.js` refuses to apply a pending migration while a running bot holds the database writer lease ([OPERATIONS.md](docs/OPERATIONS.md#single-database-writer)).
-
-For a fresh test guild, set `TEST_GUILD_ID` and `ENABLE_EFFECTS=true`, then:
-
-```sh
-docker compose up -d tarubot
-docker compose logs -f tarubot
-```
-
-The configured **DevBot** test session uses `docker-compose.devbot.yml` and its own `tarubot_dev` database. See [DEV_GUILD.md](docs/DEV_GUILD.md) for its exact launch commands and completed live checks.
-
-Use `/config fc link`, `/config roles member`, `/config roles guest`, and the channel commands (`/config ledger`, `/config officer_notifications`, `/config guest_applications` and `/config changelog`). `/config show` and `/config validate` explain enabled and blocked capabilities. Role configuration makes the selected roles authoritative bot-managed access roles. `/config role_layout enabled:true|false` (server managers with Manage Roles) turns automatic managed-role display and ordering on or off for the guild; it is on by default and off for imported guilds. `/config roles officer` accepts `adopt_holders:false` to bind an Officer role without granting its current holders officer access.
-
-`/setup` creates or reuses Member, Guest, Officer, and FC Leader roles plus a lobby and a separate `#officer-chat`. Running it explicitly enables the server's onboarding policy: newcomers see the lobby, ordinary Members/Guests see ordinary managed channels, and Officers/FC Leaders see managed staff areas and the lobby. Existing private managed areas remain staff-only. Optional `lobby` and `officers` selections resolve existing-room ambiguity. The community-updates channel and its parent retain their existing policy. An optional in-game officer rank enables automatic bot-only Officer access. `/setup` also switches guest applications on (adopting the officer room as their review channel when none is set) and adopts current Officer-role holders, so it is not run in the imported production guild at launch. See [SETUP.md](docs/SETUP.md) for provisioning, migration, and policy ownership.
-
-Every development startup posts the current responsibility-separated session plan to `#chat`. Update `test-plans/current.json` for the next session; see [TEST_PLANS.md](docs/TEST_PLANS.md).
-
-For the supplied legacy data, follow the [migration runbook](docs/MIGRATION.md) before enabling effects. An imported guild has its own persisted activation flag as well as the process-wide `ENABLE_EFFECTS` setting, and starts with guest applications closed, the role layout off, and one first-activation grandfathering run owed.
-
-**Production maintenance tools** never use this checkout's `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file=PRODUCTION_ENV dist/scripts/TOOL.js`, with a production env file copied from [`production.env.example`](production.env.example). Tools that read the Lodestone parse in their own process. A deployment guard checks the application, test scope, guilds, and databases against one profile (production, rehearsal, or DevBot) before any I/O; see [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) and [MIGRATION.md](docs/MIGRATION.md) E0.
+## Running the compiled bot locally
 
 To run the compiled bot or one-shot tools locally (development only), publish loopback-only dependency ports explicitly:
 
@@ -138,58 +74,20 @@ bun run build
 bun run start
 ```
 
-The normal Compose configuration keeps dependency ports private. Use a separate database and development application for test-guild work.
+The normal Compose configuration keeps dependency ports private. Use a separate database and development application for test-guild work. Bun loads this directory's `.env` for every `bun` command, including `bun run` script children.
 
-## Daily use
+The one-shot tools run from the compiled output too, so run `bun run build` after every source change. Their `bun run` aliases:
 
-- `/issue description:…` sends a problem report to TaruBot's maintainers, with a snapshot of the member's account and the bot's state (one per member per 10 minutes). Unexpected errors, failed jobs and repeated trouble are reported automatically. See [OPERATIONS.md](docs/OPERATIONS.md#issue-reports).
-- **Update posts** (2.25.0): after `/config changelog channel:#…` (a normal text channel members and guests can read), each time the bot starts on a newer version it posts one short "what's new" message there, listing a member note for each release since the last post. Setting the channel posts nothing at once, and an update with nothing for members posts nothing. See [OPERATIONS.md](docs/OPERATIONS.md#update-posts).
-- `/version [commits]` shows the running SemVer and recent commits from GitHub (`main`): five by default, up to ten, with linked IDs/titles and `✓ verified` for verified signatures. History is cached for up to five minutes; version output remains available during GitHub outages. See [CHANGELOG.md](CHANGELOG.md) for the versioned development milestones.
-- `/claim` resolves an ID/profile URL or an exact full-name/world match. Put its proof token in the public biography, then use `/verify`. Tokens expire after 30 minutes by default.
-- `/characters`, `/main`, and `/nickname` manage local identity preferences. Existing-link operations use stored IDs and work during Lodestone outages.
-- Imported users select `/main character:ID` and `/nickname enabled:true` explicitly to opt in to nicknames.
-- `/refresh` returns an inspectable run ID; `/sync status` reports durable work. Officer-only `force:true` bypasses freshness while retaining rate limits and locks.
-- `/apply` opens a short guest application form for visitors without a verified character while the guild's guest-application switch is on and a review channel and Guest role are set: introduce yourself and explain why you want to join (10–300 characters each). Answers go to the configured officer review room; submission grants no access. Officers use persistent Approve/Deny buttons or `/guest approve` and `/guest deny`. `/config guest_applications enabled:true|false` turns applications on or off separately from the review channel (`channel:#…`, `unset_channel:true`); switching on first validates the review channel that will take them, including one kept from an import. While applications are closed (imported guilds start switched off, with their legacy review channel kept), `/apply` explains that applications are not open before any form appears. `/guest status` reports progress and grant provenance, `/guest grant` and `/guest revoke` record explicit access decisions, and `/guest reset` removes them so FC membership and registered characters decide again.
-- In every guild, with or without onboarding, trusted linked characters qualify their owners for Guest when current evidence excludes FC membership for all of them, or when no FC is linked. Any confirmed FC character gives Member instead, and any FC character with the configured officer rank adds Officer. Explicit Guest revocation remains authoritative; `/guest status` reports derived eligibility separately from durable grants.
-- `/ledger deposit`, `/ledger withdraw`, `/ledger initialize`, and `/ledger adjust` require notes. `/ledger balance` and `/ledger history` expose immutable entries and notification delivery state.
-- A confirmed departure requires two complete accepted observations at least 60 seconds apart. Former-member guest eligibility is scoped to the currently linked FC. Explicit revocation overrides guest eligibility; FC membership takes precedence.
-
-## Operations
-
-| Script | Purpose |
+| Script | Tool |
 | --- | --- |
-| `bun run db:migrate` | Apply checksum-verified, serialized migrations |
-| `bun run commands:register --guild ID` | Reconcile test-guild commands to the declared inventory |
-| `bun run commands:register --global` | Reconcile production commands during cutover |
-| `bun run snapshot --dump FILE --output FILE` | Capture complete human membership, roles, join contexts, and nicknames |
-| `bun run import:legacy --file FILE --dry-run` | Read-only SQL validation and mapping report |
-| `bun run import:legacy --file FILE --snapshot FILE` | Atomically publish a validated legacy import |
-| `bun run roster:acquire GUILD_ID` | Acquire/publish a complete roster during a maintenance window |
-| `bun run preview GUILD_ID [--output PLAN.json]` | Read-only role/nickname preview plus the grandfathering plan and checksum, pending departures, and the guest-application, onboarding, and role-layout state (with what enabling the layout would change) |
-| `bun run preview GUILD_ID --late-joiners` | Database-only list of humans who joined after first activation's enumeration and hold no grant or link |
-| `bun run activate GUILD_ID --grandfather-plan SHA [--grandfather-plan-file PLAN.json] [--guest-applications closed\|open] [--requeue]` | Validate resources, grandfather an imported guild once from the confirmed plan, and enable its effects; a rerun on a live guild changes nothing without `--requeue` |
-| `bun run jobs:retry GUILD_ID JOB_ID` | Retry delivery independently of a committed decision |
-| `bun run commands:list [--guild ID ...] [--declared-scope global\|ID]` | Read back every command scope; exits 0 only when the declared scope matches and every other scope is empty |
-| `bun run commands:clear-guild GUILD_ID --application APP_ID [--confirm FINGERPRINT]` | Dry-run, then fingerprint-confirmed removal of one guild scope's leftover commands |
-| `bun dist/scripts/discord-inspect.js` | Read-only REST preflight: DevBot mode, or (production/rehearsal profile) intents, guilds, permissions, managed-role hierarchy, and channel access with `--guild ID --dump FILE`, plus repeatable `--role ID` for roles the dump does not name (the Officer role) |
+| `bun run db:migrate` | `migrate.js`: apply pending migrations |
+| `bun run commands:register --global` or `--guild ID` | `register.js`: register the slash commands in one scope |
+| `bun run commands:list` | `commands.js list`: read back every command scope |
+| `bun run commands:clear-guild GUILD_ID --application APP_ID` | `commands.js clear-guild`: remove one server's leftover commands, dry run first |
+| `bun run preview GUILD_ID` | `preview.js`: read-only role and nickname preview |
+| `bun run jobs:retry GUILD_ID JOB_ID` | `retry.js`: requeue failed or blocked delivery |
 
-One-shot commands execute compiled scripts; run `bun run build` after source changes. The equivalent container commands use `bun dist/scripts/NAME.js`. The `bun run` forms are for development: production and rehearsal tools run the compiled files directly with `bun --env-file` (see above).
-
-Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, the database writer lease, and Discord connectivity; a second bot process against the same database stays unready until the first releases the lease. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations; readiness also reports the Lodestone gate and the live selectors (informational).
-
-The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs, and outbox deliveries remain in PostgreSQL across restarts. [Recovery and backup procedures](docs/OPERATIONS.md) explain inspection, retries, and restoration.
-
-## Layout
-
-- `src/domain`: identifiers, exact money, authorization, access and transition policy.
-- `src/application`: transactional operations and reconciliation.
-- `src/bot`: reusable module discovery, contracts, service injection, and interaction dispatch.
-- `src/commands`, `src/events`, `src/components`: independently loaded feature adapters.
-- `src/discord`: Discord effects, shared option builders, selectors, and reply presentation.
-- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, the GitHub clients, and the Lodestone adapter: TaruBot's own selector-driven parser, isolated workers, live selectors, and transport controls.
-- `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
-- `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
-- `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.
+Tools without an alias, such as `check-restore.js`, run as `bun dist/scripts/NAME.js`. The [maintenance tools page](https://deconfined.github.io/tarubot/deploy/tools/) explains each tool, and [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) the deployment guard every tool applies first.
 
 ## License
 

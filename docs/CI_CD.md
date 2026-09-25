@@ -28,6 +28,7 @@ Dependabot (`.github/dependabot.yml`) proposes updates, and a maintainer complet
 | Bun runtime (`oven/bun` in the `Dockerfile`) | Monthly | One per Bun release | The same Bun version in `packageManager`, `engines.bun`, `@types/bun`, and the README stack table; a regenerated `bun.lock`; version commit |
 | PostgreSQL (`docker-compose.yml`) | Monthly | Minor updates only | The same image in `.github/workflows/ci.yml` `services.postgres` and the README stack table; version commit |
 | GitHub Actions | Monthly, after a 7-day cooldown; no security updates, because GitHub raises no Dependabot alerts for SHA-pinned actions | All actions in one PR | Version commit |
+| Documentation site (`site/package.json`, `site/pnpm-lock.yaml`; pnpm) | Monthly, after a 7-day cooldown (14 for majors) | Astro, Starlight and the links validator grouped in one PR, at most 1 open | A green **Documentation site / Build** on the PR; version commit |
 
 `tests/unit/runtime-pins.test.ts` fails until the Bun runtime pins and the two PostgreSQL images agree, so a half-finished runtime or database update cannot pass CI.
 
@@ -42,14 +43,31 @@ Until GitHub's Dependabot updater can read Bun 1.4 lockfiles ([dependabot-core#1
 ### Completing a Dependabot pull request
 
 1. Read the linked release notes and the results of the checks that ran before the version check.
-2. Check out the branch with `gh pr checkout <number>`, then run `bun install --frozen-lockfile`.
+2. Check out the branch with `gh pr checkout <number>`, then run `bun install --frozen-lockfile`. For a site update, also run `cd site && pnpm install --frozen-lockfile`.
 3. Make the changes listed for that row in the table above.
 4. Raise the version and record it: increment `package.json` above `main` (a patch for compatible updates, minor or major when behavior or compatibility changes), add a `## X.Y.Z — Dependency updates` entry and the current-version sentence to `CHANGELOG.md`, and update the version references in `test-plans/current.json` and the current-version statements in `docs/CONFIGURATION.md` and `docs/PERSISTENCE.md`.
-5. Run `bun run typecheck`, `bun run lint`, `bun run format:check`, `bun run build`, `bun run test:unit`, and `bun run test:contract`.
+5. Run `bun run typecheck`, `bun run lint`, `bun run format:check`, `bun run build`, `bun run test:unit`, and `bun run test:contract`. For a site update, also run `pnpm run build` in `site/`, which checks every internal link and anchor.
 6. Commit with a signed, imperative message such as `Release dependency updates in 2.12.3`. Do not include `[dependabot skip]`, which lets Dependabot force-push over the commit.
 7. Push to the Dependabot branch and merge once **CI result** and **CodeQL** pass.
 
 After that push, Dependabot stops rebasing the PR. If `main` moves first, merge `main` into the branch and raise the version above the new base; `@dependabot recreate` discards the maintainer commit. When several Dependabot PRs are open, merge their branches into one maintainer branch and release them with a single version increment; Dependabot then closes its own PRs as up to date.
+
+## Documentation site
+
+The reader-facing documentation is an [Astro Starlight](https://starlight.astro.build) site in `site/`, published to GitHub Pages at <https://deconfined.github.io/tarubot/>. It is a standalone pnpm package on Node: `site/package.json` pins pnpm (`packageManager`) and Node (`engines.node`), and `site/pnpm-lock.yaml` locks its three dependencies (`astro`, `@astrojs/starlight` and `starlight-links-validator`). The bot, its lockfile, its image and CI stay on Bun; pnpm refuses to run in the repository root, which pins Bun.
+
+**`pages.yml` ("Documentation site")** is the only workflow that builds it:
+
+- **Pull requests** that touch `site/**` or the workflow get a **Build** job: `pnpm install --frozen-lockfile` and `pnpm run build`, which fails on a broken internal link or `#anchor`. It is **advisory**: not part of `CI result` and not required by the ruleset, so an Astro or npm outage never blocks a bot fix. Don't merge a site change while it is red.
+- **`main`** rebuilds the site on the same paths, uploads it as the Pages artifact and deploys it through the `github-pages` environment, which accepts only `main`. A failed deploy leaves the last good site live.
+- **Manual dispatch** from `main` redeploys the current content; from any other branch it only builds. To redeploy, dispatch from `main` rather than re-running an old run, which would publish old content.
+- **Concurrency.** Only runs on `main` share the deploy group, where they queue and are never cancelled. Pull requests (`refs/pull/N/merge`) and dispatches from other branches each get their own group and cancel only their own stale builds, so a build-only run can never displace a pending `main` deploy.
+
+The required gate for page content is `tests/unit/docs-site.test.ts`, in CI's checks job and the image build. It needs no site dependencies: it reads the pages as text and checks the command reference (every path, option and example), every `.env.example` setting, every reply code, the invite's permission integer, repository links, the site package's pnpm-only shape, and public content (no real IDs, private hosts, secrets or retired component names). Every run of seven or more digits must be a listed placeholder or constant, and each public-content pattern must still catch its known-bad samples, so a later edit can't narrow a guard unnoticed. Host patterns end in `(?:$|.)`: the `$` keeps CodeQL's missing-anchor query from reading them as URL checks without narrowing what they match.
+
+**Enabling Pages** is a one-time owner step: Settings → Pages → Source **GitHub Actions**, and under Settings → Environments, `github-pages` allowing only `main`.
+
+**Updating the site's dependencies** by hand, on a feature branch: `cd site && pnpm update --latest`, check that `@astrojs/starlight` and `starlight-links-validator` still accept each other's and Astro's peer ranges, run `pnpm audit` and `pnpm run build`, then release with a version commit like any Dependabot update. pnpm 12 runs no dependency build script unless `site/pnpm-workspace.yaml` allows it; esbuild's is declined there, because its optional platform package supplies the binary.
 
 ## Security reporting and scanning
 
@@ -77,18 +95,7 @@ After the first publication, make both packages public in GitHub Packages if dep
 
 ## Deploy without a source checkout
 
-The host needs `docker-compose.yml` and an `.env` based on `.env.example`. Add the DevBot overlay only for the development identity/database. Parser sources, Bun dependencies, and the build toolchain are already inside the published images.
-
-For an initialized deployment:
-
-```sh
-docker compose pull
-docker compose up -d --wait
-```
-
-The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.3` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` can override the complete reference, including immutable `@sha256:` digests.
-
-Fresh installations still need explicit schema migration and command registration; see [README.md](../README.md#configure-and-start). Follow the migration runbook when an upgrade changes the schema. Image publication does not automatically restart deployment hosts or modify their databases.
+A host needs only `docker-compose.yml` and an `.env` based on `.env.example`: the published image carries the compiled bot, its migrations and its tools. Installing, pinning a release, migrating, registering commands and updating are on the documentation site's [install](../site/src/content/docs/deploy/install.md) and [operations](../site/src/content/docs/deploy/operations.md) pages; production's own procedure is [HOSTING.md](HOSTING.md). Image publication never restarts a deployment or changes its database by itself.
 
 ## Local source builds
 

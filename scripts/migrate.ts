@@ -4,12 +4,13 @@
  *   bun dist/scripts/migrate.js                        (the profile's own database)
  *   bun dist/scripts/migrate.js --restore-rehearsal    (a disposable *_restore_test copy first)
  *
- * --restore-rehearsal is DevBot's pre-migration rehearsal on its restored copy (docs/OPERATIONS.md):
+ * --restore-rehearsal is the pre-migration rehearsal on a restored copy
+ * (site/src/content/docs/deploy/operations.md):
  * the deployment guard then accepts DATABASE_URL only when it names a *_restore_test database.
  *
  * Pending migrations also take the database writer lease for their one transaction: the run waits
  * up to MIGRATE_WRITER_WAIT_SECONDS (default 90) for a stopping bot, then refuses while any bot
- * holds it. Stop the bot before migrating (docs/OPERATIONS.md).
+ * holds it. Stop the bot before migrating (site/src/content/docs/deploy/operations.md).
  */
 import { assertToolScope, type ToolScope } from "../src/config/deployment.js";
 import { Failure } from "../src/domain/values.js";
@@ -55,7 +56,8 @@ if (import.meta.main) {
         "MIGRATE_WRITER_WAIT_SECONDS must be a whole number from 0 to 600.",
       );
     const report = await db.migrate("migrations", { writerWaitMs: wait * 1000 });
-    // The lease time is the restore point: no bot wrote after it (docs/OPERATIONS.md).
+    // The lease time is the restore point: no bot wrote after it
+    // (site/src/content/docs/deploy/operations.md).
     if (report.applied.length)
       console.log(
         `Migration writer lease acquired at ${report.leaseAcquiredAt}; applied ${report.applied.join(", ")}; committing at ${report.committingAt}.`,

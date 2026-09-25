@@ -33,7 +33,8 @@ export const MIGRATION_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
  * Session advisory lock key that makes one bot process the database's only writer (amendment C3).
  * It is distinct from the transaction locks for migrations (714882490), character claims (714882491)
  * and legacy import (714882492). The lifecycle holds it for a bot's lifetime; migrate() takes it
- * for the migration transaction whenever a migration is pending. docs/OPERATIONS.md has the probe.
+ * for the migration transaction whenever a migration is pending. The probe is on the site's
+ * operations page (site/src/content/docs/deploy/operations.md).
  */
 export const WRITER_LEASE_LOCK = 714882494;
 

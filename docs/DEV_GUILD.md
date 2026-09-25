@@ -20,6 +20,20 @@ The Compose service is named `tarubot`; its actual Discord identity comes from t
 
 These commands use the published GHCR image `ghcr.io/deconfined/tarubot` (until 2.20.0 also `ghcr.io/deconfined/tarubot-nodestone`, the parser sidecar; since 2.21.0 the parser runs in the bot, and `--remove-orphans` clears the old container). The GitHub account was named `connstructor` until 2026-09-24, and image paths under that name no longer resolve. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
 
+## Backup and restore rehearsal on DevBot
+
+The generic procedures are on the documentation site ([`deploy/operations.md`](../site/src/content/docs/deploy/operations.md#backup)); DevBot differs in these ways (moved here from the former operations guide in 2.27.0):
+
+- **Compose files and database.** Add `-f docker-compose.devbot.yml` to every command, and use DevBot's database `tarubot_dev` where the site says `tarubot`. Keep dumps in `.cache/backups/`, named `tarubot_dev-before-X.Y.Z-<sha>.dump`.
+- **The deployment guard.** Under DevBot's profile, `DATABASE_URL` must name `tarubot_dev`, and a restore target must end in `_restore_test` (for example `tarubot_dev_restore_test`). The one exception is `migrate.js --restore-rehearsal`, which may name the restore copy as `DATABASE_URL`, and with that flag it must end in `_restore_test`. Other local installations use the unmanaged profile and any names.
+- **Restore check before a migration.** `check-restore` requires both databases to report this build's `SCHEMA_VERSION`. A pre-migration rehearsal therefore runs from the currently deployed build, or from the newer build with `--schema-version` naming the migration both databases still report, for example `bun dist/scripts/check-restore.js --schema-version 005_launch_access_policy.sql` before applying `006_guest_application_switch.sql` (2.15.0).
+- **Migration rehearsal.** Run the new release's migrate inside its image, deriving the URL in the container so no credential is printed. It must print `Schema ready.`; then migrate `tarubot_dev` itself with a plain `bun dist/scripts/migrate.js`. The production application never uses the flag; its migrations are rehearsed in `tarubot_rehearsal` ([MIGRATION.md](MIGRATION.md) E2).
+
+  ```sh
+  docker compose -f docker-compose.yml -f docker-compose.devbot.yml run --rm --no-deps -T tarubot \
+    sh -c 'DATABASE_URL="${DATABASE_URL%/*}/tarubot_dev_restore_test" exec bun dist/scripts/migrate.js --restore-rehearsal'
+  ```
+
 ## Completed on 2026-09-22
 
 - Authenticated identity matched the configured DevBot application.
@@ -104,7 +118,7 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 - With the writer stopped, `tarubot_dev` was backed up to `.cache/backups/tarubot_dev-before-2.10.1-0744cfb.dump`. A disposable restore matched every existing row, sequence, trigger, and constraint. Migration 003 was rehearsed on that restore before application to DevBot; all prior application rows were preserved.
 - Two active ownership links, guild revision 9, and the uninitialized ledger account survived rollout. Database/Discord readiness passed with zero pending/blocked work. All 19 root commands / 40 paths matched their deployed definitions, including the new setup options.
 - The 2.10.1 startup plan was read back publicly in `#chat`: [message 1552126390214860923](https://discord.com/channels/1040379370159743139/1040379370931507252/1552126390214860923).
-- The subsequent permission check confirmed **Administrator disabled** and exactly the README's eight explicit bot-role permissions. All four role bindings passed hierarchy checks; complete enumeration returned seven humans and DevBot.
+- The subsequent permission check confirmed **Administrator disabled** and exactly the eight explicit bot-role permissions the README then listed (now on the site's [`admin/add-to-server.md`](../site/src/content/docs/admin/add-to-server.md)). All four role bindings passed hierarchy checks; complete enumeration returned seven humans and DevBot.
 - Discord identifies `1040379572358746144` (`moderator-only`) as `public_updates_channel_id`, under the permission-synced `1040381910863593492` (`Admin`) category. The owner requested these community resources remain outside onboarding.
 - Created the separate private **officer-chat**, `1552149138148433930`, with staff and bot access. DevBot successfully read it and exercised both permission-edit and channel-edit APIs under its limited role. Reserved community metadata was verified intact.
 - A read-only probe of the compiled 2.10.2 fix passed setup preflight for ten managed channels, excluding the community-updates channel and Admin category. This was a one-shot validation; the running application remains on the published 2.10.1 image until the fix is merged/published/deployed.
@@ -423,6 +437,10 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 5. `register.js --guild 1040379370159743139`, then `commands.js list`: clean, with the one new `/config` path.
 6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line, and choosing it again gives the no-change card with a Visibility field; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
 7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
+
+### 2.27.0 — documentation only
+
+2.27.0 adds the documentation site (`site/`, GitHub Pages) and changes no running code, so DevBot was not redeployed for it. Its startup plan (`test-plans/current.json`) asks the owner to review the published site after the merge. The DevBot-only backup and restore-rehearsal notes moved here from the former operations guide ([above](#backup-and-restore-rehearsal-on-devbot)).
 
 ### Remaining unverified-visitor form checks (on hold until after launch)
 

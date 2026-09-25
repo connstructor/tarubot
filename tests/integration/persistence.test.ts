@@ -7017,7 +7017,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await pinBoundary(fcId);
     // The running row is left to finish and counts as posted, so one recovery line is queued.
     // (If this send then fails and is retried, the degraded line can post after the recovery
-    // line: an accepted edge case, docs/OPERATIONS.md "Officer notices".)
+    // line: an accepted edge case, site/src/content/docs/deploy/monitoring.md "Officer notices".)
     expect((await notices(degraded))[1]).toMatchObject({
       id: sending.id,
       status: "running",
