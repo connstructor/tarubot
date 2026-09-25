@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.22.0 healthchecks.io heartbeat",
-  "objective": "Check 2.22.0, which pings a healthchecks.io check every five minutes while the bot is ready, so an outside check alerts when the host or bot goes silent. DevBot runs with the heartbeat off; production gets the ping URL. No migration and no command change.",
+  "title": "Session: 2.23.0 rebuild runbook and settings copy",
+  "objective": "2.23.0 adds the host rebuild runbook and an encrypted, off-host copy of the production settings. It changes no running code: DevBot and production keep 2.22.0, and there is nothing to deploy.",
   "user": [
-    "Keep the 'TaruBot production' check at period 5 minutes, grace 10 minutes, with Pushover for down.",
-    "After the deploy, confirm the check turns green and its event log shows the status line.",
-    "Optional: pause and resume the check once to see the notifications."
+    "Keep a second copy of the age key (~/tarubot-cutover/age/tarubot.key) in your password manager.",
+    "Read HOSTING.md's \"Rebuilding the host\" once and say if any step doesn't match how you'd do it.",
+    "Optional: attach a Linode Cloud Firewall to the tarubot Linode (inbound SSH and ICMP only)."
   ],
   "assistant": [
-    "Deploy 2.22.0 to DevBot and production with the owner's go-ahead (restarts, no migration).",
-    "Put the ping URL into the host's .env from ~/tarubot-cutover/healthchecks-production.url, never through chat.",
-    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "Take the first encrypted settings copy and verify it decrypts to the host's .env.",
+    "Prepare 2.24.0: daily encrypted off-site database dumps with their own healthchecks check.",
+    "Record the evidence in docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.22.0 on schema 008 with the Lodestone parser in process.",
-    "Ping healthchecks.io every five minutes while ready (production only), with a one-line status.",
-    "Post this responsibility-separated session plan in #chat."
+    "Keep running 2.22.0 on schema 008 with the heartbeat on in production.",
+    "Nothing changes in the running bot for this session.",
+    "Post this responsibility-separated session plan in #chat on DevBot's next restart."
   ]
 }

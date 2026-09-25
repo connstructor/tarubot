@@ -21,6 +21,26 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.23.0** (the rebuild runbook and the off-host settings copy) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.23.0 above 2.22.0). New cases in `tests/unit/host-env-backup.test.ts`:
+- argument parsing;
+- setting names read without values, including a multi-line CA;
+- the required settings refused by name;
+- UTC file names;
+- the recipients file's format;
+- the committed `ops/age-recipients.txt` holding a valid public key and no private key.
+
+`bun run test:unit` passed **1,147 tests** and `bun run test:contract` **26**; no application code changed.
+
+**Live, 2026-09-25:**
+- `age` 1.2.1 on the operator machine generated the key `~/tarubot-cutover/age/tarubot.key` (mode 600). Its public key `age10k03wzyu…quevfc6` is in `ops/age-recipients.txt`.
+- `bun run host:env-backup -- --identity …` read the production `.env` over SSH and wrote `tarubot-env-20260925T125338Z.age` (2,329 bytes, mode 600, in a mode-700 folder). It named the six settings present (`TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, `GITHUB_REPORTS_TOKEN`, `HEALTHCHECKS_PING_URL`), with none missing. It confirmed the copy decrypts to exactly what was read.
+- The file starts with the `age-encryption.org/v1` header, and the runbook's decryption command (step 7) yields six settings lines.
+- **SSH:** before the owner's change, a probe with no credentials saw `publickey,password` offered for `root` and `tarubot`. After it, both offer `publickey` only, and key login as `tarubot` works.
+- **Linode, read with the owner's CLI (no changes):**
+  - the `tarubot` Linode is `g6-standard-1` in `us-iad-2`, and neither of the account's two Cloud Firewalls is attached to it;
+  - `deconfined.com` is not on Linode DNS;
+  - `tarubot-pgsql` is PostgreSQL 18.6, a single node, encrypted, with SSL required and 4 allow-list entries. Point-in-time recovery reaches back to its creation (2026-09-24 22:27 UTC), and weekly maintenance is Tuesdays 19:00 UTC for up to 4 hours.
+
 **2.22.0** (the healthchecks.io heartbeat) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/heartbeat.test.ts`, over a fake clock and a scripted healthchecks.io:
 - the first ping at once, then one every five minutes (none across nine 30-second passes);
 - no ping, and no failure ping, while unready, and a ping as soon as readiness returns;

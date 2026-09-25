@@ -12,6 +12,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 | Bot | `~/tarubot` on the host: a clone of this repository, run with [`docker-compose.production.yml`](../docker-compose.production.yml). It has only `tarubot`: no bundled PostgreSQL, no parser sidecar (the Lodestone parser runs inside the bot since 2.21.0), the release pinned by `TARUBOT_IMAGE_TAG`, bounded logs. |
 | Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), and since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
 | Database | Linode managed PostgreSQL `tarubot-pgsql`, PostgreSQL 18, us-iad-2. Use the **direct port 27520**, never the 27521 pool, which can't hold the writer lease. The login and database are `tarubot`, and `tarubot` owns the database. The admin login `akmadmin` is for provisioning only; the tool guard refuses it. The allow list holds the host and the operator's address. |
+| Settings copy | Encrypted with `age` in `~/tarubot-cutover/env-backups/` on the operator machine (2.23.0; see "Settings copy"). |
 | Operator tools | Run from a clean clone of the deployed release on the operator machine, as `prod dist/scripts/<tool>.js`, with `~/tarubot-cutover/production.env` ([MIGRATION.md](MIGRATION.md#e0-conventions) E0). That file points at the Linode database, with its CA in `DATABASE_CA_CERT`. |
 
 ## Everyday checks
@@ -91,6 +92,68 @@ The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MI
 - **Linode's backups:** Linode's managed PostgreSQL backups and point-in-time recovery cover the database. Check the plan's retention in the Linode console.
 - **Independent backups:** take a `pg_dump` before every migration and keep it on the operator machine, off Linode. The 2026-09-24 cutover left `pre-activation.dump` and `move-to-linode.dump` in `~/tarubot-cutover/work/backups/`.
 - **Restore checks:** `check-restore.js` compares a restored copy with the source. The production profile accepts `tarubot` on another host, such as a new cluster, or `tarubot_restore` on the same host.
+
+## Settings copy (off the host)
+
+The host's `.env` is the one thing a rebuild can't recreate from Git, so an encrypted copy is kept off the host (since 2.23.0). `scripts/host-env-backup.ts` runs on the operator machine. It reads `~/tarubot/.env` over SSH and encrypts it with [`age`](https://age-encryption.org) for the public keys in [`ops/age-recipients.txt`](../ops/age-recipients.txt). It writes only the encrypted file, to `~/tarubot-cutover/env-backups/tarubot-env-<UTC time>.age` (mode 600). The settings never touch the operator machine's disk or the terminal.
+
+```sh
+bun run host:env-backup -- --identity ~/tarubot-cutover/age/tarubot.key
+```
+
+- **The output** names the settings present and any expected ones that are absent, never their values. With `--identity`, it also decrypts the new copy in memory and confirms it matches what was read.
+- **When to run it:** after any change to the host's `.env`, such as a rotated token or a new setting. A release only changes `TARUBOT_IMAGE_TAG`, which a restore sets anyway (step 7 below).
+- **The private key** is `~/tarubot-cutover/age/tarubot.key` on the operator machine (mode 600). The owner keeps a second copy offline, in a password manager. Without the key the copies can't be opened, and the daily database backups (2.24.0) use the same key.
+
+## Rebuilding the host
+
+Use this when the host is lost, compromised, or being replaced. The data lives in the managed database, so a rebuild loses nothing: the new bot picks up its state from PostgreSQL. Budget about an hour, most of it waiting for DNS.
+
+You need the latest settings copy and the `age` key (above), access to Linode, the DNS for `deconfined.com`, and the healthchecks.io check.
+
+1. **Stop the old bot**, if the old host is still reachable: `docker compose -f docker-compose.production.yml stop tarubot`. The writer lease would make a second bot wait anyway; stopping it keeps the handover clean. Pause the healthchecks.io check.
+2. **Create the Linode:**
+   - label `tarubot`, region `us-iad` (the database's region), type Linode 2 GB (`g6-standard-1`), image Ubuntu 26.04 LTS;
+   - the owner's SSH key for root, and a root password kept in the password manager;
+   - attach the Cloud Firewall (inbound TCP 22 only, plus ICMP; the host publishes no other ports).
+3. **Set up the base system as root** (`ssh root@NEW_IP`):
+
+   ```sh
+   apt-get update && apt-get -y full-upgrade
+   # Docker CE from Docker's repository, as on the first host.
+   install -m 0755 -d /etc/apt/keyrings
+   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+   printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.asc\n' \
+     "$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")" > /etc/apt/sources.list.d/docker.sources
+   apt-get update
+   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin age unattended-upgrades
+   # The tarubot user runs Compose; it needs the docker group, not sudo.
+   useradd -m -s /bin/bash -G docker tarubot
+   install -d -m 700 -o tarubot -g tarubot /home/tarubot/.ssh
+   install -m 600 -o tarubot -g tarubot /root/.ssh/authorized_keys /home/tarubot/.ssh/authorized_keys
+   # Key-only SSH: no passwords, and root only with a key.
+   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/10-tarubot.conf
+   sshd -t && systemctl reload ssh
+   hostnamectl set-hostname tarubot && timedatectl set-timezone Etc/UTC
+   ```
+
+   Before closing the root session, confirm that `ssh tarubot@NEW_IP true` works from the operator machine.
+4. **Point DNS at the new host.** Update `tarubot.deconfined.com`'s A and AAAA records to the new addresses. Replace its SSHFP records with the output of `ssh-keygen -r tarubot.deconfined.com` (as root on the new host). On the operator machine, run `ssh-keygen -R tarubot.deconfined.com`. Use the IP address until DNS has updated.
+5. **Let the new host reach the database.** In Linode Cloud Manager → Databases → `tarubot-pgsql` → Access Controls, add the new host's IPv4 address. Remove the old host's address in step 11.
+6. **Clone the repository** as `tarubot`: `ssh tarubot@NEW_IP 'git clone https://github.com/deconfined/tarubot.git ~/tarubot'`.
+7. **Restore the settings** from the operator machine, then pin the current release:
+
+   ```sh
+   latest=$(ls -1 ~/tarubot-cutover/env-backups/tarubot-env-*.age | tail -1)
+   age --decrypt --identity ~/tarubot-cutover/age/tarubot.key "$latest" \
+     | ssh tarubot@NEW_IP 'umask 077; cat > ~/tarubot/.env'
+   ssh tarubot@NEW_IP "sed -i 's/^TARUBOT_IMAGE_TAG=.*/TARUBOT_IMAGE_TAG=X.Y.Z/' ~/tarubot/.env && grep -c = ~/tarubot/.env"
+   ```
+
+8. **Start the bot:** `ssh tarubot@NEW_IP 'cd ~/tarubot && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d --wait'`.
+9. **Check it** with the everyday checks above. Readiness must be all true, and the logs must show "Database writer lease acquired" and "TaruBot ready". Resume the healthchecks.io check; it should turn green within five minutes. Commands are registered globally and survive a rebuild, so there is nothing to register.
+10. **Restore the backup schedule** (2.24.0).
+11. **Retire the old host.** Delete the old Linode and remove its database access entry. Update the Layout table above, and take a fresh settings copy (`bun run host:env-backup`).
 
 ## DigitalOcean leftovers
 
