@@ -46,6 +46,8 @@ The throttled-roster test follows the degraded notice's new key.
 
 **2.24.2** (code-scanning fixes) passed strict type checking, lint, formatting, the compiled build and `ci:version`. For alert #7, a probe worker under Bun received its parent's message with `origin` `""` and `source` `null`, which is what the new check accepts. The parser, worker, runner and selector tests (30) pass unchanged, and the compiled build parsed a live profile and the Woven Souls FC (105 members) through the worker. The PR's CodeQL run is the check that both alerts close.
 
+**2.24.2 and 2.24.3 rollouts (2026-09-25):** see [DEV_GUILD.md](DEV_GUILD.md#2242-rollout--2026-09-25) and [DEV_GUILD.md](DEV_GUILD.md#2243-rollout--2026-09-25). Both went out to DevBot and production as restarts; each DevBot backup restored cleanly at 008, and both bots reported ready with the writer lease held.
+
 **2.24.1 rollouts (2026-09-25), with 2.24.0's backup schedule:** see [DEV_GUILD.md](DEV_GUILD.md#2241-rollout-with-2240s-backup-schedule--2026-09-25). The first backup from the host's real path uploaded 396,896 bytes, and the crontab line is installed.
 
 **2.24.1** (`/sync status` shows only unresolved failures) passed strict type checking, lint, formatting, the compiled build and `ci:version`.

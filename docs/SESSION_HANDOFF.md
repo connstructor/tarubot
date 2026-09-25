@@ -181,7 +181,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.**
   - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
   - #8: `isDefinition` checks null before `typeof`.
-- **Status.** Merged ([PR #28](https://github.com/deconfined/tarubot/pull/28), `4a64609`). A restart deploys it.
+- **Status.** Merged ([PR #28](https://github.com/deconfined/tarubot/pull/28), `4a64609`) and deployed on 2026-09-25 to DevBot (14:47 UTC) and production (14:47 UTC) ([DEV_GUILD.md](DEV_GUILD.md#2242-rollout--2026-09-25)).
 
 **Update, 2.24.3:**
 - **Why.** Issue #29: production officers got "FC roster accepted: …" for every roster read, and the degraded line could repeat about once a minute during an outage. The owner decided in two rounds on the issue (REQUIREMENTS.md "Approved officer-notice amendments").
@@ -191,7 +191,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - One recovery line follows a posted degraded notice.
   - The job rows are the notice history: no migration and no in-memory state.
 - **Release order** (the owner's chat instruction of 2026-09-25, recorded by the agent in [a comment on #29](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836955454)). #29 is 2.24.3, #30 2.25.0 (migration 009), #32 2.26.0, and #31 2.27.0 (migration 010), started once #29 merges because both change the roster code. #33 can ship at any time. The SSH deploy workflow's 2.25.0 reservation is dropped; it takes the next free minor after these.
-- **Status.** Merged ([PR #34](https://github.com/deconfined/tarubot/pull/34), `ef0893b`); not yet deployed. After one review round, test C's order fix, the blocked and removed-guild scenarios, the accepted edge cases and the clock assumption are in. The fast checks pass, and the full container run passed 1,283 tests / 37,392 assertions with the dump and with the synthetic fixture ([VERIFICATION.md](VERIFICATION.md)). A restart deploys it, with no registration ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout-planned)).
+- **Status.** Merged ([PR #34](https://github.com/deconfined/tarubot/pull/34), `ef0893b`) and deployed on 2026-09-25 to DevBot (20:10 UTC) and production (20:11 UTC) ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout--2026-09-25)). After one review round, test C's order fix, the blocked and removed-guild scenarios, the accepted edge cases and the clock assumption are in. The fast checks pass, and the full container run passed 1,283 tests / 37,392 assertions with the dump and with the synthetic fixture ([VERIFICATION.md](VERIFICATION.md)). A restart deploys it, with no registration ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout--2026-09-25)).
 
 **Update, 2.25.0 (current version):**
 - **Why.** Issue #30: post what's new when the bot starts on a new version. The owner approved the plan and decided its four questions on 2026-09-25 ([comment](https://github.com/deconfined/tarubot/issues/30#issuecomment-5835854639); REQUIREMENTS.md "Approved changelog amendments"): member notes are a short list in the code, optional per release; nothing is posted when an update has nothing for members; setting a channel waits for the next update; onboarding servers only get a warning about a channel members can't read.
@@ -265,7 +265,7 @@ Keep these owner-approved decisions intact:
 
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check [PR #35](https://github.com/deconfined/tarubot/pull/35)'s CI and review state.
 2. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, and the DigitalOcean cleanup. Already done: 2.18.0 and 2.18.1 are deployed with `/issue` registered ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)), and both `.env` files hold the rotated reports token. The legacy MariaDB login is closed because the owner said in chat on 2026-09-25 that the legacy host is shut down; nothing records the login itself being rotated or dropped, so if the host is ever restarted, rotate or drop it first.
-3. Deploy 2.24.2 if it isn't yet (a restart), then deploy 2.24.3 (#29, merged; restarts, no registration). Then merge and deploy 2.25.0 (#30, PR #35: update posts, migration 009, a command registration), #32 (2.26.0) and later #31 (2.27.0), in the agreed release order. The robust, disposable host (owner decision, 2026-09-25) still needs the SSH deploy workflow from GitHub Actions, which takes the next free minor after #31; the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done.
+3. 2.24.2 and 2.24.3 are deployed. After the next scheduled roster read, confirm production posted no "FC roster accepted" line. Then merge and deploy 2.25.0 (#30, PR #35: update posts, migration 009, a command registration), #32 (2.26.0) and later #31 (2.27.0), in the agreed release order. The robust, disposable host (owner decision, 2026-09-25) still needs the SSH deploy workflow from GitHub Actions, which takes the next free minor after #31; the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done.
 4. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:

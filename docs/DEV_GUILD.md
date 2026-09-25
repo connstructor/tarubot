@@ -395,12 +395,19 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
-### 2.24.3 rollout (planned)
+### 2.24.2 rollout — 2026-09-25
 
-Not yet deployed. 2.24.3 (#29) makes the officer Lodestone notices quieter; it needs a restart only, with no migration and no registration. Each step needs the owner's go-ahead:
+- 2.24.2 (PR #28, `4a64609`, the two CodeQL fixes) was published by run 36149105225 as `tarubot:2.24.2` (`sha256:760d963d…`). Open code-scanning alerts on main: 0.
+- **DevBot:** 589 jobs, all succeeded. The writer stopped at 14:47:08 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.2-4a64609.dump` is 132,457 bytes, sha256 `3382e84068f429a8d6076eb0e10c68b6b1a7c5d3152a0686fed8cfc3127fa7c9`; the restore was verified at 008 and the copy dropped. Healthy at 14:47:27, readiness 200.
+- **Production:** the host clone pulled `4a64609`, then `TARUBOT_IMAGE_TAG=2.24.2`, pull, and `up -d --wait --remove-orphans` at 14:47:38, healthy at 14:47:45. Readiness 200 with the heartbeat on. A live parse inside the container, through the worker with its new origin check, read the Woven Souls FC (105 members). The backup crontab line is unchanged.
 
-- **DevBot**, following CLAUDE.md "Updating DevBot": stop `tarubot`; `pg_dump` to `.cache/backups/tarubot_dev-before-2.24.3-<sha>.dump`; restore into `tarubot_dev_restore_test` and run `check-restore.js` at 008; no migration; `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3`; `commands.js list` as a read-only check (nothing to register); readiness (`writerLease`), logs and the plan in #chat. Then `/refresh force:true`: the officer notifications channel still gets "FC roster accepted: …".
-- **Production**, following [HOSTING.md](HOSTING.md#updating-to-a-release) "A release without a migration": `git pull --ff-only`, pin `TARUBOT_IMAGE_TAG=2.24.3`, pull, `up -d --wait --remove-orphans`; no registration. After the next scheduled roster read (every 6 hours), confirm no new `officer:<guild>` row and nothing in the officer channel.
+### 2.24.3 rollout — 2026-09-25
+
+2.24.3 (#29, PR #34, `ef0893b`) makes the officer Lodestone notices quieter; it needs a restart only, with no migration and no registration. The owner gave the go-ahead after the merge. Publish run 36183605313 published `tarubot:2.24.3` (`sha256:e9bb7ac753c2afced195835322da0db4c3d0bac85c9b3ee681212ac67842fa6a`, revision label `ef0893b`) and promoted `latest`.
+
+- **DevBot:** 619 jobs, all succeeded. The writer stopped at 20:10:01 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.3-ef0893b.dump` is 135,241 bytes (mode 600), sha256 `2f62ca6673d9b4d0f44243d6caf5c2dcf2102961216d93d460ebc363bbae09d6`; 2.24.3's `check-restore.js` verified the restore at 008 and the copy was dropped. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3` at 20:10:15, healthy at 20:10:31; readiness 200 with the writer lease held, and no warning or error at startup.
+- **Production:** the host clone pulled `ef0893b`, then `TARUBOT_IMAGE_TAG=2.24.3` (the `.env` stays mode 600), pull, and `up -d --wait --remove-orphans` at 20:10:57, healthy at 20:11:03 on the same image digest. Readiness 200 with the writer lease held, `publicTestResponses` false and effects on; the heartbeat URL is set; no warning or error at startup; the backup crontab line is present.
+- **Not run:** the DevBot `/refresh force:true` check (it writes to Discord) and the read-only `commands.js list` (nothing was registered). The production check after the next scheduled roster read (no new `officer:<guild>` row, nothing in the officer channel) is still to record.
 - **During an outage.** The new degraded key has no history, so a deploy during a Lodestone outage can post one more degraded notice, and later its recovery line.
 - **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
 - There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
