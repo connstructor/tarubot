@@ -17,13 +17,7 @@ TaruBot v2 has been live in Woven Souls since 2026-09-24. It was activated on Ap
 | Claude, with go-ahead | Deploy 2.18.0 to DevBot and production with the migration procedure. Put `GITHUB_REPORTS_TOKEN` in the production host's `.env`, and register the new `/issue` (production `register.js --global`; DevBot's guild). Done earlier: 2.16.1 (2026-09-24) and 2.17.0 (2026-09-25), both deployed ([DEV_GUILD.md](DEV_GUILD.md#2170-rollout--2026-09-25)). |
 | Owner, later | **Least privilege in Woven Souls.** The E1 inspection found the production bot relies on Administrator there. Without it, it would lack Manage Roles, Manage Nicknames, View Channel, Embed Links and Attach Files. Grant those explicitly, then remove Administrator (gate 1). |
 | Done | **2.22.0 (heartbeat)**, deployed 2026-09-25 12:33 UTC; the production check "TaruBot production" receives pings. |
-| Claude | **Robust and disposable host** (owner decision, 2026-09-25):
-- 2.22.0 added the heartbeat.
-- 2.23.0 added the rebuild runbook and the encrypted settings copy (merged, PR #25).
-- 2.24.0 adds daily encrypted dumps to Linode Object Storage with their own healthchecks check. The first run was proven by a full restore; the schedule is installed when 2.24.0 deploys.
-- Next: deploys over SSH from GitHub Actions (2.25.0; needs a GitHub environment and a restricted deploy key).
-
-Terraform was considered and declined for now (2026-09-25: "too much trouble at least at this stage"). |
+| Claude | **Robust and disposable host** (owner decision, 2026-09-25):<br>- 2.22.0 added the heartbeat.<br>- 2.23.0 added the rebuild runbook and the encrypted settings copy (merged, PR #25).<br>- 2.24.0 adds daily encrypted dumps to Linode Object Storage with their own healthchecks check. The first run was proven by a full restore; the schedule is installed when 2.24.0 deploys.<br>- Next: deploys over SSH from GitHub Actions (2.25.0; needs a GitHub environment and a restricted deploy key).<br><br>Terraform was considered and declined for now (2026-09-25: "too much trouble at least at this stage"). |
 | Done | **Key-only SSH on the host** (owner, 2026-09-25): `tarubot` never had a password, and `sshd` now accepts only keys; a probe from outside sees `publickey` alone for `root` and `tarubot`. |
 | Owner | **Attach a Linode Cloud Firewall** to the `tarubot` Linode (none is attached): inbound TCP 22 and ICMP only; the host publishes no other ports. |
 | Done | 35999242 (Vanessa Wolfe, Diabolos), deleted from the Lodestone: an officer ran `/unassign` at 2026-09-24 22:56 UTC. The two private profiles complete as private since 2.17.0. |
