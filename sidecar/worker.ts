@@ -7,7 +7,8 @@
  */
 import { z } from "zod";
 import { requestSchema } from "../src/infrastructure/nodestone/protocol.js";
-import { pagePlan, pageUrl, parsePage } from "./lodestone.js";
+import { parsePage } from "./lodestone.js";
+import { pagePlan, pageUrl } from "./pages.js";
 import { selectorFile } from "./selector-runtime.js";
 
 /** The parent's answer to a fetch: the page, or a sanitized failure category. */

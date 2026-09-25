@@ -4,14 +4,8 @@
  * separately on live pages (docs/VERIFICATION.md); these pin each rule with synthetic HTML.
  */
 import { describe, expect, test } from "bun:test";
-import {
-  columnName,
-  pagePlan,
-  pageUrl,
-  parsePage,
-  SELECTOR_FILES,
-  translateRegex,
-} from "../../sidecar/lodestone.js";
+import { columnName, parsePage, translateRegex } from "../../sidecar/lodestone.js";
+import { PARSED_KEYS, pagePlan, pageUrl, SELECTOR_FILES } from "../../sidecar/pages.js";
 
 const SERVER = {
   selector: ".world",
@@ -61,8 +55,11 @@ describe("names, regexes and URLs", () => {
       { operation: "members", id: "1", page: 1 },
       { operation: "search", name: "a", world: "b", page: 1 },
     ] as const;
-    for (const input of operations)
+    for (const input of operations) {
       for (const file of pagePlan(input).files) expect(SELECTOR_FILES).toContain(file as never);
+      // New selector sets must keep every key an operation parses (sidecar/selectors.ts).
+      for (const key of pagePlan(input).keys) expect(PARSED_KEYS).toContain(key);
+    }
     // The biography is read only when asked for (proof verification).
     expect(pagePlan({ operation: "profile", id: "1", biography: false }).keys).not.toContain("BIO");
   });

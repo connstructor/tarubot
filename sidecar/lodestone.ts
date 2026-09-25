@@ -14,10 +14,12 @@
  * - the top-level ROOT column narrows the page (a page without it is invalid), and ENTRY's list and
  *   PAGE_INFO's regex groups spread into the result, which paginated pages turn into `Pagination`.
  *
- * Pure: no network or workers. The sidecar worker fetches the page and supplies the active selectors.
+ * Pure: no network or workers. The sidecar worker fetches the page and supplies the active selectors;
+ * which page and keys each operation reads is in sidecar/pages.ts.
  */
 import { parseHTML } from "linkedom";
 import type { ParseRequest } from "../src/infrastructure/nodestone/protocol.js";
+import { pagePlan } from "./pages.js";
 
 /** A selector file or group, as lodestone-css-selectors publishes it. */
 export type SelectorRegistry = Record<string, unknown>;
@@ -34,64 +36,6 @@ interface Definition {
 interface Parsed {
   readonly patch: boolean;
   readonly data: unknown;
-}
-
-/** The page every operation reads, on the configured region's Lodestone. */
-export function pageUrl(input: ParseRequest, region: string): string {
-  const origin = `https://${region}.finalfantasyxiv.com/lodestone`;
-  switch (input.operation) {
-    case "profile":
-      return `${origin}/character/${input.id}`;
-    case "fc":
-      return `${origin}/freecompany/${input.id}`;
-    case "members": {
-      const url = new URL(`${origin}/freecompany/${input.id}/member`);
-      url.searchParams.set("page", String(input.page));
-      return url.toString();
-    }
-    case "search": {
-      // Query values are encoded exactly once; setting the page re-serializes the query.
-      const url = new URL(
-        `${origin}/character/?q=${encodeURIComponent(input.name)}&worldname=${encodeURIComponent(input.world)}`,
-      );
-      url.searchParams.set("page", String(input.page));
-      return url.toString();
-    }
-  }
-}
-
-/** Every selector file the parser reads: the bundled fallback and each live download. */
-export const SELECTOR_FILES = [
-  "profile/character.json",
-  "profile/attributes.json",
-  "profile/gearset.json",
-  "freecompany/freecompany.json",
-  "freecompany/members.json",
-  "search/character.json",
-] as const;
-
-/** The selector files each operation reads, merged in this order, and the keys it requests. */
-export function pagePlan(input: ParseRequest): { files: string[]; keys: string[] } {
-  switch (input.operation) {
-    case "profile":
-      return {
-        files: ["profile/character.json", "profile/attributes.json", "profile/gearset.json"],
-        // The biography only for proof verification, never for routine refreshes.
-        keys: ["NAME", "SERVER", "FREE_COMPANY", ...(input.biography ? ["BIO"] : [])],
-      };
-    case "fc":
-      return {
-        files: ["freecompany/freecompany.json"],
-        keys: ["ID", "NAME", "TAG", "SERVER", "ACTIVE_MEMBER_COUNT"],
-      };
-    case "members":
-      return { files: ["freecompany/members.json"], keys: ["ROOT", "ENTRY", "PAGE_INFO"] };
-    case "search":
-      return {
-        files: ["search/character.json"],
-        keys: ["ROOT", "ENTRY", "PAGE_INFO", "NO_RESULTS_FOUND"],
-      };
-  }
 }
 
 /**

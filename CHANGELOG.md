@@ -28,11 +28,13 @@ We used four of its operations. 2.20.0 replaces it with a first-party parser, ke
   - the `nodestone-upstream` and `axios` dependencies, and with them `regex-translator`, `express` and `lodash`;
   - the submodule steps in the Dockerfile, CI and publish checkouts, Dependabot and Biome.
 - **Added:** `linkedom` 0.16.11, pinned as a build dependency bundled into the worker.
+- **Selector checks follow the parser.** A new selector set only has to keep the columns the parser reads (`PARSED_KEYS`, every key of `pagePlan`), each with everything inside it at any depth, as 2.19.0's review fix requires. Other columns may change or go, so a column TaruBot never reads can't hold back the latest selectors. `sidecar/pages.ts` holds each operation's URL, files and keys apart from the parser, so the sidecar server checks sets without loading linkedom.
 - **Selectors only.** The upstream monitor follows only `xivapi/lodestone-css-selectors`. `bun run selectors:check` and `selectors:update` replace the `nodestone:*` scripts and refresh just the bundled fallback, now the 6 files the parser reads.
 - **Parity.**
   - Before removing Nodestone, the 2.19.0 build and this build parsed 6 live Lodestone pages in 7 cases through their workers (`execute()`). The cases were a profile with and without the biography, the FC page, member pages 1 and 3 (50 and 5 entries), a search hit and an empty search. Output and requested URLs were identical.
   - The first-party worker took 53–85 ms per operation against Nodestone's 105–180 ms.
   - The image built with its tests inside and parsed three live pages through `/v1/parse`.
+  - After rebasing onto 2.19.0's review fixes, the comparison was repeated with identical results (first-party 40–71 ms, Nodestone 105–176 ms).
 - **Tests.** `tests/unit/lodestone-parser.test.ts` pins every parsing rule, the URLs, the regex translation and the column names. The worker contract suite, including the older Nodestone parity cases, private profiles, the gate and live selectors, passes unchanged. The upstream tests follow the selector-only monitor.
 - **Docs:**
   - NODESTONE.md, retitled "Lodestone sidecar";

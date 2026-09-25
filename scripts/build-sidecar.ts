@@ -4,7 +4,7 @@
  * their commit. The running sidecar replaces them live with upstream HEAD (sidecar/selectors.ts).
  */
 import { fileURLToPath } from "node:url";
-import { SELECTOR_FILES } from "../sidecar/lodestone.js";
+import { SELECTOR_FILES } from "../sidecar/pages.js";
 import { lockedRevisions, revisionsSchema } from "../sidecar/upstreams.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
