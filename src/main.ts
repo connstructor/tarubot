@@ -14,6 +14,7 @@ import {
   roleAdministrationKey,
   versionInformationKey,
 } from "./application/keys.js";
+import { Heartbeat } from "./application/heartbeat.js";
 import { IssueReports } from "./application/issue-reports.js";
 import { ApplicationLifecycle } from "./application/lifecycle.js";
 import { RecentLogs } from "./application/recent-logs.js";
@@ -108,10 +109,21 @@ const queue = new Queue(db, dispatcher(app, sync, access, reports), (event) => {
   if (outcome.status === "failed" && outcome.level === "error")
     void reports.jobFailed(job, outcome);
 });
+// The outside dead-man's switch (2.22.0): pings healthchecks.io while ready; off when unset.
+const heartbeat = new Heartbeat(
+  config.HEALTHCHECKS_PING_URL,
+  config.TEST_GUILD_ID ? "devbot" : "production",
+  (level, fields, message) => log[level](fields, message),
+);
 const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue, log, report, {
-  tick: () => reports.tick(),
+  // The heartbeat never throws; the reporter's errors are reported by the lifecycle.
+  tick: async () => {
+    await heartbeat.tick();
+    await reports.tick();
+  },
 });
 reports.useStatus(() => lifecycle.status());
+heartbeat.useStatus(() => lifecycle.status());
 const services = new Services()
   .provide(applicationKey, app)
   .provide(synchronizationKey, sync)

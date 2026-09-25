@@ -246,6 +246,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     HEALTH_PORT: 3000,
     GITHUB_REPORTS_TOKEN: "",
     GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
+    HEALTHCHECKS_PING_URL: "",
   };
   const lodestone = new FakeLodestone();
   const service = new Service(db, discord, lodestone, config);

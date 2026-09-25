@@ -362,6 +362,20 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Test report #3, which failed five times with 401 while the old token was active, was delivered as issue #2 at 04:08:50.
   - Issue #2 rendered as 11 tables, 2 code blocks and the collapsible logs, with no stray fences and no secrets.
 
+### 2.21.0 rollout — 2026-09-25
+
+- PR #23 merged as `220a99f`; CI, CodeQL and the Claude review passed with no comments. Publish run 36130248661 published one image, `tarubot:2.21.0` (`sha256:db294d15…`), and promoted `latest`; there is no `tarubot-nodestone:2.21.0`. It carries 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser), which were not deployed separately.
+- **DevBot:**
+  - 556 jobs, all succeeded. The writer stopped at 11:40:47 UTC with no lease holders, head 008.
+  - The backup `.cache/backups/tarubot_dev-before-2.21.0-220a99f.dump` is 130,299 bytes, sha256 `6684c7e5636dbdf8f8939c488d07457828481e97ef1faa4bddd3e4969fb03a71`. The restore was verified at 008 and the copy dropped. No migration and no registration.
+  - `up -d --wait --remove-orphans tarubot` at 11:40:50, healthy at 11:41:06; `tarubot-nodestone-1` was removed as an orphan.
+  - Readiness 200 with the new `lodestone` object: no parses running, no cooldown, selectors `a96d68b` (bundled, upstream current). The logs held only the startup lines and "Lodestone selector upstream status changed" (current); reconciliation, layout and channel jobs succeeded, and the plan posted without error.
+- **Production:**
+  - The host clone pulled `220a99f` (git could not remove the untracked `vendor/nodestone` leftover, which is inert), `TARUBOT_IMAGE_TAG=2.21.0`, pull, then `up -d --wait --remove-orphans` at 11:42:18, healthy at 11:42:24. `tarubot-nodestone-1` was removed.
+  - Readiness 200 with test responses off, the Lodestone object current and the reports token present. 124 member reconciliations succeeded by 11:43:27.
+  - No Lodestone job was due in the first minutes (profiles are paced daily, rosters every 6 h), so a read-only parse ran inside the production container: a profile with its FC in 755 ms, the Woven Souls FC (105 members) in 803 ms, and member page 1 (50 entries, page 1 of 3).
+- **Operator machine:** the production-tools clone `~/tarubot-cutover/src` moved from 2.18.0 to 2.21.0 and was rebuilt. The cutover's `tarubot-cutover-nodestone` container, running since the cutover, was stopped; 2.21.0 tools parse in their own process.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

@@ -4,7 +4,7 @@
 
 ## 1. Where we stopped
 
-The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)). After launch, 2.17.0 (Lodestone hardening), 2.18.0 and 2.18.1 (issue reports) were deployed to DevBot and production, and production runs **2.18.1**. 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser) are merged; **2.21.0** moves the parser into the bot, removes the sidecar and retires App Platform. None of the three is deployed yet: 2.21.0 carries all of them.
+The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)). After launch, 2.17.0 (Lodestone hardening), 2.18.0 and 2.18.1 (issue reports) were deployed to DevBot and production, and production ran **2.18.1** until 2.21.0. 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser) are merged; **2.21.0** moves the parser into the bot, removes the sidecar and retires App Platform. 2.21.0 carried all three to DevBot and production on 2026-09-25; **2.22.0** adds the healthchecks.io heartbeat.
 
 | Layer | State at handoff |
 | --- | --- |
@@ -139,7 +139,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Also.** A new selector set only has to keep the columns the parser reads (`PARSED_KEYS`), at any depth.
 - **Status.** Merged ([PR #22](https://github.com/deconfined/tarubot/pull/22), `632936a`) on 2026-09-25 after CI and the Claude review passed. Not deployed separately: 2.21.0 carries it.
 
-**Update, 2.21.0 (current version):**
+**Update, 2.21.0:**
 - **Why.** The owner asked what the sidecar still bought once the parser was TaruBot's own, then decided: "Remove the sidecar. I would rather reduce complexity and places where things can break." With the sidecar gone App Platform could not serve as a fallback, and the owner chose to retire it too.
 - **Change.**
   - The Lodestone adapter runs in the bot (`src/infrastructure/lodestone/`). The bot fetches each page under the same network policy (region, gate, body bound, private-profile detection) and hands a fresh worker the page and the operation's selector files; the worker only parses and is terminated at the deadline.
@@ -147,8 +147,13 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - Removed: the `nodestone` Compose service and image, the HTTP API, `NODESTONE_URL` and the other `NODESTONE_*`/`PAGE_REGION` settings (now `LODESTONE_*`), the worker build step (linkedom and the selectors are runtime dependencies), and App Platform's spec, phase tool, tests and CI check.
   - `/health/ready` carries a `lodestone` object (gate, slots, selectors, upstream), and issue reports read it directly.
 - **Deploy.** A restart with `up -d --wait --remove-orphans` (removes the old sidecar container). No migration and no command change. It brings 2.19.0 and 2.20.0.
-- **Branch.** `feat/in-process-lodestone-2.21.0`, rebased onto `main` after PR #22 merged.
-- **Status.** PR open; not yet deployed.
+- **Status.** Merged ([PR #23](https://github.com/deconfined/tarubot/pull/23), `220a99f`) and deployed on 2026-09-25 to DevBot (11:41 UTC) and production (11:42 UTC) with `--remove-orphans`; both run one `tarubot` container. The operator clone is at 2.21.0 and the cutover sidecar container was stopped ([DEV_GUILD.md](DEV_GUILD.md#2210-rollout--2026-09-25)).
+
+**Update, 2.22.0 (current version):**
+- **Why.** The robust, disposable host (owner decision, 2026-09-25) needs alerting from outside the host. The owner signed up for healthchecks.io.
+- **Change.** `src/application/heartbeat.ts` pings `HEALTHCHECKS_PING_URL` every five minutes while readiness is fully green, with a one-line status body. It sends no failure pings (the check's grace decides), retries a failed ping after a minute, and logs a failure streak once. Issue reports redact ping URLs. Empty turns it off (DevBot, CI).
+- **Owner's check.** "TaruBot production": period 5 minutes, grace 10 minutes, Pushover for down. The URL lives in `~/tarubot-cutover/healthchecks-production.url` and goes into the host's `.env` ([HOSTING.md](HOSTING.md#heartbeat)).
+- **Status.** Branch `feat/heartbeat-2.22.0`; not yet pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -214,7 +219,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge 2.21.0, then deploy it to DevBot and production with `--remove-orphans` (restarts only). Then make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge and deploy 2.22.0 (the heartbeat) and set the production ping URL. Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:

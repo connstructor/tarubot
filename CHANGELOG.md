@@ -1,6 +1,27 @@
 # Version history
 
-The current application version is **2.21.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.22.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.22.0 — A healthchecks.io heartbeat
+
+The robust, disposable host (owner decision, 2026-09-25) needs alerting that works when the bot or host can't report on itself. The owner signed up for healthchecks.io. There is no migration and no command change.
+
+- **Heartbeat (`src/application/heartbeat.ts`).** While readiness is fully green (database, writer lease, Discord), the bot pings `HEALTHCHECKS_PING_URL` every five minutes, from the scheduler pass that already runs every 30 seconds.
+  - Each ping is a POST carrying one status line for the check's event log: version, pending and blocked work, degraded FCs, the Lodestone cooldown and the live selectors. It never carries secrets.
+  - It sends no failure pings. An unready bot stays silent and the check's grace period decides when to alert, so a Discord reconnect doesn't page anyone.
+  - A failed ping is retried after a minute, and a failure streak logs one warning plus one line when pings recover. A ping never takes more than 5 seconds and never affects readiness.
+  - Empty turns it off, which is what DevBot and CI use.
+- **The owner's check.** "TaruBot production": period 5 minutes, grace 10 minutes, Pushover for down. The URL is kept on the operator machine and copied into the host's `.env` over SSH stdin, never through chat ([HOSTING.md](docs/HOSTING.md#heartbeat)).
+- **Privacy.** Issue reports treat the ping URL as one of the deployment's secrets and redact any `hc-ping.com` URL, since anyone holding it can ping the check and hide an outage.
+- **Settings.** `HEALTHCHECKS_PING_URL` is in both Compose files and both env templates. The production template leaves it empty: tools don't ping.
+- **Records.** The 2.21.0 rollouts to DevBot and production, including the in-container live parse on production, the operator clone's move to 2.21.0 and the stopped cutover sidecar.
+- **Tests.** `tests/unit/heartbeat.test.ts`:
+  - an immediate first ping, then one every five minutes;
+  - silence while unready;
+  - retry after a minute, and one warning per failure streak;
+  - off without a URL;
+  - the summary format;
+  - `hc-ping.com` redaction.
 
 ## 2.21.0 — The Lodestone parser inside the bot, without the sidecar
 

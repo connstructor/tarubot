@@ -21,6 +21,18 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.22.0** (the healthchecks.io heartbeat) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/heartbeat.test.ts`, over a fake clock and a scripted healthchecks.io:
+- the first ping at once, then one every five minutes (none across nine 30-second passes);
+- no ping, and no failure ping, while unready, and a ping as soon as readiness returns;
+- a network failure and an HTTP 404 retried after a minute, one warning for the streak, and one line on recovery;
+- no requests without a URL;
+- the one-line summary with missing metrics;
+- `hc-ping.com` URLs redacted from report text, and the configured URL redacted as a deployment secret.
+
+`bun run test:unit` passed **1,141 tests** and `bun run test:contract` **26**. The full container run passed **1,265 tests / 37,271 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+**2.21.0 rollouts (2026-09-25):** see [DEV_GUILD.md](DEV_GUILD.md#2210-rollout--2026-09-25). Both instances run one `tarubot` container, and a read-only parse inside the production container read a live profile, the FC (105 members) and member page 1.
+
 **2.21.0** (the Lodestone parser inside the bot; the sidecar and App Platform retired) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.21.0 above 2.19.0). Tests:
 - **The in-process runner** (`tests/contract/lodestone-runner.test.ts`, formerly the sidecar's):
   - request starts at least 1,000 ms apart through the real gate;

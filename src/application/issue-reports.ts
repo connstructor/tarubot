@@ -116,7 +116,12 @@ export class IssueReports {
         return "";
       }
     })();
-    this.secrets = [config.DISCORD_TOKEN, config.GITHUB_REPORTS_TOKEN, password].filter(Boolean);
+    this.secrets = [
+      config.DISCORD_TOKEN,
+      config.GITHUB_REPORTS_TOKEN,
+      config.HEALTHCHECKS_PING_URL,
+      password,
+    ].filter(Boolean);
   }
 
   /** The lifecycle's readiness, once the lifecycle exists (it is built after the reporter). */
