@@ -11,9 +11,10 @@ The second test report showed the sidecar parsing with selectors `1e9dd65`, whil
   - The build checks that all 9 referenced selector files load this way.
 - **Following HEAD.** The upstream monitor now activates a new selector HEAD instead of only reporting it. `SelectorStore` (`sidecar/selectors.ts`):
   - downloads the 9 files from `raw.githubusercontent.com` at that commit;
-  - validates them structurally: a non-empty `selector` string, typed options, and no lost top-level key;
-  - writes the set, then switches `active.json` atomically.
-  - A failure keeps the active set and logs `selectors_rejected` once per revision; a switch logs `selectors_updated`. A restarted container adopts its active set.
+  - validates them structurally: a non-empty `selector` string, typed options, and no lost or reshaped definition or group at any depth;
+  - writes the set, then switches `active.json` atomically, keeping the replaced set until the next activation for workers that just read the old pointer.
+  - A failure keeps the active set and logs `selectors_rejected` once per revision; a switch logs `selectors_updated`.
+  - A restarted container adopts its active set only if the set is still there and valid; otherwise it logs `selectors_not_restored` and fetches HEAD again.
 - **Faster checks.** The monitor checks every 15 minutes (`NODESTONE_UPSTREAM_CHECK_SECONDS` default 900, was 3600) in both Compose files and both env templates.
 - **Visibility.** `/health` reports `selectors {revision, source, activatedAt, bundled}`, the upstream component shows the live revision, and issue reports show the live selectors.
 - **Worker environment.** Parser workers now receive the process environment explicitly. A Bun worker sees only the environment from process start, which would have missed the selector directory; `PAGE_REGION` worked only because Compose sets it.
@@ -21,6 +22,7 @@ The second test report showed the sidecar parsing with selectors `1e9dd65`, whil
 - **Found while testing against real upstream.** Validation first compiled regexes, and that rejected the real selector set: upstream's `profile/achievements.json` `ENTRY.NAME` regex already fails Nodestone's own translation, affecting only that unused column. Regexes are no longer compiled during validation.
 - **Tests:**
   - validation, activation, restore and failure handling of the store against a fake GitHub;
+  - from the code review: nested key loss, restoring a missing or damaged set, and keeping the replaced set (each fails without its fix);
   - the monitor's live path;
   - a contract test in which a real parser worker parses an FC page with an activated set whose name selector points at the tag;
   - a one-off activation against the real upstream (9 files at `a96d68b`, 710 ms).

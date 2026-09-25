@@ -26,9 +26,10 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 - activation of a new revision pinned to its commit, with an atomic pointer, cleanup, a no-op repeat and a restore after restart;
 - download and validation failures leaving the active set;
 - the monitor activating HEAD and reporting what runs;
-- a real parser worker following an activated set: an FC's name parsed through a replaced selector, with the bundled fallback before it.
+- a real parser worker following an activated set: an FC's name parsed through a replaced selector, with the bundled fallback before it;
+- code-review round (each failing against the previous store): a nested definition lost or changed in kind is rejected; a restart adopts a saved set only when it is present and valid, otherwise runs the bundled set, reports why and downloads again; activation keeps the replaced set for workers that just read the old pointer.
 
-`bun run test:unit` passed **1,138 tests** and `bun run test:contract` **25**. The full container run passed **1,261 tests / 37,336 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture. A one-off activation against the real upstream downloaded the 9 files at `a96d68b` in 710 ms, validated them (Beastmaster selectors included) and activated them. `bun run nodestone:update` refreshed the bundled copy to `a96d68b` and passed its own build, unit and contract checks.
+`bun run test:unit` passed **1,141 tests** and `bun run test:contract` **25**. The full container run passed **1,264 tests / 37,353 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture. A one-off activation against the real upstream downloaded the 9 files at `a96d68b` in 710 ms, validated them (Beastmaster selectors included) and activated them; after the review fixes, a repeat with the recursive check took 741 ms and a restarted store adopted the saved set. `bun run nodestone:update` refreshed the bundled copy to `a96d68b` and passed its own build, unit and contract checks.
 
 **2.18.1 rollouts and the token rotation (2026-09-25):** see [DEV_GUILD.md](DEV_GUILD.md#2181-rollout-and-reports-token-rotation--2026-09-25).
 

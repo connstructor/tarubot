@@ -268,7 +268,9 @@ if (import.meta.main) {
   );
   const store = new SelectorStore(environment.NODESTONE_SELECTORS_DIR);
   selectors = store;
-  await store.restore();
+  // A saved set that is gone or damaged is not adopted; say why, since the bundled one now runs.
+  const notRestored = await store.restore();
+  if (notRestored) log({ event: "selectors_not_restored", reason: notRestored });
   // Each new selector HEAD is activated live; a rejected one is logged once, then retried quietly.
   let rejected: string | undefined;
   const live = {

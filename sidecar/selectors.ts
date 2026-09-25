@@ -45,12 +45,33 @@ interface Baseline {
   readonly files: Record<string, Record<string, unknown>>;
 }
 
+/** Whether a node is one selector definition rather than a group of them. */
+function isDefinition(node: unknown): boolean {
+  return typeof node === "object" && node !== null && "selector" in node;
+}
+
+/**
+ * The definitions and groups of `bundled` that `candidate` lost, or turned from one kind into the
+ * other, as dotted trails. Nested groups count too: CLASSJOB_ICONS keeping its ROOT but losing ICON
+ * would silently empty that column on every parse.
+ */
+function lostKeys(candidate: unknown, bundled: unknown, trail: string): string[] {
+  if (isDefinition(bundled)) return isDefinition(candidate) ? [] : [`${trail} (now a group)`];
+  if (isDefinition(candidate)) return [`${trail} (now a selector)`];
+  const record = candidate as Record<string, unknown>;
+  return Object.entries(bundled as Record<string, unknown>).flatMap(([key, child]) => {
+    const next = trail ? `${trail}.${key}` : key;
+    return key in record ? lostKeys(record[key], child, next) : [next];
+  });
+}
+
 /**
  * Throw when a downloaded file is not a usable selector file: every leaf is a definition with a
- * selector string and correctly typed options, and every top-level key the bundled copy has is still
- * present, so no column the parsers use vanishes. Regexes are not compiled here: Nodestone translates
- * and applies them per column, and upstream already ships one it can't compile (achievements'
- * ENTRY.NAME), which only affects that column, so compiling them would reject usable sets.
+ * selector string and correctly typed options, and every definition and group the bundled copy has,
+ * at any depth, is still present as the same kind, so no column the parsers use vanishes. Regexes are
+ * not compiled here: Nodestone translates and applies them per column, and upstream already ships one
+ * it can't compile (achievements' ENTRY.NAME), which only affects that column, so compiling them
+ * would reject usable sets.
  */
 export function validateSelectorFile(
   path: string,
@@ -70,10 +91,10 @@ export function validateSelectorFile(
     for (const [key, value] of Object.entries(node)) visit(value, trail ? `${trail}.${key}` : key);
   };
   visit(candidate, "");
-  const record = candidate as Record<string, unknown>;
-  const missing = Object.keys(baseline).filter((key) => !(key in record));
+  // visit() has checked every node is an object, so the comparison only walks the bundled shape.
+  const missing = lostKeys(candidate, baseline, "");
   if (missing.length) throw new Error(`${path} lost ${missing.slice(0, 5).join(", ")}.`);
-  return record;
+  return candidate as Record<string, unknown>;
 }
 
 export class SelectorStore {
@@ -107,23 +128,42 @@ export class SelectorStore {
 
   /**
    * Adopt a set a previous run of this container already activated (a restart keeps /tmp), so the
-   * sidecar doesn't fall back to the bundled selectors until the next check.
+   * sidecar doesn't fall back to the bundled selectors until the next check. The set the pointer
+   * names must still be there and pass the same validation as a download: adopting a missing or
+   * damaged one would report it live while workers quietly used the bundled copy, and activate()
+   * would never fetch it again. Returns why a pointer was not adopted, or undefined.
    */
-  async restore(): Promise<void> {
+  async restore(): Promise<string | undefined> {
+    let pointer: { file?: unknown; revision?: unknown; activatedAt?: unknown };
     try {
-      const pointer = JSON.parse(readFileSync(`${this.directory}/active.json`, "utf8")) as {
-        revision?: unknown;
-        activatedAt?: unknown;
-      };
-      if (typeof pointer.revision === "string" && /^[0-9a-f]{40}$/u.test(pointer.revision))
-        this.active = {
-          ...this.active,
-          revision: pointer.revision,
-          source: "upstream",
-          activatedAt: typeof pointer.activatedAt === "string" ? pointer.activatedAt : null,
-        };
+      pointer = JSON.parse(readFileSync(`${this.directory}/active.json`, "utf8"));
     } catch {
       // No previous set: the bundled selectors stay active until the first check.
+      return undefined;
+    }
+    try {
+      const revision = pointer.revision;
+      if (typeof revision !== "string" || !/^[0-9a-f]{40}$/u.test(revision))
+        throw new Error("The pointer names no revision.");
+      const file = `selectors-${revision}.json`;
+      if (pointer.file !== file) throw new Error("The pointer names another set.");
+      const set = JSON.parse(readFileSync(`${this.directory}/${file}`, "utf8")) as {
+        revision?: unknown;
+        files?: Record<string, unknown>;
+      };
+      if (set.revision !== revision || !set.files) throw new Error(`${file} is not that set.`);
+      for (const [path, bundled] of Object.entries(this.baseline.files))
+        validateSelectorFile(path, set.files[path], bundled);
+      this.active = {
+        ...this.active,
+        revision,
+        source: "upstream",
+        activatedAt: typeof pointer.activatedAt === "string" ? pointer.activatedAt : null,
+      };
+      return undefined;
+    } catch (error) {
+      // The bundled selectors stay active; the first check downloads HEAD again.
+      return error instanceof Error ? error.message : "unreadable";
     }
   }
 
@@ -166,9 +206,14 @@ export class SelectorStore {
     const pointer = `${this.directory}/active.json.${process.pid}.tmp`;
     await writeFile(pointer, JSON.stringify({ file, revision, activatedAt }));
     await rename(pointer, `${this.directory}/active.json`);
-    // Keep only the active set; a worker that already read its set holds it in memory.
+    // Keep the new set and the one it replaced: a worker reads the pointer, then the set it names,
+    // so one that read the old pointer just before the rename must still find the old set. Older
+    // sets go: activations are at least one check interval (five minutes or more) apart, and a
+    // worker lives no longer than its request deadline.
+    const replaced =
+      this.active.source === "upstream" ? `selectors-${this.active.revision}.json` : undefined;
     for (const name of await readdir(this.directory))
-      if (name.startsWith("selectors-") && name !== file)
+      if (name.startsWith("selectors-") && name !== file && name !== replaced)
         await rm(`${this.directory}/${name}`, { force: true });
     this.active = { ...this.active, revision, source: "upstream", activatedAt };
     return revision;
