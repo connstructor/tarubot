@@ -33,6 +33,8 @@ Readiness must report `database`, `writerLease`, `discord` and `effects` as true
 - `selectors` shows the live selector commit (`source: upstream`) or the bundled set.
 - `parsing` and `waiting` count parses running and requests waiting for a parse slot.
 
+**Retrying a job.** After fixing what a failed or blocked job needs, retry it from the operator machine with `prod dist/scripts/retry.js GUILD_ID JOB_ID` (`prod` is [MIGRATION.md](MIGRATION.md#e0-conventions) E0). What the tool retries and refuses is on the documentation site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#jobs-that-need-attention).
+
 ## Heartbeat
 
 Since 2.22.0 the bot pings a [healthchecks.io](https://healthchecks.io) check every five minutes while its readiness is fully green (database, writer lease, Discord). When the pings stop, healthchecks.io alerts the owner through Pushover and email. This catches what the issue reporter can't, because the reporter runs inside the bot: the host is down, the container is gone, the process hangs, or the bot has stayed unready.

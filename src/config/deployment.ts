@@ -418,7 +418,8 @@ function checkDatabase(
       if (!local) throw refuse(`${where} must be DevBot's local database (localhost or postgres).`);
       if (present(ca)) throw refuse(`${caSetting} must be empty for DevBot's local database.`);
       // The primary is exactly tarubot_dev, except that migrate.js --restore-rehearsal migrates the
-      // restore copy first (docs/OPERATIONS.md); the suffix was checked above.
+      // restore copy first (site/src/content/docs/deploy/operations.md); the suffix was checked
+      // above.
       if (primary ? target.name !== "tarubot_dev" && !rehearsingOnCopy : !restoreCopy)
         throw refuse(
           primary

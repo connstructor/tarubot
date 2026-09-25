@@ -3,6 +3,8 @@ node_modules/
 .cache/
 dist/
 coverage/
+# Astro's generated content types for the documentation site (site/.astro).
+.astro/
 # Local coding-tool state is not part of the application.
 .serena/
 # Runtime secrets are local; the documented example is intentionally tracked.

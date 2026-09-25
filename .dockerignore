@@ -7,6 +7,9 @@ node_modules
 **/node_modules
 dist
 coverage
+# The documentation site's build output and generated types. site/src stays: the unit tests read it.
+site/dist
+site/.astro
 artifacts
 # Credentials and legacy inputs enter only at runtime/cutover, never through image layers.
 .env

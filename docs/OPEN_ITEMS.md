@@ -2,7 +2,7 @@
 
 Reviewed against `REQUIREMENTS.md`, the implementation, automated coverage, and recorded DevBot sessions through 2026-09-24. This document records the remaining delivery work.
 
-Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which distinguishes merged source, published images, and the running DevBot. Future major-version scope is recorded separately in [ROADMAP.md](ROADMAP.md).
+Start a new session with [SESSION_HANDOFF.md](SESSION_HANDOFF.md), which distinguishes merged source, published images, and the running DevBot. Future major-version scope is recorded separately in the site's [roadmap](../site/src/content/docs/project/roadmap.md).
 
 ## Production after the cutover
 
@@ -22,8 +22,18 @@ TaruBot v2 has been live in Woven Souls since 2026-09-24. It was activated on Ap
 | Owner | **Attach a Linode Cloud Firewall** to the `tarubot` Linode (none is attached): inbound TCP 22 and ICMP only; the host publishes no other ports. |
 | Done | 35999242 (Vanessa Wolfe, Diabolos), deleted from the Lodestone: an officer ran `/unassign` at 2026-09-24 22:56 UTC. The two private profiles complete as private since 2.17.0. |
 
+## Documentation site (2.27.0, issue #33)
+
+| Who | Item |
+| --- | --- |
+| Done | **GitHub Pages enabled** before the PR: Source "GitHub Actions", and the `github-pages` environment allows only `main`. |
+| Claude, with go-ahead | Push `feat/docs-site` and open the PR. It takes the next free minor when it merges (2.27.0 on the branch; 2.24.3, 2.25.0 and 2.26.0 go first), after #32, so the moved pages carry #29, #30 and #32's changes; port any later `docs/` edits into the site pages on rebase. Merge after `CI result`, CodeQL and "Documentation site / Build" pass. |
+| Owner, after the merge | Check that the Pages deploy succeeded and the site loads with search, the 404 page and edit links. If the first run failed, dispatch `pages.yml` from `main`. Optionally set the repository's Website field to the site URL. |
+| Owner, later (deferred) | A custom domain: a `docs.<domain>` subdomain (never the production host's name), with a GitHub domain-verification TXT record, a CNAME to `deconfined.github.io`, the domain in the Pages settings and Enforce HTTPS. A code change then sets `site`, drops `base` and rewrites the `/tarubot/` link prefix; the links validator proves the result. |
+
 ## Established baseline
 
+- **2.27.0** (branch `feat/docs-site`, issue #33) adds the documentation site in `site/` (Astro Starlight with pnpm, GitHub Pages) and moves SETUP, OPERATIONS, the roadmap and the README's usage sections into it. No bot change.
 - All declared command families are implemented, including `/version`; 2.18.0 adds `/issue` (**20 roots / 44 paths**). Before that: **19 roots / 41 paths** from 2.13.0 (`/config role_layout` added). 2.15.0 adds `/officer reset` and `/guest reset` (**19 roots / 43 paths**).
 - **2.22.0** (branch `feat/heartbeat-2.22.0`) pings a healthchecks.io check every five minutes while the bot is ready, so an outside check alerts through Pushover when the host or bot goes silent (the robust-host decision of 2026-09-25).
 - **2.21.0** (merged in [PR #23](https://github.com/deconfined/tarubot/pull/23) as `220a99f`, deployed to DevBot and production on 2026-09-25) runs the Lodestone parser inside the bot and removes the sidecar (owner decision, 2026-09-25: "reduce complexity and places where things can break"), and retires App Platform's spec and tooling.

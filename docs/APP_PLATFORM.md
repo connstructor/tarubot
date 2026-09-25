@@ -103,13 +103,13 @@ Production commands are registered in global scope from the local tools: `regist
 
 ## Single-writer updates and migrations
 
-Exactly one bot process writes to the database. Each bot process takes the PostgreSQL writer lease before it logs in or starts its queue ([OPERATIONS.md](OPERATIONS.md#single-database-writer)). During an overlapping deployment, the new worker waits with liveness 200 and readiness false until the old one stops. `instance_count: 1` is a scaling setting, not a lock.
+Exactly one bot process writes to the database. Each bot process takes the PostgreSQL writer lease before it logs in or starts its queue ([the single writer](../site/src/content/docs/deploy/operations.md#single-database-writer)). During an overlapping deployment, the new worker waits with liveness 200 and readiness false until the old one stops. `instance_count: 1` is a scaling setting, not a lock.
 
 The pre-deploy job is not held back by the lease, and it can run before the old worker stops. Use this maintenance sequence for every update that carries a migration, and for restores:
 
 1. Export the **current live spec**, which keeps the encrypted secrets. Do not recreate the app or remove or rename its database component.
 2. Derive the `maintenance` phase from it and apply it. Wait for the deployment to finish, then confirm with the writer-lease gate that no writer is connected.
-3. Take an independent export and record a point-in-time-recovery timestamp ([OPERATIONS.md](OPERATIONS.md#managed-postgresql-backups-and-recovery)).
+3. Take an independent export and record a point-in-time-recovery timestamp ([the commands](#export-and-scratch-restore-commands)).
 4. In the exported live spec, set the worker, migration, and Nodestone images to the same verified release. Check it with the `full` phase and apply it. The pre-deploy migration now runs with no writer, and the new worker takes the lease afterwards. Verify readiness, the installed version, and durable work before closing the window.
 
 ```sh
@@ -146,7 +146,30 @@ To rehearse a restore (OPS-13), in a maintenance window with the worker removed:
 2. Run `check-restore.js` with `DATABASE_URL` set to the primary and `RESTORE_DATABASE_URL` set to the fork's `tarubot`. Set `RESTORE_DATABASE_CA_CERT` if the fork's CA differs. It must match exactly.
 3. Destroy the fork, which is billed; this is an authorized action.
 
-A same-cluster alternative restores into `tarubot_restore` with `pg_restore --no-owner --no-privileges`. See [OPERATIONS.md](OPERATIONS.md#managed-postgresql-backups-and-recovery) for the commands.
+A same-cluster alternative restores into `tarubot_restore` with `pg_restore --no-owner --no-privileges`; the commands follow.
+
+### Export and scratch-restore commands
+
+These were the App Platform era's commands, kept here as the record since the operations guide moved to the documentation site (2.27.0). Production's current backups are in [HOSTING.md](HOSTING.md#backups-and-recovery).
+
+**Independent export.** Take it before every maintenance window and on the owner's schedule, as `tarubot` over verified TLS with a PostgreSQL 18 client, and store it off the provider:
+
+```sh
+read -rs 'PGPASSWORD?tarubot password: '; export PGPASSWORD
+docker run --rm -e PGPASSWORD -v "$HOME/tarubot-cutover/work:/work" postgres:18.4-alpine \
+  pg_dump "host=CLUSTER_HOST port=25060 dbname=tarubot user=tarubot sslmode=verify-full sslrootcert=/work/ca-certificate.crt" \
+  -Fc -f /work/backups/tarubot-YYYYMMDD.dump
+```
+
+**Restore rehearsal.** In a maintenance window with the worker removed (the `maintenance` phase), either fork the cluster at a recorded time or restore the export into a scratch database on the same cluster. For the scratch path, `doadmin` creates `tarubot_restore` with the documented grants, then:
+
+```sh
+docker run --rm -e PGPASSWORD -v "$HOME/tarubot-cutover/work:/work" postgres:18.4-alpine \
+  pg_restore -d "host=CLUSTER_HOST port=25060 dbname=tarubot_restore user=tarubot sslmode=verify-full sslrootcert=/work/ca-certificate.crt" \
+  --no-owner --no-privileges --exit-on-error /work/backups/tarubot-YYYYMMDD.dump
+```
+
+Add `RESTORE_DATABASE_URL` to the production env file and run `prod dist/scripts/check-restore.js` (`prod` is defined in [MIGRATION.md](MIGRATION.md) E0). The production profile accepts `tarubot_restore` on the primary's host or `tarubot` on another host (a PITR fork), with `RESTORE_DATABASE_CA_CERT` when the fork's CA differs; the rehearsal profile accepts `*_restore_test`. `doadmin` drops the scratch database, or the owner destroys the billed fork, afterwards.
 
 ## Verification and provider references
 

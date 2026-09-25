@@ -1,6 +1,6 @@
 # Session handoff — v2 release readiness
 
-**Snapshot: 2026-09-23, updated 2026-09-24 after the production cutover. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and [ROADMAP.md](ROADMAP.md) records the owner's v2–v6 plan.
+**Snapshot: 2026-09-23, updated 2026-09-24 after the production cutover. Start here next session.** This records the observed repository, publication, and DevBot state; recheck them before making changes. [OPEN_ITEMS.md](OPEN_ITEMS.md) is the detailed requirements-backed checklist, and the documentation site's [roadmap](../site/src/content/docs/project/roadmap.md) records the owner's v2–v6 plan.
 
 ## 1. Where we stopped
 
@@ -108,7 +108,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - `/issue` for every member, limited to one per 10 minutes and 20 per server per day;
   - automatic reports of error-level failures, failed jobs, and repeated trouble (a roster stale for 12 hours, the Lodestone unreachable for an hour).
 
-  Automatic reports are grouped by fingerprint, repeats are commented at most hourly, a recurrence after a close opens a new issue, and each day allows 10 automatic issues and 50 comments. Reports are saved in `issue_reports` before delivery and carry redacted context ([OPERATIONS.md](OPERATIONS.md#issue-reports)).
+  Automatic reports are grouped by fingerprint, repeats are commented at most hourly, a recurrence after a close opens a new issue, and each day allows 10 automatic issues and 50 comments. Reports are saved in `issue_reports` before delivery and carry redacted context ([the site's monitoring page](../site/src/content/docs/deploy/monitoring.md#issue-reports)).
 - **Token.** The owner created the repository and an Issues-only token for it, saved as `~/tarubot-cutover/github-reports.token` (0600). The token was also pasted in chat, so it should be regenerated once the reporter runs. DevBot's `.env` needs `GITHUB_REPORTS_TOKEN` (owner action), and the production host's `.env` gets it at the deploy.
 - **Status.** Merged ([PR #19](https://github.com/deconfined/tarubot/pull/19), `98552d9`) after three review rounds, which found five real bugs, all fixed. Published by run 36088537989. On 2026-09-25 it was deployed with migration 008 to DevBot at 03:07 UTC and to production at 03:09 UTC (about 30 s down), with `/issue` registered in DevBot's guild and globally ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)). Both `.env` files hold `GITHUB_REPORTS_TOKEN`. The owner's test `/issue` opened issue #1 in `deconfined/tarubot-reports`.
 
@@ -176,12 +176,18 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
 - **Status.** Merged ([PR #27](https://github.com/deconfined/tarubot/pull/27), `8a580de`) after one review round: failures are timestamped, and `retry.js` clears the stamp. Deployed on 2026-09-25 to DevBot and production (14:30 UTC) together with 2.24.0's host step: the pull, the backup crontab line and a first run from the real path.
 
-**Update, 2.24.2 (current version):**
+**Update, 2.24.2:**
 - **Why.** The owner asked to address the two open CodeQL alerts.
 - **Change.**
   - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
   - #8: `isDefinition` checks null before `typeof`.
-- **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
+- **Status.** Merged ([PR #28](https://github.com/deconfined/tarubot/pull/28), `4a64609`). A restart deploys it.
+
+**Update, 2.27.0 (current version; the final number is set at merge):**
+- **Why.** Issue #33: a documentation site. The owner chose GitHub Pages, pnpm for the site only, an advisory site build, a hand-written command reference checked by a test, the links validator and the github.io address (REQUIREMENTS.md "Approved documentation-site amendments").
+- **Change.** `site/` holds an Astro Starlight site of 30 pages, published by `.github/workflows/pages.yml` to https://deconfined.github.io/tarubot/. SETUP.md, OPERATIONS.md and ROADMAP.md moved into it (`git mv`, then split), and so did the README's usage sections. `tests/unit/docs-site.test.ts` checks the pages against the code and guards public content. No bot change: nothing to deploy, no migration, no command change.
+- **Working with it.** Reader-facing docs now live in `site/src/content/docs/`; update the page a change affects in the same change set. Run the site's commands from `site/` with pnpm (`pnpm install --frozen-lockfile && pnpm run build`); pnpm refuses in the repository root.
+- **Status.** Branch `feat/docs-site` from `4a64609`; not yet pushed. GitHub Pages is already enabled (source GitHub Actions, `github-pages` limited to `main`).
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -355,7 +361,7 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
 - Applied migrations are immutable. Use Drizzle and `orm(client)` for application transactions, keeping state/audit/outbox together and remote I/O outside those transactions.
 - DevBot always uses `-f docker-compose.devbot.yml` and database `tarubot_dev`; pin the published bot tag. Source builds explicitly add `-f docker-compose.build.yml`. Never point destructive tests at DevBot; test databases end in `_test`.
 - The old stash `On feat/lobby-access: WIP lobby access before Drizzle persistence migration` was in the previous machine's clone; `git stash list` is empty in this one. That feature was subsequently integrated; if the stash turns up, do not reapply it blindly or discard it without permission.
-- Start future major-version work only after v2 is settled and Taru is online, unless the owner reprioritizes. See [ROADMAP.md](ROADMAP.md).
+- Start future major-version work only after v2 is settled and Taru is online, unless the owner reprioritizes. See the site's [roadmap](../site/src/content/docs/project/roadmap.md).
 
 ## Suggested next-session prompt
 

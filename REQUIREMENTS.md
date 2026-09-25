@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment"); 2026-09-25 (owner documentation-site decisions; see "Approved documentation-site amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -169,6 +169,18 @@ Known secret shapes and the deployment's own secret values are removed from ever
 **Durability.** A report is saved in PostgreSQL first and delivered by a job, so a GitHub outage loses nothing. Without a token, reports are saved and `/issue` says so. They are sent once a token is configured.
 
 **Command surface.** `/issue` brings the command surface to 20 roots and 44 paths (AC-23). It must be registered after the deployment.
+
+### Approved documentation-site amendments (2026-09-25)
+
+Issue #33 asked for a documentation site covering architecture and design, deployment, administration and everyday use. The owner decided its shape in three comments on the issue: GitHub Pages first ([comment](https://github.com/deconfined/tarubot/issues/33#issuecomment-5836313261): "Actually, GitHub pages might be even easier. Let's look at that, first."), pnpm for the site ([comment](https://github.com/deconfined/tarubot/issues/33#issuecomment-5837160498): "Personal preference: use `pnpm`."), and answers to the plan's six questions ([comment](https://github.com/deconfined/tarubot/issues/33#issuecomment-5837662307)). Release 2.27.0 implements them. The bot's behavior, commands and schema don't change.
+
+**Site and hosting.** The site is Astro Starlight in `site/`, published to GitHub Pages at `https://deconfined.github.io/tarubot/`. There is no custom domain for now; one would be a later, separately authorized owner step.
+
+**Toolchain.** `site/` is a standalone pnpm package on Node, both pinned in `site/package.json`. pnpm applies to `site/` only: the bot, its tooling, tests and image stay on Bun, which the Bun-throughout decision above otherwise still requires.
+
+**Build and deploy.** The site build runs on pull requests that touch the site as an advisory check, not part of the required `CI result`. It deploys only from `main`, through the `github-pages` environment. The required gate for page content is a unit test in the existing checks.
+
+**Content.** The site is the only home of reader-facing documentation. The setup, operations and roadmap guides and the README's usage sections moved into it. Contributor detail and maintainer records stay in `docs/`, unpublished. Pages use placeholders only, never production or development IDs, member or character data, private hosts or secrets. The command reference is hand-written, and a unit test checks it against the registered commands, options and examples. The `starlight-links-validator` plugin fails the build on a broken internal link or anchor.
 
 ## 1. Purpose and interpretation
 

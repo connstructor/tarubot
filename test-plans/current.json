@@ -1,19 +1,18 @@
 {
-  "title": "Session: 2.24.2 code-scanning fixes",
-  "objective": "2.24.2 closes the two CodeQL alerts in the Lodestone parser: the worker now ignores messages that don't come from the bot itself, and a null check reads correctly. Parsing is unchanged. No migration and no command change.",
+  "title": "Session: 2.27.0 documentation site",
+  "objective": "2.27.0 publishes the documentation site at deconfined.github.io/tarubot from site/ (Astro Starlight, built with pnpm). The bot is unchanged: no migration, no command change, and nothing to deploy. Check that the site reads well and matches what the bot does.",
   "user": [
-    "Run /claim or /characters once: character and FC names read as before.",
-    "Check the repository's Security tab: both alerts should show as fixed after the merge.",
-    "Confirm the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
+    "Open https://deconfined.github.io/tarubot/ after the merge: the six sidebar groups, search (try adopt_holders), dark mode and an Edit page link.",
+    "Compare one Use TaruBot page with the bot: run /claim or /characters and check the page describes what you see.",
+    "Read the Run a server pages you'd send an officer, and flag anything unclear."
   ],
   "assistant": [
-    "Deploy 2.24.2 to DevBot and production with the owner's go-ahead (restarts, no migration).",
-    "Check the next day's scheduled backup in ~/tarubot-backup.log and the bucket.",
-    "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "After the merge, confirm the Documentation site workflow deployed and the site serves search and a 404 page.",
+    "Keep the site current: a change to a command, option, setting or reply code updates its page in the same change set.",
+    "Record the first deploy in docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.24.2 on schema 008 with the heartbeat on in production.",
-    "Parse Lodestone pages in workers that accept only the bot's own messages.",
+    "Keep running the release already deployed; 2.27.0 changes no running code.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }
