@@ -341,6 +341,47 @@ describe("reasons", () => {
       leader: { value: false, decisive: false, reason: "no_fc_leader" },
     });
   });
+
+  /** One pass's Guest observation from real policy facts, as Synchronization.user builds it. */
+  const guestSeen = (input: AccessFacts, memberBound = true): FlagObservation => {
+    const desired = desiredAccess(input);
+    const decisive = accessDecisive(input);
+    return statusObservation({
+      bound: { member: memberBound, guest: true, officer: true, leader: true },
+      values: { member: desired.member, guest: desired.guest, officer: false, leader: false },
+      decisive: { member: decisive.member, guest: decisive.guest, officer: true, leader: true },
+      facts: { ...none, guestRevoked: input.revoked },
+    }).guest;
+  };
+
+  test("a lost Guest is `is_member` only when the same pass decided Member", () => {
+    // Member held by hand on an out-of-date roster, Guest revoked: Member isn't decisive, so the
+    // revocation is the reason, not "a linked character is in the FC".
+    expect(
+      guestSeen(facts({ membership: "member", revoked: true, hasMember: true, verified: true })),
+    ).toEqual({ value: false, decisive: true, reason: "guest_revoked" });
+    // The same member with a fresh roster: Member is decisive, and the lost Guest is part of it.
+    expect(
+      guestSeen(
+        facts({
+          membership: "member",
+          fresh: true,
+          revoked: true,
+          hasMember: true,
+          verified: true,
+        }),
+      ),
+    ).toEqual({ value: false, decisive: true, reason: "is_member" });
+    // No Member role bound: a decisive FC member still loses Guest because of the FC, so the
+    // reason stays the true one ("Guest → No access · a linked character is in the FC"); the
+    // other two would claim a revocation or no FC history that isn't there.
+    expect(
+      guestSeen(
+        facts({ membership: "member", fresh: true, hasGuest: true, verified: true }),
+        false,
+      ),
+    ).toEqual({ value: false, decisive: true, reason: "is_member" });
+  });
 });
 
 describe("entries and marks", () => {

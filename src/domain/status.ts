@@ -402,8 +402,11 @@ export function statusReason(
 
 /**
  * One pass's observation: a bound flag carries the pass's value, whether it is decisive and its
- * reason; an unbound flag is null. `values.member` is the pass's Member decision, which a lost
- * Guest's reason reads.
+ * reason; an unbound flag is null. A lost Guest reads as being a Member (`is_member`) only when the
+ * same pass decided Member decisively: a Member kept only because the role is held (out-of-date
+ * evidence) isn't why Guest went, so the reason falls through to a revocation or no Guest basis.
+ * With no Member role bound, a decisive FC member still gets `is_member` ("a linked character is in
+ * the FC"): that is why the policy removed Guest, and the other two reasons would be untrue.
  */
 export function statusObservation(input: {
   readonly bound: Readonly<Record<Flag, boolean>>;
@@ -411,10 +414,11 @@ export function statusObservation(input: {
   readonly decisive: Readonly<Record<Flag, boolean>>;
   readonly facts: ReasonFacts;
 }): Observation {
+  const member = input.decisive.member && input.values.member;
   const one = (flag: Flag): FlagObservation => ({
     value: input.bound[flag] ? input.values[flag] : null,
     decisive: input.decisive[flag],
-    reason: statusReason(flag, input.values[flag], input.values.member, input.facts),
+    reason: statusReason(flag, input.values[flag], member, input.facts),
   });
   return {
     member: one("member"),

@@ -232,8 +232,9 @@ Issue #31 asked that officers see material membership changes in the officer not
 The plan also leaves out roles given on joining or rejoining the server, people who left it, the first check after the deploy or activation (which only records everyone's status), nicknames, FC rank changes that change neither Officer nor FC Leader, characters nobody linked, and FC joins that change no access.
 
 **Implementation notes (2.27.0; not owner decisions).**
-- Linking an FC to a server whose roles are already set up lists its confirmed members as Guest → Member after the first roster check; unlinking lists the reverse.
-- A failed or interrupted post is resent with identical content under the same Discord nonce, and each send is recorded as a delivery attempt. After a terminal failure, `retry.js` or the next change in that server posts what waits.
+- Linking an FC to a server whose roles are already set up lists its confirmed members as Guest → Member after the first roster check, or about 2 minutes after the relink when the same FC is relinked while its last roster is still fresh (`/config fc unlink` keeps the membership rows); unlinking lists the reverse.
+- A failed or interrupted post is resent with identical content under the same Discord nonce, and each send is recorded as a delivery attempt. A post Discord accepted is recorded as delivered before it is marked, so a retry after a failed mark only marks it and never posts it twice. After a terminal failure, `retry.js` or the next change in that server posts what waits.
+- Decision 5 is applied when a change is recorded: while the channel is unset, a change counts as announced at once and a departure isn't recorded, so setting the channel afterwards posts none of it. A post in progress stops before its next message if the channel is unset or moved, or Discord changes are paused.
 - The departures count stays in DevBot's "FC roster accepted" line only (#29).
 
 ## 1. Purpose and interpretation

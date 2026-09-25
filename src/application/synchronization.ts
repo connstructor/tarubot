@@ -317,10 +317,13 @@ export class Synchronization {
             }),
           });
         }
+        // Only guilds with an officer notifications channel record departures (owner decision 5:
+        // nothing is saved for later while it is unset), so only their owners are locked. The
+        // channel was read under this transaction's share lock on the guild row, so it holds.
         const owners = new Map<string, DepartingOwner>();
         for (const plan of plans)
           for (const { link, departed } of plan.links)
-            if (departed)
+            if (departed && plan.guild.officer_notifications_channel_id)
               owners.set(`${plan.guild.id}:${link.user_id}`, {
                 guild: plan.guild.id,
                 user: link.user_id,
@@ -392,8 +395,15 @@ export class Synchronization {
           }
           // Every confirmed departure of a linked character goes on its owner's row, including
           // alts whose owner keeps Member and owners no longer in the server, and queues the
-          // guild's status post once (owner decision on #29: "Let #31 handle" departures).
-          await recordDepartures(client, guild.id, departures, states);
+          // guild's status post once (owner decision on #29: "Let #31 handle" departures). A guild
+          // with no officer channel records none; the DevBot roster line below still counts them.
+          await recordDepartures(
+            client,
+            guild.id,
+            guild.officer_notifications_channel_id,
+            departures,
+            states,
+          );
           const reconciliation = await enqueue(
             client,
             "reconcile.guild",
@@ -708,18 +718,34 @@ export class Synchronization {
     const members = await this.app.discord.members(guildId);
     await this.app.db.transaction(async (client) => {
       const db = orm(client);
-      // Lock every existing member row of the guild first, in user order compared as plain strings
-      // (2.27.0). The pass locks these rows anyway (ensureUser for present members, then the
-      // closing present=false update for the rest), but in the gateway's enumeration order; taking
-      // them up front in the global (guild_id, user_id) order keeps it from deadlocking with the
-      // roster's departing-owner lock and the status-post freeze. Rows ensureUser inserts for new
-      // members are new keys nobody else holds.
+      // The lock order (2.27.0; status-notices.ts has the whole rule): the guild row first, FOR
+      // SHARE, then every existing member row of the guild in user order compared as plain strings,
+      // then job rows. /config adoption, /setup and activation lock the guild row FOR UPDATE before
+      // their member and job rows, so they now queue behind this pass (and it behind them) on the
+      // guild row, instead of each holding what the other waits for. The same read gives the
+      // switches that decide which guild-wide child work this run attaches: role layout only when
+      // presentation is on, channel access only when onboarding is on.
+      const [switches] = await db
+        .select({
+          access: t.guilds.access_policy_enabled,
+          layout: t.guilds.role_layout_enabled,
+        })
+        .from(t.guilds)
+        .where(eq(t.guilds.id, guildId))
+        .for("share");
+      // The pass locks the member rows anyway (ensureUser for present members, then the closing
+      // present=false update for the rest), but in the gateway's enumeration order; taking them up
+      // front in the global (guild_id, user_id) order keeps it from deadlocking with the roster's
+      // departing-owner lock and the status-post freeze. FOR NO KEY UPDATE, the strength those
+      // writes take, never blocks the FOR KEY SHARE of a foreign-key check (the roster's
+      // membership_history inserts, for one). Rows ensureUser inserts for new members are new keys
+      // nobody else holds.
       await db
         .select({ user_id: t.guildUsers.user_id })
         .from(t.guildUsers)
         .where(eq(t.guildUsers.guild_id, guildId))
         .orderBy(sql`${t.guildUsers.user_id} COLLATE "C"`)
-        .for("update");
+        .for("no key update");
       // Each requesting run tracks all child work, including coalesced role-layout jobs.
       const attach = async (child: string) => {
         await db
@@ -733,15 +759,6 @@ export class Synchronization {
           )
           .onConflictDoNothing();
       };
-      // One read of the guild's switches decides which guild-wide child work this run attaches:
-      // role layout only when presentation is on, channel access only when onboarding is on.
-      const [switches] = await db
-        .select({
-          access: t.guilds.access_policy_enabled,
-          layout: t.guilds.role_layout_enabled,
-        })
-        .from(t.guilds)
-        .where(eq(t.guilds.id, guildId));
       if (switches?.layout) await attach(await layoutGuildRoles(client, guildId));
       if (switches?.access) await attach(await secureGuildChannels(client, guildId));
       for (const member of members) {

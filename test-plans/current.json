@@ -4,7 +4,7 @@
   "user": [
     "After the deploy: nothing posts in the officer notifications channel.",
     "/officer revoke on a rank officer: within about 3 minutes, one 'Member status changes' post with 'Officer removed · officer access revoked'. Then /officer reset: 'Officer added · FC officer rank' (run /refresh first if the roster is older than 6 hours).",
-    "/guest grant then /guest revoke on the same visitor within a minute: no post. A /refresh that changes nothing posts nothing."
+    "On a visitor with no Guest role (no linked character): /guest grant, then /guest revoke within a minute, then /guest reset: no post. A /refresh that changes nothing posts nothing."
   ],
   "assistant": [
     "With the owner's go-ahead: stop, back up, restore-check at 009, rehearse migration 010 on the copy (the three guild_users columns NULL), migrate tarubot_dev, then up (ENABLE_EFFECTS=true). No command registration.",
