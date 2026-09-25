@@ -117,7 +117,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Issue reports (2.18.0):
   - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
-  - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` needs the owner to add the token.
+  - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` and the production host's both hold it (rotated on 2026-09-25).
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
 - Officer Lodestone notices (2.24.3, #29):
   - "FC roster accepted" posts only in the test guild (`guild.id === TEST_GUILD_ID`), on `officer:<guild>`. Production posts no roster line.

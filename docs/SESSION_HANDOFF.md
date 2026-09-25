@@ -265,7 +265,7 @@ Keep these owner-approved decisions intact:
 
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
-3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
+3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, and the DigitalOcean cleanup. The legacy MariaDB login (the legacy host is shut down), DevBot's `GITHUB_REPORTS_TOKEN` and the reports-token rotation are done.
 4. Deploy 2.24.2 if it isn't yet (a restart), then deploy 2.24.3 (#29, merged; restarts, no registration). Then merge and deploy 2.25.0 (#30, PR #35: update posts, migration 009, a command registration), #32 (2.26.0) and later #31 (2.27.0), in the agreed release order. The robust, disposable host (owner decision, 2026-09-25) still needs the SSH deploy workflow from GitHub Actions, which takes the next free minor after #31; the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done.
 5. After that, OPS-10/OPS-11.
 
