@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", and "Approved changelog amendments (2026-09-25)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", and "Approved changelog amendments (2026-09-25)".
 
 ## Project map
 
@@ -119,6 +119,13 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
   - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` needs the owner to add the token.
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
+- Officer Lodestone notices (2.24.3, #29):
+  - "FC roster accepted" posts only in the test guild (`guild.id === TEST_GUILD_ID`), on `officer:<guild>`. Production posts no roster line.
+  - The degraded notice has its own key, `officer:<guild>:degraded:<fc>`, and is held 300 s. A non-waiting roster failure queues it unless a row on that key is pending (`queued`, `running`, `blocked` or `disabled`, of any age), or one created after the FC's `last_successful_roster_at` finished (or, unfinished, was created) within 24 h: `coalesce(completed_at, created_at)`.
+  - An accepted roster with `last_error` set closes the key's unstarted rows as `{skipped: "recovered before posting"}` in every guild linked to the FC, active or not (the queue never claims an inactive guild's rows). For active guilds only, it queues `officer:<guild>:recovered:<fc>` (5 s) if a degraded row created after the previous boundary has a `message_id` or is `running`. `/config fc unlink` closes the old FC's unstarted row as `{skipped: "FC unlinked"}`.
+  - Accepted edge case: a `running` degraded row is left alone at recovery and at unlink; if its send fails and is retried, it can post after the recovery line or the unlink. `dispatch.ts` is unchanged and doesn't know a notice's FC.
+  - The boundary (`observedAt`, the bot's clock) is compared with `jobs.created_at` (the database's), so the two clocks must agree to within a few seconds (a fetch); NTP keeps them to milliseconds.
+  - The `jobs` rows are the notice history, read by exact `dedupe_key`: never prune `officer.notify` rows (docs/PERSISTENCE.md).
 - Update posts (2.25.0):
   - `guilds.changelog_version` is the newest version a guild was told about. Setting `/config changelog` where no channel was sets it to the running version (or keeps a higher one), so nothing posts until the next release with a member note. Moving or unsetting the channel keeps it, and the bot never lowers it: restarts and rollbacks on the same schema post nothing.
   - Startup queues one `changelog.post` (`changelog:<guild>`, payload `{}`) per present guild with a channel and an older baseline; a pending one merges. The job reads the range when it runs. `changelog unconfigured`, `already announced` and `nothing for members` complete before the effects gate, like `layout disabled`; only a post parks or blocks. The nonce key is `changelog:<guild>:<running version>`, and a compare-and-set moves the baseline.

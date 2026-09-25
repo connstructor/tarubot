@@ -395,9 +395,19 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
+### 2.24.3 rollout (planned)
+
+Not yet deployed. 2.24.3 (#29) makes the officer Lodestone notices quieter; it needs a restart only, with no migration and no registration. Each step needs the owner's go-ahead:
+
+- **DevBot**, following CLAUDE.md "Updating DevBot": stop `tarubot`; `pg_dump` to `.cache/backups/tarubot_dev-before-2.24.3-<sha>.dump`; restore into `tarubot_dev_restore_test` and run `check-restore.js` at 008; no migration; `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3`; `commands.js list` as a read-only check (nothing to register); readiness (`writerLease`), logs and the plan in #chat. Then `/refresh force:true`: the officer notifications channel still gets "FC roster accepted: …".
+- **Production**, following [HOSTING.md](HOSTING.md#updating-to-a-release) "A release without a migration": `git pull --ff-only`, pin `TARUBOT_IMAGE_TAG=2.24.3`, pull, `up -d --wait --remove-orphans`; no registration. After the next scheduled roster read (every 6 hours), confirm no new `officer:<guild>` row and nothing in the officer channel.
+- **During an outage.** The new degraded key has no history, so a deploy during a Lodestone outage can post one more degraded notice, and later its recovery line.
+- **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
+- There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
+
 ### 2.25.0 rollout plan (update posts; not yet run)
 
-2.25.0 adds migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+2.25.0 adds migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). It includes 2.24.3's changes and follows the 2.24.3 rollout above. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
 
 1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.25.0-<sha>.dump`.
 2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version` naming the current head (`008_issue_reports.sql`).
