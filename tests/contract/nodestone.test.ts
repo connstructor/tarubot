@@ -265,3 +265,26 @@ describe("client retry policy (2.17.0)", () => {
     }
   });
 });
+
+test("a deadline during a retry backoff is unavailable and no Lodestone answer (2.18.0 review)", async () => {
+  // A full sidecar asks for a one-second backoff; the job deadline ends during it.
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({ ok: false, code: "busy", retryAfter: 1 }, { status: 429 }),
+  });
+  const adapter = new Nodestone(`http://localhost:${server.port}`);
+  try {
+    await expect(
+      adapter.request({ operation: "fc", id: fcId }, AbortSignal.timeout(200)),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    // Not a raw AbortError, and not counted as the Lodestone answering.
+    expect(adapter.reachability()).toMatchObject({
+      lastAnswerAt: null,
+      failingSince: expect.any(Date),
+      lastFailure: "unavailable",
+    });
+  } finally {
+    adapter.stop();
+    await server.stop(true);
+  }
+});

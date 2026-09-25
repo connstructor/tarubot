@@ -29,6 +29,7 @@ The owner asked for an "unexpected behavior handler" that opens GitHub issues wi
   - An FC with no accepted roster yet (freshly linked) was reported as "not accepted for 12+ hours" within minutes. It is now reported only after the check has seen it without a roster for 12 hours.
   - One failed Lodestone request followed by an hour of quiet looked like an hour-long outage. The client now records its last attempt, and an outage is reported only while attempts keep failing (the last within 30 minutes).
   - A CONFIGURATION.md sentence was corrected.
+  - The re-review found that a job deadline expiring during the client's retry backoff escaped as a raw `AbortError`. That counted as a Lodestone answer, which reset the outage clock, and read as an unexpected error. It now ends as `unavailable`, like a deadline caught before the backoff, and anything other than a page that says something about the request counts as unanswered.
 - **Tests:**
   - redaction of every secret shape, fingerprints, stack frames, bounds and Markdown, and the log buffer;
   - the GitHub client's requests and failure mapping against a local fake;

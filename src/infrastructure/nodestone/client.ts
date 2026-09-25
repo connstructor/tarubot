@@ -334,9 +334,11 @@ export class Nodestone {
       this.answered();
       return result;
     } catch (error) {
-      if (error instanceof Failure && UNREACHABLE.has(error.code)) {
+      // Only a page that says something about the request is an answer; an unreachable code or
+      // any other error (a cancelled request, a transport fault) is not.
+      if (!(error instanceof Failure) || UNREACHABLE.has(error.code)) {
         this.failingSince ??= new Date();
-        this.lastFailure = error.code;
+        this.lastFailure = error instanceof Failure ? error.code : "unavailable";
       } else this.answered();
       throw error instanceof Failure ? withResource(error, input) : error;
     }
@@ -407,14 +409,23 @@ export class Nodestone {
               : new Failure("unavailable", "Nodestone is unavailable.");
         if (!RETRYABLE.has(failure.code) || attempt === this.limits.LODESTONE_ATTEMPTS - 1)
           throw failure;
-        await delay(
-          Math.min(
-            this.limits.LODESTONE_JOB_TIMEOUT_MS,
-            Math.max(failure.retryAfter * 1000, 1000 * 2 ** attempt + Math.random() * 250),
-          ),
-          undefined,
-          { signal },
-        );
+        try {
+          await delay(
+            Math.min(
+              this.limits.LODESTONE_JOB_TIMEOUT_MS,
+              Math.max(failure.retryAfter * 1000, 1000 * 2 ** attempt + Math.random() * 250),
+            ),
+            undefined,
+            { signal },
+          );
+        } catch {
+          // The deadline or shutdown during the backoff ends the request as the check above does,
+          // never as a raw AbortError: that would read as unexpected, and as a Lodestone answer.
+          throw new Failure(
+            "unavailable",
+            "Lodestone work was cancelled or exceeded its job deadline.",
+          );
+        }
       }
     }
     throw new Failure("unavailable", "Nodestone is unavailable.");
