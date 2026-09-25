@@ -3,6 +3,7 @@ import { ServiceKey } from "../bot/services.js";
 import { DiscordGateway } from "../discord/gateway.js";
 import { Database } from "../infrastructure/postgres/database.js";
 import { GuildEvents } from "./guild-events.js";
+import { IssueReports } from "./issue-reports.js";
 import { ApplicationLifecycle } from "./lifecycle.js";
 import { Service } from "./service.js";
 import { Synchronization } from "./synchronization.js";
@@ -43,4 +44,9 @@ export const roleAdministrationKey = new ServiceKey(
 export const versionInformationKey = new ServiceKey(
   "project version information",
   (value): value is VersionInformation => value instanceof VersionInformation,
+);
+/** Issue reports (2.18.0): /issue saves through it; automatic reports come from the root. */
+export const issueReportsKey = new ServiceKey(
+  "issue reports",
+  (value): value is IssueReports => value instanceof IssueReports,
 );

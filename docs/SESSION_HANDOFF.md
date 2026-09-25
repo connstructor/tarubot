@@ -93,13 +93,24 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Docs.** HOSTING.md (new), the MIGRATION.md cutover record, the superseded notes and the `app:` trusted-source correction in APP_PLATFORM.md, the REQUIREMENTS.md hosting amendment, and CLAUDE.md, README.md and OPERATIONS.md.
 - **Status.** Merged ([PR #17](https://github.com/deconfined/tarubot/pull/17), `1655adc`; the Claude review's HOSTING.md finding was fixed in `b556b28`) and published by run 36072940021. Deployed to production at 23:39 UTC and to DevBot at 23:40 UTC ([DEV_GUILD.md](DEV_GUILD.md#2161-rollout--2026-09-24)). The host clone now tracks `main`. The late-joiner report found none, and the planned profile retries were unnecessary.
 
-**Update, 2.17.0 (current version):**
+**Update, 2.17.0:**
 - **Branch.** `feat/lodestone-hardening-2.17.0` starts from `main` at `1655adc` (2.16.1, PR #17). It implements the owner's Lodestone decisions of 2026-09-24 (REQUIREMENTS.md "Approved Lodestone amendments") and adds migration `007_profile_checks.sql`. There are no command changes.
 - **Retry storm.** The scheduler uses `scheduleJob` (`ON CONFLICT DO NOTHING`), so it never pulls a job that is backing off forward. It also stamps `characters.profile_retry_at` an hour ahead, so each character is refreshed at most hourly, whatever the outcome.
 - **Two-404 rule.** A profile 404 completes the job. The first is recorded in `profile_missing_at`. One at least an hour later ends every active link through `/unclaim`'s `endLink`, audited with a null actor, with an officer notice per link. Any sighting in between clears the mark.
 - **Private profiles.** The sidecar's `private` becomes `private_profile`. The refresh waits for the profile interval, links stay, and commands show "Lodestone profile is private".
 - **Throttling.** The sidecar's `LodestoneGate` refuses starts during a shared cooldown after a 429 (15 s, doubling to 5 min). `rate_limited` is a waiting code, the client no longer retries it, and a full sidecar answers `busy`.
-- **Status.** Committed locally; not yet pushed. On deployment: DevBot needs the migration rehearsal; production follows HOSTING.md's migration procedure. The three storm IDs should stop failing, and 35999242 should unlink an hour after its first 404.
+- **Status.** Merged ([PR #18](https://github.com/deconfined/tarubot/pull/18), `baa9d3c`) and published by run 36077621763. On 2026-09-25 it was deployed with migration 007 to DevBot at 00:33 UTC and to production at 00:34 UTC (about 31 s down) ([DEV_GUILD.md](DEV_GUILD.md#2170-rollout--2026-09-25)). The two private profiles now complete as private. 35999242 had already been unlinked by an officer.
+- **Hosting follow-up (owner decision, 2026-09-25).** The owner kept production on the Linode host rather than splitting it across App Platform and Linode, and asked that the host be made robust and disposable. That means a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, confirmed backups with off-site dumps, and an SSH deploy workflow (REQUIREMENTS.md, hosting amendment).
+
+**Update, 2.18.0 (current version):**
+- **Branch.** `feat/issue-reporter-2.18.0` starts from `main` at `baa9d3c` (2.17.0, PR #18). It adds migration `008_issue_reports.sql` and `/issue` (20 roots, 44 paths), so commands need registering after the deploy.
+- **Issue reports.** Reports go to the private repository `deconfined/tarubot-reports`, using `GITHUB_REPORTS_TOKEN`:
+  - `/issue` for every member, limited to one per 10 minutes and 20 per server per day;
+  - automatic reports of error-level failures, failed jobs, and repeated trouble (a roster stale for 12 hours, the Lodestone unreachable for an hour).
+
+  Automatic reports are grouped by fingerprint, repeats are commented at most hourly, a recurrence after a close opens a new issue, and each day allows 10 automatic issues and 50 comments. Reports are saved in `issue_reports` before delivery and carry redacted context ([OPERATIONS.md](OPERATIONS.md#issue-reports)).
+- **Token.** The owner created the repository and an Issues-only token for it, saved as `~/tarubot-cutover/github-reports.token` (0600). The token was also pasted in chat, so it should be regenerated once the reporter runs. DevBot's `.env` needs `GITHUB_REPORTS_TOKEN` (owner action), and the production host's `.env` gets it at the deploy.
+- **Status.** Committed locally; not yet pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -162,11 +173,11 @@ Keep these owner-approved decisions intact:
 
 ## 3. First actions next session
 
-1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.17.0 (`feat/lodestone-hardening-2.17.0`) was pushed, merged and published.
-2. With the owner's go-ahead, deploy 2.17.0 to DevBot (with the migration rehearsal on the restore copy) and to production ([HOSTING.md](HOSTING.md#updating-to-a-release), the migration procedure). Then check that the three storm IDs stop producing failed rows, and that 35999242 unlinks an hour after its first 404, with an officer notice.
-3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, and the reports repository and token.
-4. Build 2.18.0, the issue reporter and `/issue`, as the owner specified: a private reports repository; `/issue` for everyone, limited to one per user per 10 minutes and 20 a day per server; automatic reports on errors and repeated trouble, grouped by fingerprint, with a daily cap.
-5. After that, OPS-10/OPS-11, and a deploy workflow re-planned for the Compose host.
+1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
+2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
+3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
+4. Make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
 
@@ -195,8 +206,9 @@ If your shell isn't in the `docker` group, run each `docker` command through `sg
 - [x] **2.15.1 (GitHub account rename to `deconfined`):** merged and published (PR #15, `529990f`).
 - [x] **2.16.0 (deployment safeguards):** merged and published (PR #16, `c812d4d`), deployed to DevBot, and used for the production cutover.
 - [x] **2.16.1 (Linode hosting):** merged and published (PR #17, `1655adc`), deployed to production and DevBot.
-- [ ] **P1 — 2.17.0 Lodestone hardening:** implemented on `feat/lodestone-hardening-2.17.0` (migration 007). Push, PR, merge and publish, then deploy to DevBot and production with the migration procedure.
-- [ ] **P1 — 2.18.0 issue reporter (approved order):** automatic GitHub issues in a private reports repository, and `/issue`.
+- [x] **P1 — 2.17.0 Lodestone hardening:** merged (PR #18, `baa9d3c`), published, and deployed to DevBot and production on 2026-09-25 with migration 007.
+- [ ] **P1 — 2.18.0 issue reporter:** implemented on `feat/issue-reporter-2.18.0` (migration 008, `/issue`). Push, PR, merge and publish, then deploy and register commands.
+- [ ] **P1 — Robust and disposable host** (owner decision, 2026-09-25).
 - [ ] **P1 — Officer operational alerts (OPS-11 / DB-07), after launch:** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
 - [ ] **P1 — Telemetry (OPS-10), after launch:** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
 - [ ] **P2 — Burst handling:** rehearse role-event coalescing and member-enumeration backoff at representative guild size; fix any remaining rate-limit/recovery problems.
@@ -276,4 +288,4 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. TaruBot v2 has been live in Woven Souls since 2026-09-24. It runs on the Linode Docker host `tarubot@tarubot.deconfined.com` with Linode managed PostgreSQL (docs/HOSTING.md); 2.16.1 is deployed there and on DevBot. Check whether 2.17.0 (`feat/lodestone-hardening-2.17.0`: paced profile refreshes, private profiles, the two-404 unlink, sidecar 429 cooldown, migration 007) was merged and published. With the owner's go-ahead, deploy it to DevBot and production with the migration procedure. Then confirm the retry storm is gone and 35999242 unlinks after its second 404. Raise the owner's open items in docs/OPEN_ITEMS.md ("Production after the cutover"). Next is 2.18.0, the GitHub issue reporter and `/issue`. Preserve the owner's launch, reply-session, hosting and Lodestone decisions in REQUIREMENTS.md.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. TaruBot v2 has been live in Woven Souls since 2026-09-24. It runs on the Linode Docker host `tarubot@tarubot.deconfined.com` with Linode managed PostgreSQL (docs/HOSTING.md); 2.17.0 is deployed there and on DevBot. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`: `/issue` and automatic issue reports to the private `deconfined/tarubot-reports`, migration 008) was merged and published. With the owner's go-ahead, deploy it with the migration procedure, add `GITHUB_REPORTS_TOKEN` to the host's `.env`, register the commands, and confirm a test `/issue` opens an issue. Then make the host robust and disposable as the owner decided on 2026-09-25: a rebuild runbook, an encrypted off-host `.env` copy, a heartbeat, backups, and an SSH deploy workflow. Raise the owner's open items in docs/OPEN_ITEMS.md. Preserve the owner's decisions in REQUIREMENTS.md.

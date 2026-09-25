@@ -187,3 +187,10 @@ The migration does not change any guild's revision. Follow the same stopped-writ
 - `characters.profile_missing_at` records the first Lodestone 404 of the two-404 unlink rule.
 
 Both start NULL. Follow the same stopped-writer backup/migration procedure; on the production host that is [HOSTING.md](HOSTING.md#updating-to-a-release). No command changes, so nothing needs re-registering.
+
+**2.18.0 adds `008_issue_reports.sql` and `/issue`**:
+
+- `issue_reports` saves each report before delivery to the private reports repository.
+- `/issue` is a new command: 20 roots, 44 paths.
+
+Follow the stopped-writer backup/migration procedure, then register the commands: DevBot's guild, or production with `register.js --global`. Set `GITHUB_REPORTS_TOKEN` in the bot's `.env` for reports to be sent; without it they are saved.

@@ -1,21 +1,21 @@
 {
-  "title": "Session: 2.17.0 Lodestone hardening",
-  "objective": "Check 2.17.0 on DevBot, then production: migration 007 applies cleanly, profile refreshes are paced hourly, private profiles and deleted characters stop failing, Lodestone 429s pause the sidecar instead of failing jobs, and a character that answers 404 twice, an hour apart, is unlinked with an officer notice. No command change.",
+  "title": "Session: 2.18.0 issue reports",
+  "objective": "Check 2.18.0 on DevBot, then production: migration 008 applies, /issue is registered and opens an issue in the private reports repository with the reporter's context, its limits refuse politely, and automatic reports open one issue per kind of trouble with hourly repeat comments.",
   "user": [
-    "Approve the rollout, then run `/version`: 2.17.0, linked to deconfined/tarubot.",
-    "Run `/sync status`: no new failed profile lines keep appearing for the same character.",
-    "Optional: set a test character's Lodestone profile to private, then run `/verify` or `/claim` on it; the reply reads \"Lodestone profile is private\".",
-    "In Woven Souls, after the production rollout plus an hour, confirm the officer notice that Vanessa Wolfe (35999242) was unlinked."
+    "Approve the rollout and add GITHUB_REPORTS_TOKEN to DevBot's .env (it's in ~/tarubot-cutover/github-reports.token).",
+    "Run `/issue description:` with a short test note; the reply reads \"Report received\" with a Ref.",
+    "Run `/issue` again at once; it refuses with \"You can send another report later\" and when.",
+    "Check deconfined/tarubot-reports: the issue has your note, your account, TaruBot's state and recent logs, and no secrets."
   ],
   "assistant": [
-    "Roll out DevBot with the owner's go-ahead: stop, back up, restore check at 006, rehearse migration 007 on the restore copy, migrate, start 2.17.0.",
-    "Check readiness, one lease holder, the sidecar's `lodestone` health field, and `characters.profile_retry_at` stamps after the first scheduler pass.",
-    "Deploy production per HOSTING.md's migration procedure: pull and pin 2.17.0, stop, gate and back up, migrate, start.",
-    "Watch the three known IDs: 35999242 records a first 404, then unlinks an hour later; 13746792 and 51218446 complete as private."
+    "Roll out DevBot with the owner's go-ahead: stop, back up, restore check at 007, rehearse migration 008, migrate, start 2.18.0, register the guild commands (20 roots, 44 paths).",
+    "Confirm the issue.report job succeeded and the issue's labels and title; delete nothing from GitHub.",
+    "Deploy production per HOSTING.md's migration procedure with GITHUB_REPORTS_TOKEN in the host's .env, then register global commands and read them back.",
+    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.17.0 on schema 007.",
-    "Queue each character's profile refresh at most hourly, wait out Lodestone cooldowns, treat private profiles as answers, and unlink a character only after two 404s an hour apart.",
+    "Run compiled 2.18.0 on schema 008.",
+    "Save each report before delivery; group automatic reports by fingerprint, comment on repeats at most hourly, and cap automatic issues and comments per day.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

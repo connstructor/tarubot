@@ -1,6 +1,7 @@
 /** GitHub response contracts, signature status, request coalescing, and outage isolation. */
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { GitHubHistory } from "../../src/infrastructure/github/client.js";
+import { GitHubIssues } from "../../src/infrastructure/github/issues.js";
 import { project } from "../../src/config/project.js";
 
 /** Commit bodies and untrusted response URLs must not leak into rendered titles/links. */
@@ -114,4 +115,124 @@ test("invalid commit counts fail before network access", async () => {
   });
   for (const count of [0, -1, 11, 1.5, NaN]) await expect(client.recent(count)).rejects.toThrow();
   expect(calls).toBe(0);
+});
+
+describe("issue reports client (2.18.0)", () => {
+  /** A fake GitHub that records requests and answers from a script, one response per call. */
+  function fakeGitHub(script: (() => Response)[]) {
+    const seen: { method: string; path: string; auth: string | null; body: unknown }[] = [];
+    let call = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        seen.push({
+          method: request.method,
+          path: url.pathname,
+          auth: request.headers.get("authorization"),
+          body: request.method === "POST" ? await request.json() : null,
+        });
+        return (script[Math.min(call++, script.length - 1)] ?? (() => new Response()))();
+      },
+    });
+    const client = new GitHubIssues(
+      "test-token",
+      "owner/reports",
+      fetch,
+      `http://localhost:${server.port}`,
+    );
+    return { server, client, seen };
+  }
+
+  test("creates, comments on and reads issues with the token and API version", async () => {
+    const { server, client, seen } = fakeGitHub([
+      () => Response.json({ number: 7, state: "open" }, { status: 201 }),
+      () => Response.json({ id: 1 }, { status: 201 }),
+      () => Response.json({ number: 7, state: "closed" }),
+    ]);
+    try {
+      expect(await client.create("Title", "Body", ["tarubot-report"])).toEqual({
+        number: 7,
+        state: "open",
+      });
+      await client.comment(7, "Again");
+      expect(await client.get(7)).toEqual({ number: 7, state: "closed" });
+      expect(seen).toEqual([
+        {
+          method: "POST",
+          path: "/repos/owner/reports/issues",
+          auth: "Bearer test-token",
+          body: { title: "Title", body: "Body", labels: ["tarubot-report"] },
+        },
+        {
+          method: "POST",
+          path: "/repos/owner/reports/issues/7/comments",
+          auth: "Bearer test-token",
+          body: { body: "Again" },
+        },
+        {
+          method: "GET",
+          path: "/repos/owner/reports/issues/7",
+          auth: "Bearer test-token",
+          body: null,
+        },
+      ]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("GitHub's failures become catalog codes the queue handles", async () => {
+    const cases: [() => Response, { code: string; retryAfter?: number }][] = [
+      // Rate limits wait: Retry-After, or the reset time of an exhausted primary limit.
+      [
+        () => new Response("", { status: 429, headers: { "retry-after": "42" } }),
+        { code: "rate_limited", retryAfter: 42 },
+      ],
+      [
+        () =>
+          new Response("", {
+            status: 403,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 120),
+            },
+          }),
+        { code: "rate_limited" },
+      ],
+      // A secondary rate limit can be a bare 403; its message tells it from a refused token,
+      // and GitHub asks for at least a minute's wait (2.18.0 review).
+      [
+        () =>
+          Response.json(
+            { message: "You have exceeded a secondary rate limit. Please wait a few minutes." },
+            { status: 403 },
+          ),
+        { code: "rate_limited", retryAfter: 60 },
+      ],
+      [
+        () =>
+          Response.json(
+            { message: "Resource not accessible by personal access token" },
+            { status: 403 },
+          ),
+        { code: "configuration" },
+      ],
+      // Outages retry; a refused token or missing repository needs the operator.
+      [() => new Response("", { status: 502 }), { code: "unavailable" }],
+      [() => new Response("", { status: 401 }), { code: "configuration" }],
+      [() => new Response("", { status: 404 }), { code: "configuration" }],
+      [() => new Response("", { status: 422 }), { code: "invalid_data" }],
+      // An answer without an issue number is unusable.
+      [() => Response.json({ state: "open" }, { status: 201 }), { code: "invalid_response" }],
+    ];
+    for (const [answer, expected] of cases) {
+      const { server, client } = fakeGitHub([answer]);
+      try {
+        await expect(client.create("Title", "Body", [])).rejects.toMatchObject(expected);
+      } finally {
+        await server.stop(true);
+      }
+    }
+  });
 });

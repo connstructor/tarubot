@@ -17,6 +17,9 @@ import * as t from "../../src/infrastructure/postgres/schema.js";
 import { capabilityMetrics } from "../../src/application/metrics.js";
 import { Service } from "../../src/application/service.js";
 import { GuildEvents } from "../../src/application/guild-events.js";
+import { IssueReports } from "../../src/application/issue-reports.js";
+import { RecentLogs } from "../../src/application/recent-logs.js";
+import { GitHubIssues, type IssueRef } from "../../src/infrastructure/github/issues.js";
 import {
   RoleAdministration,
   type RoleProvisioner,
@@ -242,6 +245,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     VERIFICATION_SECONDS: 1800,
     GUEST_COOLDOWN_SECONDS: 86400,
     HEALTH_PORT: 3000,
+    GITHUB_REPORTS_TOKEN: "",
+    GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
   };
   const nodestone = new FakeNodestone("http://unused");
   const service = new Service(db, discord, nodestone, config);
@@ -6208,6 +6213,345 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // With no active link left, the character is never refreshed again.
     expect(await profileJob()).toEqual({ skipped: "no present linked owner" });
     nodestone.profileFailures.delete(characterId);
+  });
+
+  /** A GitHub fake for issue reports (2.18.0): records calls; issues can be closed by tests. */
+  class FakeIssues extends GitHubIssues {
+    calls: { op: string; number?: number; title?: string; body: string; labels?: string[] }[] = [];
+    closed = new Set<number>();
+    next = 1;
+    constructor() {
+      super("unused", "owner/reports");
+    }
+    override async create(
+      title: string,
+      body: string,
+      labels: readonly string[],
+    ): Promise<IssueRef> {
+      const number = this.next++;
+      this.calls.push({ op: "create", number, title, body, labels: [...labels] });
+      return { number, state: "open" };
+    }
+    override async comment(number: number, body: string): Promise<void> {
+      this.calls.push({ op: "comment", number, body });
+    }
+    override async get(number: number): Promise<IssueRef> {
+      return { number, state: this.closed.has(number) ? "closed" : "open" };
+    }
+  }
+  const reportRow = async (fingerprint: string) =>
+    (
+      await db.query<{
+        occurrences: number;
+        posted_occurrences: number;
+        issue_number: number | null;
+        source: string;
+      }>(
+        "SELECT occurrences, posted_occurrences, issue_number, source FROM issue_reports WHERE fingerprint=$1",
+        [fingerprint],
+      )
+    )[0];
+  const deliveryJob = async (fingerprint: string) =>
+    (
+      await db.query<{ id: string }>(
+        "SELECT id FROM jobs WHERE dedupe_key=$1 AND status IN ('queued','running','blocked')",
+        [`issue:${fingerprint}`],
+      )
+    )[0]?.id;
+
+  test("/issue saves the member's report with context, enforces its limits, and delivers it (2.18.0)", async () => {
+    const github = new FakeIssues();
+    const logs = new RecentLogs();
+    logs.write(JSON.stringify({ level: 30, msg: "TaruBot ready" }));
+    const reports = new IssueReports(config, db, nodestone, logs, github);
+    reports.useStatus(() => ({ ready: true, writerLease: true }));
+    const reporter: Actor = { ...actor, userId: "90031", officer: false };
+    const submitted = await reports.user(
+      reporter,
+      "reporter",
+      "1300000000000000001",
+      "My Member role vanished after /main. @someone please look.",
+    );
+    expect(submitted).toEqual({ delivery: "queued", ref: "1300000000000000001" });
+    const key = "user:1300000000000000001";
+    expect(await reportRow(key)).toMatchObject({
+      source: "user",
+      occurrences: 1,
+      issue_number: null,
+    });
+    const job = await deliveryJob(key);
+    expect(job).toBeString();
+    // Too short, and a second report within 10 minutes, are refused with when to try again.
+    await expect(
+      reports.user(reporter, "reporter", "1300000000000000002", "short"),
+    ).rejects.toMatchObject({
+      code: "input",
+    });
+    await expect(
+      reports.user(reporter, "reporter", "1300000000000000003", "Another problem report here."),
+    ).rejects.toMatchObject({
+      code: "cooldown",
+      detail: { kind: "limit", limit: "issue" },
+      retryAfter: expect.any(Number),
+    });
+    // The member's limit spans servers (2.18.0 review). Another server's report for the same
+    // member holds the member lock with its row not yet committed: this one must wait for it and
+    // then refuse, rather than read past the uncommitted row as a server-only lock would.
+    const racer = "90035";
+    const held = await db.pool.connect();
+    try {
+      await held.query("BEGIN");
+      await held.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        `issue:user:${racer}`,
+      ]);
+      await held.query(
+        "INSERT INTO issue_reports (fingerprint, source, title, body, guild_id, user_id) VALUES ('user:held', 'user', 't', 'b', '666666666666666698', $1)",
+        [racer],
+      );
+      const waiting = reports.user(
+        { ...reporter, userId: racer },
+        "racer",
+        "1300000000000000012",
+        "Sent while another server's report is still committing.",
+      );
+      await Bun.sleep(300);
+      await held.query("COMMIT");
+      await expect(waiting).rejects.toMatchObject({ code: "cooldown" });
+    } finally {
+      held.release();
+      await db.query("DELETE FROM issue_reports WHERE user_id=$1", [racer]);
+    }
+    // Twenty reports in a day fill the server's allowance for everyone.
+    for (let index = 0; index < 19; index++)
+      await db.query(
+        "INSERT INTO issue_reports (fingerprint, source, title, body, guild_id, user_id) VALUES ($1,'user','t','b',$2,$3)",
+        [`user:fill-${index}`, guild, `9004${index}`],
+      );
+    await expect(
+      reports.user(
+        { ...reporter, userId: "90032" },
+        "other",
+        "1300000000000000004",
+        "A different member's report.",
+      ),
+    ).rejects.toMatchObject({ code: "cooldown", message: expect.stringContaining("20 reports") });
+    await db.query("DELETE FROM issue_reports WHERE fingerprint LIKE 'user:fill-%'");
+
+    // Delivery opens one issue carrying the description in a fence (no @mention), the member's
+    // state, the bot's state and the logs, with this deployment's secrets removed.
+    expect(await reports.deliver(key, async () => {})).toMatchObject({
+      status: "created",
+      issue: 1,
+    });
+    const [created] = github.calls;
+    expect(created?.title).toBe(
+      "[production] /issue: My Member role vanished after /main. ＠someone please look.",
+    );
+    expect(created?.labels).toEqual(["tarubot-report", "source:user", "env:production"]);
+    expect(created?.body).toContain(
+      "```text\nMy Member role vanished after /main. @someone please look.\n```",
+    );
+    for (const section of [
+      "### What happened",
+      "### Readiness",
+      "### Queue",
+      "### Server",
+      "### Member",
+      "Recent log records",
+    ])
+      expect(created?.body).toContain(section);
+    expect(created?.body).not.toContain(config.DISCORD_TOKEN);
+    expect(await reportRow(key)).toMatchObject({ issue_number: 1, posted_occurrences: 1 });
+    // Nothing new: a second delivery posts nothing.
+    expect(await reports.deliver(key, async () => {})).toEqual({ skipped: "nothing new" });
+    await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [job]);
+
+    // Without a token, reports are saved and wait: nothing is queued.
+    const offline = new IssueReports(config, db, nodestone, logs, null);
+    expect(
+      await offline.user(
+        { ...reporter, userId: "90033" },
+        "later",
+        "1300000000000000005",
+        "Saved until reporting is set up.",
+      ),
+    ).toEqual({ delivery: "saved", ref: "1300000000000000005" });
+    expect(await deliveryJob("user:1300000000000000005")).toBeUndefined();
+    await db.query("DELETE FROM issue_reports WHERE fingerprint='user:1300000000000000005'");
+  });
+
+  test("automatic reports group by fingerprint, comment hourly, reopen after close, and cap per day (2.18.0)", async () => {
+    const github = new FakeIssues();
+    const reports = new IssueReports(config, db, nodestone, new RecentLogs(), github);
+    const failed = {
+      id: randomUUID(),
+      kind: "reconcile.user",
+      attempts: 8,
+      guild_id: guild,
+      user_id: "90034",
+    };
+    const outcome = {
+      code: "blocked",
+      diagnostic: `blocked: token ${config.DISCORD_TOKEN} refused`,
+      source: "Failure",
+    };
+    await reports.jobFailed(failed, outcome);
+    const [row] = await db.query<{ fingerprint: string; body: string }>(
+      "SELECT fingerprint, body FROM issue_reports WHERE source='job' AND title LIKE '%reconcile.user jobs failing (blocked)%'",
+    );
+    if (!row) throw new Error("Missing job report");
+    // The diagnostic's copy of this deployment's token is removed before it is stored.
+    expect(row.body).not.toContain(config.DISCORD_TOKEN);
+    expect(row.body).toContain("[secret redacted]");
+    expect(await deliveryJob(row.fingerprint)).toBeString();
+    expect(await reports.deliver(row.fingerprint, async () => {})).toMatchObject({
+      status: "created",
+    });
+    const first = (await reportRow(row.fingerprint))?.issue_number;
+    await db.query("UPDATE jobs SET status='succeeded' WHERE dedupe_key=$1", [
+      `issue:${row.fingerprint}`,
+    ]);
+
+    // A repeat within the hour is counted, not posted.
+    await reports.jobFailed({ ...failed, id: randomUUID() }, outcome);
+    expect(await reportRow(row.fingerprint)).toMatchObject({
+      occurrences: 2,
+      posted_occurrences: 1,
+    });
+    expect(await deliveryJob(row.fingerprint)).toBeUndefined();
+    expect(await reports.deliver(row.fingerprint, async () => {})).toEqual({
+      skipped: "within the hourly comment window",
+    });
+    // An hour later the sweep queues it, and delivery comments with the count.
+    await db.query(
+      "UPDATE issue_reports SET posted_at=now()-interval '61 minutes' WHERE fingerprint=$1",
+      [row.fingerprint],
+    );
+    await reports.sweep();
+    expect(await deliveryJob(row.fingerprint)).toBeString();
+    expect(await reports.deliver(row.fingerprint, async () => {})).toMatchObject({
+      status: "commented",
+      issue: first,
+    });
+    expect(github.calls.at(-1)).toMatchObject({ op: "comment", number: first });
+    expect(github.calls.at(-1)?.body).toContain("**1 more occurrence**");
+    await db.query("UPDATE jobs SET status='succeeded' WHERE dedupe_key=$1", [
+      `issue:${row.fingerprint}`,
+    ]);
+
+    // After the issue is closed, a repeat opens a new issue that refers back to it.
+    github.closed.add(first ?? 0);
+    await reports.jobFailed({ ...failed, id: randomUUID() }, outcome);
+    await db.query(
+      "UPDATE issue_reports SET posted_at=now()-interval '61 minutes' WHERE fingerprint=$1",
+      [row.fingerprint],
+    );
+    expect(await reports.deliver(row.fingerprint, async () => {})).toMatchObject({
+      status: "reopened",
+    });
+    expect(github.calls.at(-1)?.body).toContain(`came back after #${first} was closed`);
+    await db.query("DELETE FROM jobs WHERE dedupe_key=$1", [`issue:${row.fingerprint}`]);
+
+    // The same unexpected error twice is one report with two occurrences.
+    const boom = new TypeError("boom");
+    await reports.error(boom, "1300000000000000009", "/ledger deposit");
+    await reports.error(boom, "1300000000000000010", "/ledger deposit");
+    const [error] = await db.query<{ occurrences: number; title: string }>(
+      "SELECT occurrences, title FROM issue_reports WHERE source='error' AND title LIKE '%TypeError%'",
+    );
+    expect(error).toMatchObject({
+      occurrences: 2,
+      title: "[production] TypeError (unexpected) in /ledger",
+    });
+
+    // Ten automatic issues in a day: the next automatic one waits for tomorrow's allowance.
+    for (let index = 0; index < 10; index++)
+      await db.query(
+        "INSERT INTO jobs (kind, dedupe_key, payload, status, completed_at, result) VALUES ('issue.report', $1, '{}', 'succeeded', now(), $2)",
+        [`cap-${index}`, JSON.stringify({ status: "created", source: "job" })],
+      );
+    const [capped] = await db.query<{ fingerprint: string }>(
+      "SELECT fingerprint FROM issue_reports WHERE source='error' AND title LIKE '%TypeError%'",
+    );
+    expect(await reports.deliver(capped?.fingerprint ?? "", async () => {})).toEqual({
+      skipped: "daily cap",
+      source: "error",
+    });
+    // A repeat of a closed issue opens a new issue, so the same new-issue allowance holds it back,
+    // even though no comments were posted today.
+    github.closed.add((await reportRow(row.fingerprint))?.issue_number ?? 0);
+    await reports.jobFailed({ ...failed, id: randomUUID() }, outcome);
+    await db.query(
+      "UPDATE issue_reports SET posted_at=now()-interval '61 minutes' WHERE fingerprint=$1",
+      [row.fingerprint],
+    );
+    const calls = github.calls.length;
+    expect(await reports.deliver(row.fingerprint, async () => {})).toEqual({
+      skipped: "daily cap",
+      source: "job",
+    });
+    expect(github.calls).toHaveLength(calls);
+    await db.query("DELETE FROM jobs WHERE kind='issue.report'");
+    await db.query("DELETE FROM issue_reports WHERE source <> 'user'");
+  });
+
+  test("trouble checks report stale rosters after 12 hours and a Lodestone that keeps failing (2.18.0)", async () => {
+    const reports = new IssueReports(config, db, nodestone, new RecentLogs(), new FakeIssues());
+    const before = await db.query<{ last_successful_roster_at: Date | null }>(
+      "SELECT last_successful_roster_at FROM free_companies WHERE id=$1",
+      [fc],
+    );
+    await db.query(
+      "UPDATE free_companies SET last_successful_roster_at=now()-interval '13 hours' WHERE id=$1",
+      [fc],
+    );
+    // A freshly linked FC that has no accepted roster yet.
+    const fresh = "9230000000000009999";
+    const freshGuild = "666666666666666699";
+    await db.query(
+      "INSERT INTO free_companies (id, name, world) VALUES ($1, 'Fresh FC', 'Diabolos')",
+      [fresh],
+    );
+    await db.query("INSERT INTO guilds (id, fc_id) VALUES ($1, $2)", [freshGuild, fresh]);
+    // No Lodestone answer for two hours, and the client is still trying.
+    Object.assign(nodestone, {
+      failingSince: new Date(Date.now() - 2 * 3600_000),
+      lastFailure: "unavailable",
+      lastAttemptAt: new Date(),
+    });
+    const occurrences = async (pattern: string) =>
+      (
+        await db.query<{ occurrences: number }>(
+          "SELECT occurrences FROM issue_reports WHERE source='trouble' AND (title LIKE $1 OR body LIKE $1)",
+          [pattern],
+        )
+      )[0]?.occurrences;
+    try {
+      const now = Date.now();
+      await reports.tick(now);
+      expect(await occurrences("%Lodestone unreachable for over an hour%")).toBe(1);
+      expect(await occurrences(`%(\`${fc}\`)%`)).toBe(1);
+      // A freshly linked FC isn't stale yet: its 12 hours start when the check first sees it.
+      expect(await occurrences(`%(\`${fresh}\`)%`)).toBeUndefined();
+      // Within five minutes the checks don't run again.
+      await reports.tick(now + 60_000);
+      expect(await occurrences(`%(\`${fc}\`)%`)).toBe(1);
+      // Twelve hours on, still never accepted, it is reported. The Lodestone's last attempt is now
+      // twelve hours old: a failure followed by quiet is no outage, so it is not reported again.
+      await reports.tick(now + 12 * 3600_000 + 60_000);
+      expect(await occurrences(`%(\`${fresh}\`)%`)).toBe(1);
+      expect(await occurrences("%Lodestone unreachable for over an hour%")).toBe(1);
+    } finally {
+      Object.assign(nodestone, { failingSince: null, lastFailure: null, lastAttemptAt: null });
+      await db.query("UPDATE free_companies SET last_successful_roster_at=$2 WHERE id=$1", [
+        fc,
+        before[0]?.last_successful_roster_at ?? null,
+      ]);
+      await db.query("DELETE FROM guilds WHERE id=$1", [freshGuild]);
+      await db.query("DELETE FROM free_companies WHERE id=$1", [fresh]);
+      await db.query("DELETE FROM jobs WHERE kind='issue.report'");
+      await db.query("DELETE FROM issue_reports WHERE source='trouble'");
+    }
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {

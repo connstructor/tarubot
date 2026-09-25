@@ -44,6 +44,26 @@ export const WIRE_CODES = {
  */
 const RETRYABLE: ReadonlySet<string> = new Set(["unavailable", "busy"]);
 /**
+ * Outcomes that mean TaruBot couldn't get an answer from the Lodestone: the sidecar or Lodestone
+ * down, throttling, or the sidecar full. A not-found, private or unreadable page is still an answer.
+ */
+const UNREACHABLE: ReadonlySet<string> = new Set(["unavailable", "rate_limited", "busy"]);
+
+/** Whether the Lodestone has been answering, for the "unreachable for an hour" report (2.18.0). */
+export interface LodestoneReachability {
+  /** The last request the Lodestone answered, in this process; null before the first. */
+  readonly lastAnswerAt: Date | null;
+  /** When unanswered requests began, if every request since the last answer went unanswered. */
+  readonly failingSince: Date | null;
+  /**
+   * The last request started, answered or not. A failure followed by quiet says nothing about
+   * now, so an outage is only "still failing" while attempts keep being made.
+   */
+  readonly lastAttemptAt: Date | null;
+  /** The code of the most recent unanswered request. */
+  readonly lastFailure: string | null;
+}
+/**
  * The approved not-found wording per page. It names only public Lodestone IDs, never a typed
  * search name, because the message also reaches logs and job diagnostics.
  */
@@ -270,6 +290,10 @@ export function page(
 /** Bound HTTP work and deduplicate only in-flight profiles, never cached verification proofs. */
 export class Nodestone {
   private profiles = new Map<string, Promise<CharacterIdentity>>();
+  private lastAnswerAt: Date | null = null;
+  private failingSince: Date | null = null;
+  private lastFailure: string | null = null;
+  private lastAttemptAt: Date | null = null;
   private shutdown = new AbortController();
   private readonly limits: z.infer<typeof limitsSchema>;
   /** Validate limits independently of Discord credentials so acquisition tools can share the adapter. */
@@ -281,6 +305,15 @@ export class Nodestone {
         `Invalid Lodestone limit configuration: ${result.error.issues.map((issue) => issue.path.join(".") || "job/request deadline").join(", ")}`,
       );
     this.limits = result.data;
+  }
+  /** Whether the Lodestone has been answering this process's requests. */
+  reachability(): LodestoneReachability {
+    return {
+      lastAnswerAt: this.lastAnswerAt,
+      failingSince: this.failingSince,
+      lastFailure: this.lastFailure,
+      lastAttemptAt: this.lastAttemptAt,
+    };
   }
   /** Abort active requests and retry sleeps when the bot relinquishes work. */
   stop(): void {
@@ -295,11 +328,26 @@ export class Nodestone {
     input: ParseRequest,
     signal: AbortSignal = AbortSignal.timeout(this.limits.LODESTONE_JOB_TIMEOUT_MS),
   ): Promise<unknown> {
+    this.lastAttemptAt = new Date();
     try {
-      return await this.attempts(input, signal);
+      const result = await this.attempts(input, signal);
+      this.answered();
+      return result;
     } catch (error) {
+      // Only a page that says something about the request is an answer; an unreachable code or
+      // any other error (a cancelled request, a transport fault) is not.
+      if (!(error instanceof Failure) || UNREACHABLE.has(error.code)) {
+        this.failingSince ??= new Date();
+        this.lastFailure = error instanceof Failure ? error.code : "unavailable";
+      } else this.answered();
       throw error instanceof Failure ? withResource(error, input) : error;
     }
+  }
+  /** The Lodestone gave an answer: success, or a page that says something about the request. */
+  private answered(): void {
+    this.lastAnswerAt = new Date();
+    this.failingSince = null;
+    this.lastFailure = null;
   }
   /** The retry loop behind request(); its failures gain their resource detail there. */
   private async attempts(input: ParseRequest, signal: AbortSignal): Promise<unknown> {
@@ -361,14 +409,23 @@ export class Nodestone {
               : new Failure("unavailable", "Nodestone is unavailable.");
         if (!RETRYABLE.has(failure.code) || attempt === this.limits.LODESTONE_ATTEMPTS - 1)
           throw failure;
-        await delay(
-          Math.min(
-            this.limits.LODESTONE_JOB_TIMEOUT_MS,
-            Math.max(failure.retryAfter * 1000, 1000 * 2 ** attempt + Math.random() * 250),
-          ),
-          undefined,
-          { signal },
-        );
+        try {
+          await delay(
+            Math.min(
+              this.limits.LODESTONE_JOB_TIMEOUT_MS,
+              Math.max(failure.retryAfter * 1000, 1000 * 2 ** attempt + Math.random() * 250),
+            ),
+            undefined,
+            { signal },
+          );
+        } catch {
+          // The deadline or shutdown during the backoff ends the request as the check above does,
+          // never as a raw AbortError: that would read as unexpected, and as a Lodestone answer.
+          throw new Failure(
+            "unavailable",
+            "Lodestone work was cancelled or exceeded its job deadline.",
+          );
+        }
       }
     }
     throw new Failure("unavailable", "Nodestone is unavailable.");

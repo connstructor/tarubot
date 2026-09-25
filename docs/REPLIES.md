@@ -294,6 +294,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | pending_proof | `pending_proof` | wait | Token not on the Lodestone yet | Token not on the Lodestone yet | pending | info |
 | wait.claims_own | `cooldown` {claims_own} | wait | Too many unfinished claims | Too many unfinished claims | pending | info |
 | wait.apply | `cooldown` {apply} | wait | You can apply again later | You can apply again later | pending | info |
+| wait.issue | `cooldown` {issue} | wait | You can send another report later | You can send another report later (2.18.0: one report per member per 10 minutes, twenty per server per day) | pending | info |
 | wait.retry | `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | wait | Please wait a moment | Please wait a moment | pending | info |
 | eligible | `eligible` | eligible | No application needed | No application needed | info | info |
 | upstream.lodestone | `unavailable` | upstream | The Lodestone isn't responding | The Lodestone isn't responding, with the diagnostic | warning | warn |
@@ -391,3 +392,12 @@ A short record of how the 2.14.0 plan resolved design conflicts, with the amendm
 - **Token state.** The pending-token card is characters#10 as drawn, with Check again; its deadline stays on `/claim`'s card (the plan's extra Token expires field was dropped under O2).
 
 The 27 inconsistencies the reply specs recorded are pinned one by one in `reply-consistency.test.ts` ("resolved inconsistencies"). Since 2.15.0, number 22 pins the owner's decision of 2026-09-24 instead of the free-text member wording: member options suggest members and still take an ID or mention. The states the specs listed as missing are implemented by the presenters above and exercised through the catalog, the router and command tests. The 2.15.0 states (the no-op cards, the guest application receipts and the resets) are in the same catalog. The re-link wording is tested in `replies-characters.test.ts`.
+
+## /issue (2.18.0)
+
+`/issue description:…` answers with one of two cards in the utility catalog (`issueReply`):
+
+- **Report received** (success): the report is saved and on its way to the maintainers.
+- **Report saved** (pending): issue reporting isn't connected on this deployment yet, so the report waits.
+
+Both list what the report carries under "Sent with it": the description, the member's linked characters and settings in this server, their recent TaruBot activity, and TaruBot's health and recent logs. The footer is `Ref <interaction ID>`, which the issue also carries. A description under 10 characters is an input failure with the command's Example. The limits are `wait.issue`.

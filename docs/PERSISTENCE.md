@@ -46,7 +46,14 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.17.0** source adds `007_profile_checks.sql` and requires `SCHEMA_VERSION=007_profile_checks.sql`. It is additive and needs no superuser privileges. It adds two nullable columns to `characters`:
+The current **2.18.0** source adds `008_issue_reports.sql` and requires `SCHEMA_VERSION=008_issue_reports.sql`. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
+- the source (`user`, `error`, `job` or `trouble`), title, the first occurrence's Markdown body and the newest repeat's (`latest`);
+- the server and member for `/issue`;
+- occurrence counts, and the GitHub issue number, creation time and last post.
+
+Partial indexes serve `/issue`'s per-member and per-server limits, and the delivery sweep's pending reports. A report is saved on its caller's client (`/issue` checks its limits under a per-server transaction lock), and an `issue.report` job delivers it. The job records the posted occurrences and the issue number after GitHub answers. The daily caps count succeeded `issue.report` jobs by their `result`. The Drizzle mapping covers 26 application tables.
+
+`007_profile_checks.sql`, introduced in **2.17.0**, adds two nullable columns to `characters`:
 
 - **`profile_retry_at`.** The scheduler queues no profile refresh before it. It is stamped an hour ahead whenever a refresh is queued, moved to the profile interval for a private profile, and cleared by a successful refresh.
 - **`profile_missing_at`.** The first Lodestone 404 of the two-404 unlink rule. Any later sighting clears it: a profile read, a private answer, or a roster listing.
@@ -68,7 +75,7 @@ Raw SQL is limited to transaction/migration control, advisory locks, health prob
 
 ## Regression coverage
 
-The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths. `tests/integration/migrations.test.ts` applies 005 over 001–004, 006 over 001–005, and 007 over 001–006, in private schemas: it checks each backfill case (for 006, the switch starts on only for a guild with a review channel that is not awaiting first activation, revisions stay unchanged, schema-005 grants stay active, and a guild created later starts off), the constraints, grants written under the old provenances, an empty database, and a real `Database.migrate` upgrade from schema 004 to the head that a second run leaves unchanged. For 007, existing characters keep both new columns NULL. `tests/integration/managed-privileges.test.ts` runs every migration as a non-owner login holding only the documented managed-cluster grants.
+The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths. `tests/integration/migrations.test.ts` applies 005 over 001–004, 006 over 001–005, 007 over 001–006, and 008 over 001–007, in private schemas: it checks each backfill case (for 006, the switch starts on only for a guild with a review channel that is not awaiting first activation, revisions stay unchanged, schema-005 grants stay active, and a guild created later starts off), the constraints, grants written under the old provenances, an empty database, and a real `Database.migrate` upgrade from schema 004 to the head that a second run leaves unchanged. For 007, existing characters keep both new columns NULL. For 008, the table accepts only the four sources and has its indexes. `tests/integration/managed-privileges.test.ts` runs every migration as a non-owner login holding only the documented managed-cluster grants.
 
 ```sh
 bun run test:docker

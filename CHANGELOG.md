@@ -1,6 +1,48 @@
 # Version history
 
-The current application version is **2.17.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.18.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.18.0 — Issue reports and /issue
+
+The owner asked for an "unexpected behavior handler" that opens GitHub issues with as much context as possible, and for `/issue`, so members can report problems with the same state collection. REQUIREMENTS.md "Approved issue-reporting amendments" records their answers. Reports go to the private repository `deconfined/tarubot-reports`. It adds migration `008_issue_reports.sql` and one command, `/issue` (20 roots, 44 paths), so commands must be registered after the deploy. It also records the owner's hosting follow-up: stay on Linode, and make the host robust and disposable.
+
+- **`/issue description:…`** for every member: one per member per 10 minutes and twenty per server per day, refused with a new `wait.issue` card that says when to try again. The reply is "Report received", or "Report saved" when reporting isn't connected, and lists what the report carries.
+- **Automatic reports:**
+  - every error-level report, from interactions, events, the lifecycle or the queue worker;
+  - every job that ends failed at error level;
+  - repeated trouble, checked every five minutes on the lifecycle's new `tick` hook: a linked FC's roster not accepted for 12 hours, and no Lodestone answer for an hour. The Nodestone client now tracks `reachability()`.
+- **Grouping and caps.** A fingerprint of what failed and where groups repeats into one issue. Repeats are counted, and a comment posts the count and the newest context at most hourly. A repeat after a close opens a new issue that names the old one. Context is re-collected at most once a minute per fingerprint, so an error flood costs a counter update. Each day allows at most 10 new automatic issues and 50 comments. The reporter never reports its own delivery failures.
+- **Context.** Each report includes:
+  - the deployment, version and uptime;
+  - `/health/ready` (the lifecycle's new `status()`);
+  - Lodestone reachability and the sidecar's health;
+  - active and recently failed jobs;
+  - the server's settings and FC roster state;
+  - for member reports, the member's links, main, nickname state, guest and officer standing, recent work and audit;
+  - the newest 30 log records, from an in-memory buffer fed by a second pino destination at info and above.
+
+  `redact()` removes Discord and GitHub tokens, Authorization values, URL passwords, PEM blocks and the deployment's own secret values. Member text goes in a fenced block, so it can't @mention anyone on GitHub.
+- **Durability.** `issue_reports` saves every report before delivery, and `issue.report` jobs deliver it through the new `GitHubIssues` client. GitHub's rate limits wait, outages retry, and a refused token fails as `configuration`. Without `GITHUB_REPORTS_TOKEN`, reports are saved and sent once a token is set.
+- **Configuration.** `GITHUB_REPORTS_TOKEN` and `GITHUB_REPORTS_REPO` (default `deconfined/tarubot-reports`) are passed through both Compose files and listed in both env templates.
+- **Review round (PR #19).** The Claude review found three behavior bugs, all fixed with regression tests:
+  - A repeat of a closed issue opens a new issue, but was checked against the comment allowance. Delivery now reads the issue's state first, so a reopen spends the new-issue allowance.
+  - An FC with no accepted roster yet (freshly linked) was reported as "not accepted for 12+ hours" within minutes. It is now reported only after the check has seen it without a roster for 12 hours.
+  - One failed Lodestone request followed by an hour of quiet looked like an hour-long outage. The client now records its last attempt, and an outage is reported only while attempts keep failing (the last within 30 minutes).
+  - A CONFIGURATION.md sentence was corrected.
+  - The re-review found that a job deadline expiring during the client's retry backoff escaped as a raw `AbortError`. That counted as a Lodestone answer, which reset the outage clock, and read as an unexpected error. It now ends as `unavailable`, like a deadline caught before the backoff, and anything other than a page that says something about the request counts as unanswered.
+  - The third pass found two more issues:
+    - `/issue` took only a per-server lock, so one member in two servers at once could pass the per-member limit twice. It now takes the member's lock first, then the server's.
+    - A GitHub secondary rate limit can be a bare 403 without rate-limit headers, and was reported as a token problem. A 403 whose message mentions a rate limit is now `rate_limited` with GitHub's minimum one-minute wait. Other 403s stay `configuration`, so a truly refused token still fails instead of waiting forever.
+- **Tests:**
+  - redaction of every secret shape, fingerprints, stack frames, bounds and Markdown, and the log buffer;
+  - the GitHub client's requests and failure mapping against a local fake;
+  - `/issue`'s command path and replies, and the new `wait.issue` card;
+  - on PostgreSQL: `/issue`'s limits, context and delivery; the saved-only mode; grouping, the hourly comment window, the sweep, reopening after a close, redaction of the deployment's token and the daily cap; the stale-roster and Lodestone checks; migration 008.
+- **Docs:**
+  - REQUIREMENTS.md: the issue-reporting amendments, the hosting follow-up, and AC-23 at 20 roots and 44 paths;
+  - OPERATIONS.md: a new Issue reports section;
+  - CONFIGURATION.md, HOSTING.md, PERSISTENCE.md, SETUP.md, REPLIES.md, README.md and CLAUDE.md;
+  - the 2.17.0 rollout records in DEV_GUILD.md and VERIFICATION.md.
 
 ## 2.17.0 — Lodestone hardening: paced refreshes, private profiles, and the two-404 unlink
 

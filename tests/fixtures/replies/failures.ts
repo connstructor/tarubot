@@ -712,6 +712,19 @@ export const FAILURE_CASES = {
     ),
     "modal guest-apply",
   ),
+  // 2.18.0: /issue's limits, one per member per 10 minutes and twenty per server per day.
+  "issue limit · /issue · member": card(
+    "wait.issue",
+    "member",
+    { tone: "pending", title: "You can send another report later" },
+    failure(
+      "cooldown",
+      "You sent a report a few minutes ago. You can send one every 10 minutes.",
+      { kind: "limit", limit: "issue", until: at(600) },
+      600,
+    ),
+    "/issue",
+  ),
   "rate limited · /claim · any": card(
     "wait.retry",
     "any",

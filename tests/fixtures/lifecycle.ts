@@ -91,6 +91,8 @@ export function lifecycleHarness(
     GUEST_COOLDOWN_SECONDS: 86400,
     // Port 0 lets several lifecycles (and parallel test runs) listen side by side.
     HEALTH_PORT: 0,
+    GITHUB_REPORTS_TOKEN: "",
+    GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
     ...overrides,
   };
   // A real SDK client that never logs in; only readiness and identity are replaced.

@@ -308,6 +308,24 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - `commands.js list` exited 0 and clean: 19 commands in the dev guild, none global.
   - The plan was posted at 23:40:39 as message `1552827138057441331`, "Session: 2.16.1 Linode hosting", with fields of 336, 432 and 186 characters and no mentions.
 
+### 2.17.0 rollout — 2026-09-25
+
+- PR #18 merged as `baa9d3c` after every check passed; the Claude review found no issues. Publish run 36077621763 published `tarubot:2.17.0` (`sha256:fe38d715…`) and `tarubot-nodestone:2.17.0` (`sha256:b57bbc28…`), and promoted `latest`.
+- **DevBot:**
+  - The writer stopped at 00:32:55 UTC: exit 0, 476 jobs all succeeded, no connections or lease holders, head 006.
+  - The backup `.cache/backups/tarubot_dev-before-2.17.0-baa9d3c.dump` is 117,775 bytes, sha256 `7fd22e5dc746f54cc2d6f0747b3677b2a2fd1bda48a83e0da5fa9cffde67697e`. It was restored into `tarubot_dev_restore_test`, where `check-restore.js` matched 26 tables at 006.
+  - `migrate.js --restore-rehearsal` on the copy applied `007_profile_checks.sql` (lease at 00:33:06.298) and printed `Schema ready.`, with all 105 characters' new columns NULL. The copy was dropped.
+  - `migrate.js` on `tarubot_dev` applied 007 (lease at 00:33:15.130).
+  - 2.17.0 was healthy at 00:33:31. Readiness was 200, and the sidecar reported `lodestone {cooldownSeconds: 0, strikes: 0}` (and `upstream: update_available`: newer Nodestone commits, a separate update). There was one lease holder, `commands.js list` exited 0 and clean, and the log had info lines only.
+  - The plan was posted as message `1552840387318522020`, "Session: 2.17.0 Lodestone hardening". The scheduler stamped no profiles, because all of DevBot's were fresh.
+- **Production** ([HOSTING.md](HOSTING.md), the migration procedure):
+  - The pull and pin to 2.17.0 ran while 2.16.1 kept running. The bot stopped at 00:34:19 (exit 0).
+  - The writer-lease gate printed nothing: head 006, no other connections.
+  - The backup `~/tarubot-cutover/work/backups/before-2.17.0.dump` is 271,248 bytes, sha256 `a6ee39060ef8951a04bb1e5e6a33fbf07f407daf18eaae285ad3022221bb88fc`, with 26 tables of data. It is kept off Linode.
+  - `migrate.js` in the new image applied 007. Its restore point is 00:34:35.012502 UTC.
+  - The bot was healthy at 00:34:50, about 31 s of downtime. Readiness was 200, with one lease holder at head 007 and info log lines only; the storm's warnings were gone.
+- **The storm's characters:** 13746792 and 51218446 completed as `{status: "private"}`, their next checks paced a day out. 35999242 had no active link: an officer had already run `/unassign` at 2026-09-24 22:56:10 UTC ("Deleted from the Lodestone."), so the automatic two-404 unlink had nothing to do there. The PostgreSQL tests cover it.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

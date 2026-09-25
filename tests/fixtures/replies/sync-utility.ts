@@ -20,6 +20,7 @@ import {
 } from "../../../src/discord/presenters/synchronization.js";
 import {
   channelReply,
+  issueReply,
   pingReply,
   type UtilityReplyKind,
 } from "../../../src/discord/presenters/utility.js";
@@ -409,6 +410,23 @@ export const UTILITY_CASES = {
     title: "Channel details",
     timestamp: false,
     render: () => channelReply({ id: "678901234567890123", name: null, type: null }),
+  },
+  // 2.18.0: /issue's confirmation, delivered or saved until reporting is connected.
+  "issue.received": {
+    spec: "2.18.0 issue reports",
+    audience: "member",
+    tone: "success",
+    title: "Report received",
+    timestamp: false,
+    render: () => issueReply({ delivery: "queued", ref: "1290000000000000001" }),
+  },
+  "issue.saved": {
+    spec: "2.18.0 issue reports",
+    audience: "member",
+    tone: "pending",
+    title: "Report saved",
+    timestamp: false,
+    render: () => issueReply({ delivery: "saved", ref: "1290000000000000001" }),
   },
 } as const satisfies ReplyCatalog<UtilityReplyKind>;
 

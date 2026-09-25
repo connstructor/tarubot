@@ -94,6 +94,8 @@ test("command inventory exactly matches the declared public surface", async () =
       "ping",
       "channel",
       "version",
+      // 2.18.0: any member reports a problem to the maintainers.
+      "issue",
     ].sort(),
   );
 });
