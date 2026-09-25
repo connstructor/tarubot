@@ -169,12 +169,12 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - The host's `.env` holds the storage settings, which the bot never sees.
 - **Proven.** A run from a scratch copy on the host uploaded a 381,594-byte dump. It decrypted and restored into a throwaway PostgreSQL 18 with all 27 table counts identical to production.
 - **Deploy.** A pull on the host (the bot needn't restart), then the crontab line from HOSTING.md.
-- **Status.** [PR #26](https://github.com/deconfined/tarubot/pull/26) open, with the review fixes (logging off for the dump service, which the first test run's plaintext briefly reached in Docker's log; the region setting expected).
+- **Status.** Merged ([PR #26](https://github.com/deconfined/tarubot/pull/26)) after three review rounds (logging off for the dump service, which the first test run's plaintext briefly reached in Docker's log; the region setting expected).
 
 **Update, 2.24.1 (current version):**
 - **Why.** The owner saw many errors in `/sync status`. They were 167 profile-refresh failures from the first night (App Platform refusals, the 429 storm, the deleted character). All had later succeeded, and nothing had failed since 2.17.0, but the work list had no age limit.
 - **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
-- **Status.** Branch `feat/sync-status-2.24.1`, stacked on 2.24.0; not yet pushed. A restart deploys it.
+- **Status.** Branch `feat/sync-status-2.24.1`, rebased onto `main` after PR #26; PR open. A restart deploys it, together with 2.24.0's host pull and crontab line.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
