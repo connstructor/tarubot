@@ -54,10 +54,13 @@ export function translateRegex(pattern: string): RegExp {
   return new RegExp(pattern.replaceAll("(?P<", "(?<").replace(/\(\?P=(\w+)\)/gu, "\\k<$1>"));
 }
 
+/** Whether a node is one definition: a non-null object with a string `selector`. */
 function isDefinition(value: unknown): value is Definition {
+  // Null first: typeof null is "object", and checking it first keeps the comparison meaningful
+  // (CodeQL alert #8 read the null check after the typeof as comparing incompatible types).
   return (
-    typeof value === "object" &&
     value !== null &&
+    typeof value === "object" &&
     typeof (value as { selector?: unknown }).selector === "string"
   );
 }

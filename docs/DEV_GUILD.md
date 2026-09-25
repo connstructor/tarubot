@@ -382,6 +382,19 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 - **DevBot:** 567 jobs, all succeeded. The writer stopped at 12:32:21 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.22.0-dfa6c5b.dump` is 131,026 bytes, sha256 `ca2ff878b3efa3cec9875dd767018f803f21c9e7c8e25c90483a922ea9f1c2f8`; the restore was verified at 008. Healthy at 12:32:40, readiness 200, and the heartbeat off, as intended (no URL in DevBot's `.env`).
 - **Production:** the ping URL went from `~/tarubot-cutover/healthchecks-production.url` into the host's `.env` over SSH stdin, in the same rewrite that pinned `TARUBOT_IMAGE_TAG=2.22.0`; the file stayed mode 600 and its checksum matches the saved URL. `up -d --wait --remove-orphans` at 12:32:54, healthy at 12:33:00, readiness 200 with the heartbeat on and the reports token present. No heartbeat warnings over the first scheduler passes, and the owner confirmed the check receives good pings.
 
+### 2.24.1 rollout, with 2.24.0's backup schedule — 2026-09-25
+
+- 2.23.0 (PR #25, `9cf2afd`) changed only docs and an operator script, so nothing was deployed. 2.24.0 (PR #26, `b325b81`) and 2.24.1 (PR #27, `8a580de`) went out together. Publish run 36147321044 published `tarubot:2.24.1` (`sha256:d37f56d3…`) and promoted `latest`.
+- **DevBot:** 578 jobs, all succeeded. The writer stopped at 14:29:56 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.1-8a580de.dump` is 131,730 bytes, sha256 `b8122b3dbb9225d77730e553b590f0e1a96d26b872359b0e0a38f0499285f132`; the restore was verified at 008. Healthy at 14:30:15, readiness 200.
+- **Production:**
+  - The host clone pulled `8a580de`, `ops/backup.sh` arriving executable from Git. Then `TARUBOT_IMAGE_TAG=2.24.1`, pull, and `up -d --wait --remove-orphans` at 14:30:29, healthy at 14:30:35.
+  - Readiness 200 with the heartbeat on. None of the `BACKUP_*` settings is visible inside the bot's container.
+  - `~/tarubot/ops/backup.sh` then ran from its real path: `backup ok: tarubot-20260925T143036Z (396896 bytes, settings 2623 bytes)`, with no backup container left behind.
+- **Schedule.** The crontab line `30 4 * * * $HOME/tarubot/ops/backup.sh >> $HOME/tarubot-backup.log 2>&1` is installed, cron is active, and the log is mode 600.
+  - The first install ran under `set -e`. There, the `grep` that drops an old line found nothing to keep and ended the subshell before the new line was written, installing an empty crontab.
+  - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
+- The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

@@ -171,10 +171,17 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Deploy.** A pull on the host (the bot needn't restart), then the crontab line from HOSTING.md.
 - **Status.** Merged ([PR #26](https://github.com/deconfined/tarubot/pull/26)) after three review rounds (logging off for the dump service, which the first test run's plaintext briefly reached in Docker's log; the region setting expected).
 
-**Update, 2.24.1 (current version):**
+**Update, 2.24.1:**
 - **Why.** The owner saw many errors in `/sync status`. They were 167 profile-refresh failures from the first night (App Platform refusals, the 429 storm, the deleted character). All had later succeeded, and nothing had failed since 2.17.0, but the work list had no age limit.
 - **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
-- **Status.** Branch `feat/sync-status-2.24.1`, rebased onto `main` after PR #26; PR open. A restart deploys it, together with 2.24.0's host pull and crontab line.
+- **Status.** Merged ([PR #27](https://github.com/deconfined/tarubot/pull/27), `8a580de`) after one review round: failures are timestamped, and `retry.js` clears the stamp. Deployed on 2026-09-25 to DevBot and production (14:30 UTC) together with 2.24.0's host step: the pull, the backup crontab line and a first run from the real path.
+
+**Update, 2.24.2 (current version):**
+- **Why.** The owner asked to address the two open CodeQL alerts.
+- **Change.**
+  - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
+  - #8: `isDefinition` checks null before `typeof`.
+- **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -240,7 +247,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge 2.24.0, then on the host `git pull` and install the backup crontab line (HOSTING.md). Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge and deploy 2.24.2 (a restart). Then finish the robust, disposable host (owner decision, 2026-09-25): the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done; the SSH deploy workflow from GitHub Actions remains.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
