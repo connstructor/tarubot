@@ -172,19 +172,24 @@ Known secret shapes and the deployment's own secret values are removed from ever
 
 ### Approved officer-notice amendments (2026-09-25)
 
-Issue #29 found that production officers got a line for every accepted roster ("FC roster accepted: …", with a departures count), and that during a Lodestone outage the "degraded" line could repeat about once a minute. The owner decided in two rounds on the issue: the [first](https://github.com/deconfined/tarubot/issues/29#issuecomment-5834639862) set the direction, and the [second](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836920321) accepted every recommendation ("Accept all recommendations and we'll tweak as needed"). Release 2.24.3 implements them, with no migration. They refine OPS-11 for the roster notices; the rest of OPS-11 (material membership changes, which is issue #31, and delivery-failure summaries) stays open.
+Issue #29 found that production officers got a line for every accepted roster ("FC roster accepted: …", with a departures count), and that during a Lodestone outage the "degraded" line could repeat about once a minute. The owner decided in two rounds on the issue: the [first](https://github.com/deconfined/tarubot/issues/29#issuecomment-5834639862) set the direction, and the [second](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836920321) accepted every recommendation of the [revised plan](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836582300) ("Accept all recommendations and we'll tweak as needed"). Release 2.24.3 implements them, with no migration. They refine OPS-11 for the roster notices; the rest of OPS-11 (material membership changes, which is issue #31, and delivery-failure summaries) stays open.
 
 **Roster line.** Routine roster acceptance is a DevBot diagnostic. "FC roster accepted: …" posts only in the test guild (`TEST_GUILD_ID`), and production officers get no line per accepted roster. Production drops the departures count with it; issue #31 reports material membership changes.
 
 **Degraded notice.** The text is unchanged: "Lodestone synchronization is degraded. Existing accepted membership evidence is retained; inspect /sync status." It is rate-limited per guild and FC:
 - it is queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posts only if it is still pending 5 minutes later;
-- while the FC keeps failing, it repeats at most once every 24 hours, counted from when the last one finished (posted or skipped);
+- while the FC keeps failing, it repeats at most once every 24 hours, counted from the last post;
 - a degraded notice still waiting to post (held, paused or blocked) blocks new ones, however old;
 - Lodestone throttling and the queue's other waits never post one.
 
 **Recovery line.** The first accepted roster after a posted degraded notice posts one line: "Lodestone synchronization recovered: the FC roster was accepted again." A degraded notice still waiting to post is closed unposted instead, and no recovery line follows an outage officers weren't told about. Each outage that outlasts the hold gets its own degraded notice and recovery line.
 
 **FC unlink.** Unlinking the FC closes the guild's waiting degraded notice, so nothing posts later about an FC the guild no longer uses.
+
+**Implementation notes (2.24.3; not owner decisions).**
+- A degraded notice that finished without posting (no officer notifications channel, a failed delivery, or one closed unposted) also starts the 24 hours, so a guild without a channel doesn't queue a row on every failure. One that hasn't finished counts from when it was queued.
+- An accepted roster also closes waiting degraded notices in guilds the bot was removed from, which get no recovery line: the queue never claims an inactive guild's rows, so such a notice would otherwise post about an ended outage once the bot is added back.
+- Accepted edge case: a degraded notice already being sent when the roster is accepted, or when the FC is unlinked, is left to finish; one being sent at recovery counts as posted. If that send fails and is retried, the degraded line can post after the recovery line or after the unlink. The window is one send in flight during that transaction, and closing it would need the delivery to know each notice's FC.
 
 ## 1. Purpose and interpretation
 

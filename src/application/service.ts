@@ -1162,7 +1162,9 @@ export class Service {
         );
       // A degraded notice waiting to post is about the FC this guild just left (#29): close it,
       // since the roster's recovery only reaches guilds still linked. Link and /setup refuse while
-      // an FC is linked, so this is the only way a guild's FC changes.
+      // an FC is linked, so this is the only way a guild's FC changes. A notice already sending is
+      // left to finish; if that send fails and is retried, it can still post (an accepted edge
+      // case: the delivery doesn't know which FC a notice is about).
       await closeUnstarted(client, degradedNoticeKey(actor.guildId, fcId), "FC unlinked");
       await audit(client, actor.guildId, actor.userId, "fc.unlink", fcId);
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);

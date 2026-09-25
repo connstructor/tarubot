@@ -187,11 +187,11 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Why.** Issue #29: production officers got "FC roster accepted: …" for every roster read, and the degraded line could repeat about once a minute during an outage. The owner decided in two rounds on the issue (REQUIREMENTS.md "Approved officer-notice amendments").
 - **Change.**
   - The roster line posts only in DevBot's test guild.
-  - The degraded notice has its own key per guild and FC, is held 5 minutes, repeats at most daily while the FC keeps failing, and is closed unposted if the roster recovers first or the FC is unlinked.
+  - The degraded notice has its own key per guild and FC, is held 5 minutes, repeats at most daily while the FC keeps failing, and is closed unposted if the roster recovers first (also in guilds the bot was removed from) or the FC is unlinked. A send in flight at recovery or unlink is an accepted edge case (docs/OPERATIONS.md "Officer notices").
   - One recovery line follows a posted degraded notice.
   - The job rows are the notice history: no migration and no in-memory state.
-- **Release order (agreed 2026-09-25).** #29 is 2.24.3, #30 2.25.0 (migration 009), #32 2.26.0, and #31 2.27.0 later (migration 010). The SSH deploy workflow's 2.25.0 reservation is dropped; it takes the next free minor after #31.
-- **Status.** Branch `feat/roster-notices-2.24.3`; not yet pushed. The fast checks pass; the PostgreSQL suite (`test:docker`) is still to run. A restart deploys it, with no registration ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout-planned)).
+- **Release order** (the owner's chat instruction of 2026-09-25, recorded by the agent in [a comment on #29](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836955454)). #29 is 2.24.3, #30 2.25.0 (migration 009), #32 2.26.0, and #31 2.27.0 (migration 010), started once #29 merges because both change the roster code. #33 can ship at any time. The SSH deploy workflow's 2.25.0 reservation is dropped; it takes the next free minor after these.
+- **Status.** Branch `feat/roster-notices-2.24.3`; not yet pushed. After one review round, test C's order fix, the blocked and removed-guild scenarios, the accepted edge cases and the clock assumption are in. The fast checks pass; the PostgreSQL suite (`test:docker`, with the dump and with the synthetic fixture) is still to run. A restart deploys it, with no registration ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout-planned)).
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 

@@ -170,7 +170,7 @@ Members see labels (Role update, Server-wide role check, FC roster check, Depart
 - **Character no longer on the Lodestone** (`officer:<guild>:missing:<link>`), one per link the two-404 rule ends (below).
 - **FC roster accepted** (`officer:<guild>`), on DevBot's test guild only.
 
-A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, or while it was paused or blocked) or `FC unlinked` (`/config fc unlink` during an outage) is expected. `/sync status` lists only unfinished and failed work, so it never shows these closed rows; this query does:
+A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, while it was paused or blocked, or while the bot was out of that server) or `FC unlinked` (`/config fc unlink` during an outage) is expected. The queue never claims a row of a server the bot was removed from, so an accepted roster closes such a server's waiting notice too, and posts no recovery line there. `/sync status` lists only unfinished and failed work, so it never shows these closed rows; this query does:
 
 ```sql
 SELECT dedupe_key, status, created_at, completed_at, message_id, result
@@ -179,6 +179,11 @@ SELECT dedupe_key, status, created_at, completed_at, message_id, result
  ORDER BY created_at DESC
  LIMIT 10;
 ```
+
+Accepted edge cases and assumptions:
+- **A send in flight.** A degraded notice being sent when the roster is accepted counts as posted, so the recovery line is queued; one being sent during `/config fc unlink` is left to finish. If that send fails (or its worker dies) and the queue retries it, the degraded line can post after the recovery line, or about the unlinked FC, with nothing after it. The window is one send in flight during that transaction.
+- **An FC with no active server.** Rosters run only while a server linked to the FC is active. If the bot is removed from every such server during an outage, a waiting notice stays queued until the bot is added back. It can then post before the next roster, which, once accepted, posts the recovery line after it.
+- **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's. They must agree to within a few seconds (a roster fetch); NTP keeps the Docker host and managed PostgreSQL to milliseconds.
 
 The rate limit reads these rows, so don't prune `officer.notify` jobs ([PERSISTENCE.md](PERSISTENCE.md#query-and-transaction-conventions)).
 

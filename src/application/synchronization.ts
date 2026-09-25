@@ -349,7 +349,9 @@ export class Synchronization {
             )
             .onConflictDoNothing();
           // Routine acceptance is a DevBot diagnostic (owner decision, #29): only the test guild
-          // posts it. Production's TEST_GUILD_ID is "" (deployment.ts), which never equals a guild.
+          // posts it. Production's TEST_GUILD_ID is "" (docker-compose.production.yml sets it and
+          // env.ts defaults to it; deployment.ts refuses anything else for the maintenance tools),
+          // which never equals a guild.
           if (guild.id === this.app.config.TEST_GUILD_ID)
             await enqueue(
               client,
@@ -362,9 +364,15 @@ export class Synchronization {
               null,
               5,
             );
-          // Only a roster that follows a failure can end an outage officers were told about.
-          if (previous?.error) await this.recovered(client, guild.id, fcId, previous.since);
         }
+        // Only a roster that follows a failure can end an outage officers were told about.
+        if (previous?.error)
+          await this.recovered(
+            client,
+            fcId,
+            guilds.map((guild) => guild.id),
+            previous.since,
+          );
         await db
           .update(t.freeCompanies)
           .set({ last_successful_roster_at: roster.observedAt, last_error: null })
@@ -403,12 +411,23 @@ export class Synchronization {
   /**
    * Queue each linked guild's degraded notice, held and rate-limited (#29). It is skipped while
    * any degraded notice for the guild and FC is pending (queued, running, blocked or parked
-   * `disabled`), whatever its age: enqueue() would otherwise merge into it and bump its generation
-   * on every failure. It is also skipped while this outage's newest notice finished (or, if
-   * unfinished, was queued) less than a day ago; measuring from creation alone would let a notice
-   * released after a day parked be followed by a repeat minutes later. The outage began at the
-   * FC's last accepted roster, and jobs rows are never deleted, so they are the notice history.
-   * Roster attempts for one FC hold its advisory lock, so this check and the enqueue don't race.
+   * `disabled`), whatever its age. Otherwise enqueue() would merge each failure into a queued,
+   * running or blocked row (bumping its generation, and flipping a blocked one back to queued),
+   * and would add a second row beside a parked `disabled` one, which its active-job index doesn't
+   * cover. It is also skipped while this outage's newest notice finished (or, if unfinished, was
+   * queued) less than a day ago; measuring from creation alone would let a notice released after
+   * a day parked be followed by a repeat minutes later. The outage began at the FC's last accepted
+   * roster, and jobs rows are never deleted, so they are the notice history. Roster attempts for
+   * one FC hold its advisory lock, so this check and the enqueue don't race.
+   *
+   * Clock assumption: the boundary, `last_successful_roster_at`, is the accepted roster's
+   * `observedAt` from the acquiring process's clock, while `jobs.created_at` is the database's
+   * now(). The FC lock orders them: the last outage's notices were queued before the accepted
+   * attempt began fetching, and this outage's after it published and a later attempt fetched. So
+   * the clocks must agree to within those seconds, which NTP keeps to milliseconds on the Docker
+   * host and managed PostgreSQL. A bot clock far ahead of the database's would let this outage's
+   * notices look older than the boundary and switch the daily limit off; one far behind would let
+   * the last outage's notices suppress this one's first.
    */
   private async degraded(fcId: string): Promise<void> {
     await this.app.db.transaction(async (client) => {
@@ -459,44 +478,63 @@ export class Synchronization {
     });
   }
   /**
-   * An accepted roster ends the outage for this guild's officers (#29). A degraded notice still
-   * waiting to post is closed unposted: posting it and then the recovery would be two lines about
-   * an outage that is over. One recovery line follows only a degraded notice that was posted (or
-   * is posting) during this outage, so officers who never heard an outage began aren't told it
-   * ended. `since` is the FC's previous accepted roster, where this outage began.
+   * An accepted roster ends the outage for the FC's guilds (#29). A degraded notice still waiting
+   * to post is closed unposted: posting it and then the recovery would be two lines about an
+   * outage that is over. One recovery line follows only a degraded notice that was posted (or is
+   * posting) during this outage, so officers who never heard an outage began aren't told it
+   * ended. `active` holds the publication's share-locked active guilds; `since` is the FC's
+   * previous accepted roster, where this outage began. The clock assumption in degraded()
+   * applies to `since` too.
+   *
+   * Accepted edge case: a notice `running` now is left to finish and counted as posted. If that
+   * send fails (or its worker dies), the queue retries it, and it can post after the recovery
+   * line with nothing after it; the window is one send in flight during this transaction.
    */
   private async recovered(
     client: Connection,
-    guild: string,
     fcId: string,
+    active: readonly string[],
     since: Date | null,
   ): Promise<void> {
-    const key = degradedNoticeKey(guild, fcId);
-    await closeUnstarted(client, key, "recovered before posting");
-    // Creation, not completion, places a notice in an outage: one running at the previous
-    // recovery that posted just after it belongs to that outage, and counting it here would post
-    // a second recovery line for it.
-    const [posted] = await orm(client)
-      .select({ id: t.jobs.id })
-      .from(t.jobs)
-      .where(
-        and(
-          eq(t.jobs.dedupe_key, key),
-          since ? gt(t.jobs.created_at, since) : undefined,
-          or(isNotNull(t.jobs.message_id), eq(t.jobs.status, "running")),
-        ),
-      )
-      .limit(1);
-    if (posted)
-      await enqueue(
-        client,
-        "officer.notify",
-        recoveredNoticeKey(guild, fcId),
-        { message: RECOVERED_NOTICE },
-        guild,
-        null,
-        5,
-      );
+    const db = orm(client);
+    // Every guild still linked to the FC, including one the bot was removed from: the queue never
+    // claims an inactive guild's rows, so its waiting notice would otherwise post about this ended
+    // outage once the bot is added back, with no recovery line after it. One query, so a guild
+    // reactivated meanwhile is still in it.
+    const linked = await db
+      .select({ id: t.guilds.id })
+      .from(t.guilds)
+      .where(eq(t.guilds.fc_id, fcId));
+    for (const guild of linked)
+      await closeUnstarted(client, degradedNoticeKey(guild.id, fcId), "recovered before posting");
+    // Recovery lines only for active guilds: an inactive guild's would wait, like its notices, and
+    // post long after this outage once the bot is added back.
+    for (const guild of active) {
+      // Creation, not completion, places a notice in an outage: one running at the previous
+      // recovery that posted just after it belongs to that outage, and counting it here would
+      // post a second recovery line for it.
+      const [posted] = await db
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(
+          and(
+            eq(t.jobs.dedupe_key, degradedNoticeKey(guild, fcId)),
+            since ? gt(t.jobs.created_at, since) : undefined,
+            or(isNotNull(t.jobs.message_id), eq(t.jobs.status, "running")),
+          ),
+        )
+        .limit(1);
+      if (posted)
+        await enqueue(
+          client,
+          "officer.notify",
+          recoveredNoticeKey(guild, fcId),
+          { message: RECOVERED_NOTICE },
+          guild,
+          null,
+          5,
+        );
+    }
   }
   /** Evaluate links not yet observed, requesting early acquisition when fresh evidence is absent. */
   async seedFreshLink(guild: GuildRecord, user: string): Promise<void> {
