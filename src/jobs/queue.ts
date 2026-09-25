@@ -281,6 +281,45 @@ async function supersedeAndRequeue(
 }
 
 /**
+ * Officer Lodestone notice keys (#29), per guild and FC, so these never share a key with each
+ * other, the DevBot roster line (officer:<guild>) or the per-link missing-character notices:
+ * enqueue() replaces an active row's payload, which let a success overwrite a pending degraded
+ * notice before #29. They live here because Synchronization and Service (the FC unlink) both use
+ * them.
+ */
+export const degradedNoticeKey = (guild: string, fc: string): string =>
+  `officer:${guild}:degraded:${fc}`;
+/** The recovery line that follows a posted degraded notice (#29). */
+export const recoveredNoticeKey = (guild: string, fc: string): string =>
+  `officer:${guild}:recovered:${fc}`;
+
+/**
+ * Close a key's unstarted rows (queued, blocked or parked `disabled`) as succeeded with
+ * {skipped: reason}, the way supersedeAndRequeue closes superseded rows: for work that became
+ * pointless before it ran, such as a degraded notice once the roster recovered or the FC was
+ * unlinked (#29). A running row is left to finish. If a worker claims a row concurrently, READ
+ * COMMITTED re-checks it under its row lock, finds it `running`, and leaves it alone.
+ */
+export async function closeUnstarted(
+  client: Connection,
+  key: string,
+  reason: string,
+): Promise<void> {
+  await orm(client)
+    .update(t.jobs)
+    .set({
+      status: "succeeded",
+      completed_at: sql`now()`,
+      lease_until: null,
+      last_error: null,
+      result: { skipped: reason },
+    })
+    .where(
+      and(eq(t.jobs.dedupe_key, key), inArray(t.jobs.status, ["queued", "blocked", "disabled"])),
+    );
+}
+
+/**
  * The operator retry (retry.js): put one of a guild's blocked, failed or disabled jobs back in the
  * queue, due now with a fresh attempt budget and no stored diagnostic. Completed effects can't be
  * replayed this way. A failed or disabled row sits outside active_job, so a newer row may already

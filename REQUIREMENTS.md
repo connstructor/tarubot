@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment"); 2026-09-25 (owner officer-notice decisions on issue #29; see "Approved officer-notice amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -169,6 +169,27 @@ Known secret shapes and the deployment's own secret values are removed from ever
 **Durability.** A report is saved in PostgreSQL first and delivered by a job, so a GitHub outage loses nothing. Without a token, reports are saved and `/issue` says so. They are sent once a token is configured.
 
 **Command surface.** `/issue` brings the command surface to 20 roots and 44 paths (AC-23). It must be registered after the deployment.
+
+### Approved officer-notice amendments (2026-09-25)
+
+Issue #29 found that production officers got a line for every accepted roster ("FC roster accepted: …", with a departures count), and that during a Lodestone outage the "degraded" line could repeat about once a minute. The owner decided in two rounds on the issue: the [first](https://github.com/deconfined/tarubot/issues/29#issuecomment-5834639862) set the direction, and the [second](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836920321) accepted every recommendation of the [revised plan](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836582300) ("Accept all recommendations and we'll tweak as needed"). Release 2.24.3 implements them, with no migration. They refine OPS-11 for the roster notices; the rest of OPS-11 (material membership changes, which is issue #31, and delivery-failure summaries) stays open.
+
+**Roster line.** Routine roster acceptance is a DevBot diagnostic. "FC roster accepted: …" posts only in the test guild (`TEST_GUILD_ID`), and production officers get no line per accepted roster. Production drops the departures count with it; issue #31 reports material membership changes.
+
+**Degraded notice.** The text is unchanged: "Lodestone synchronization is degraded. Existing accepted membership evidence is retained; inspect /sync status." It is rate-limited per guild and FC:
+- it is queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posts only if it is still pending 5 minutes later;
+- while the FC keeps failing, it repeats at most once every 24 hours, counted from the last post;
+- a degraded notice still waiting to post (held, paused or blocked) blocks new ones, however old;
+- Lodestone throttling and the queue's other waits never post one.
+
+**Recovery line.** The first accepted roster after a posted degraded notice posts one line: "Lodestone synchronization recovered: the FC roster was accepted again." A degraded notice still waiting to post is closed unposted instead, and no recovery line follows an outage officers weren't told about. Each outage that outlasts the hold gets its own degraded notice and recovery line.
+
+**FC unlink.** Unlinking the FC closes the guild's waiting degraded notice, so nothing posts later about an FC the guild no longer uses.
+
+**Implementation notes (2.24.3; not owner decisions).**
+- A degraded notice that finished without posting (no officer notifications channel, a failed delivery, or one closed unposted) also starts the 24 hours, so a guild without a channel doesn't queue a row on every failure. One that hasn't finished counts from when it was queued.
+- An accepted roster also closes waiting degraded notices in guilds the bot was removed from, which get no recovery line: the queue never claims an inactive guild's rows, so such a notice would otherwise post about an ended outage once the bot is added back.
+- Accepted edge case: a degraded notice already being sent when the roster is accepted, or when the FC is unlinked, is left to finish; one being sent at recovery counts as posted. If that send fails and is retried, the degraded line can post after the recovery line or after the unlink. The window is one send in flight during that transaction, and closing it would need the delivery to know each notice's FC.
 
 ## 1. Purpose and interpretation
 
@@ -651,7 +672,7 @@ The physical schema may use different names, but it must represent these logical
 
 **OPS-10.** Use structured logs with operation/run IDs, guild/FC context where appropriate, durations, result categories, retry information, and actionable permission/configuration errors. Track successful refresh age, failures, queue depth/age, reconciliation outcomes, and blocked notification work. Apply redaction to credentials, proof tokens, and profile bodies.
 
-**OPS-11.** Use the officer notification channel for operational summaries, material membership changes, repeated synchronization/delivery failures, and recovery notices. Aggregate and rate-limit messages per guild/run, including during large roster changes and prolonged outages.
+**OPS-11.** Use the officer notification channel for operational summaries, material membership changes, repeated synchronization/delivery failures, and recovery notices. Aggregate and rate-limit messages per guild/run, including during large roster changes and prolonged outages. (Refined on 2026-09-25 for the roster notices: see "Approved officer-notice amendments". The roster line is DevBot-only, and the Lodestone degraded notice is held, rate-limited and followed by a recovery line.)
 
 **OPS-12.** Document Discord setup using the `Guilds` and privileged `GuildMembers` intents, application command installation, and explicit channel/role permissions. Require `ManageRoles`, `ManageNicknames` for enabled nickname management, and the channel viewing/sending/embedding/history permissions needed by configured destinations. Use this explicit permission set with bot `Administrator` permission disabled.
 

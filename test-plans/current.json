@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.24.2 code-scanning fixes",
-  "objective": "2.24.2 closes the two CodeQL alerts in the Lodestone parser: the worker now ignores messages that don't come from the bot itself, and a null check reads correctly. Parsing is unchanged. No migration and no command change.",
+  "title": "Session: 2.24.3 quieter officer notices",
+  "objective": "2.24.3 makes the officer Lodestone notices quieter (#29): 'FC roster accepted' posts only on DevBot, and a degraded notice waits 5 minutes, repeats at most daily, and is followed by one recovery line once it has posted. No migration and no command change.",
   "user": [
-    "Run /claim or /characters once: character and FC names read as before.",
-    "Check the repository's Security tab: both alerts should show as fixed after the merge.",
-    "Confirm the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
+    "On DevBot, run /refresh force:true: the officer notifications channel still gets 'FC roster accepted: …'.",
+    "In production, after the next scheduled roster read, confirm the officer channel got no roster line and /config validate shows a recent 'Roster read' time.",
+    "Nothing to set up: no new settings, secrets or channels."
   ],
   "assistant": [
-    "Deploy 2.24.2 to DevBot and production with the owner's go-ahead (restarts, no migration).",
-    "Check the next day's scheduled backup in ~/tarubot-backup.log and the bucket.",
+    "Deploy 2.24.3 to DevBot and production with the owner's go-ahead (restarts, no migration, no registration).",
+    "After the next production roster read, check SELECT dedupe_key,status,message_id FROM jobs WHERE kind='officer.notify' ORDER BY created_at DESC LIMIT 5.",
     "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.24.2 on schema 008 with the heartbeat on in production.",
-    "Parse Lodestone pages in workers that accept only the bot's own messages.",
-    "Post this responsibility-separated session plan in #chat."
+    "Run compiled 2.24.3 on schema 008.",
+    "Hold, rate-limit and recover the Lodestone degraded notice; close a waiting one on FC unlink.",
+    "Post the roster line only in the test guild, and this responsibility-separated session plan in #chat."
   ]
 }

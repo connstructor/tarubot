@@ -176,12 +176,22 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
 - **Status.** Merged ([PR #27](https://github.com/deconfined/tarubot/pull/27), `8a580de`) after one review round: failures are timestamped, and `retry.js` clears the stamp. Deployed on 2026-09-25 to DevBot and production (14:30 UTC) together with 2.24.0's host step: the pull, the backup crontab line and a first run from the real path.
 
-**Update, 2.24.2 (current version):**
+**Update, 2.24.2:**
 - **Why.** The owner asked to address the two open CodeQL alerts.
 - **Change.**
   - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
   - #8: `isDefinition` checks null before `typeof`.
-- **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
+- **Status.** Merged ([PR #28](https://github.com/deconfined/tarubot/pull/28), `4a64609`). A restart deploys it.
+
+**Update, 2.24.3 (current version):**
+- **Why.** Issue #29: production officers got "FC roster accepted: …" for every roster read, and the degraded line could repeat about once a minute during an outage. The owner decided in two rounds on the issue (REQUIREMENTS.md "Approved officer-notice amendments").
+- **Change.**
+  - The roster line posts only in DevBot's test guild.
+  - The degraded notice has its own key per guild and FC, is held 5 minutes, repeats at most daily while the FC keeps failing, and is closed unposted if the roster recovers first (also in guilds the bot was removed from) or the FC is unlinked. A send in flight at recovery or unlink is an accepted edge case (docs/OPERATIONS.md "Officer notices").
+  - One recovery line follows a posted degraded notice.
+  - The job rows are the notice history: no migration and no in-memory state.
+- **Release order** (the owner's chat instruction of 2026-09-25, recorded by the agent in [a comment on #29](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836955454)). #29 is 2.24.3, #30 2.25.0 (migration 009), #32 2.26.0, and #31 2.27.0 (migration 010), started once #29 merges because both change the roster code. #33 can ship at any time. The SSH deploy workflow's 2.25.0 reservation is dropped; it takes the next free minor after these.
+- **Status.** Branch `feat/roster-notices-2.24.3`, open as [PR #34](https://github.com/deconfined/tarubot/pull/34). After one review round, test C's order fix, the blocked and removed-guild scenarios, the accepted edge cases and the clock assumption are in. The fast checks pass, and the full container run passed 1,283 tests / 37,392 assertions with the dump and with the synthetic fixture ([VERIFICATION.md](VERIFICATION.md)). A restart deploys it, with no registration ([DEV_GUILD.md](DEV_GUILD.md#2243-rollout-planned)).
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -247,7 +257,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge and deploy 2.24.2 (a restart). Then finish the robust, disposable host (owner decision, 2026-09-25): the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done; the SSH deploy workflow from GitHub Actions remains.
+4. Deploy 2.24.2 if it isn't yet, then merge and deploy 2.24.3 (#29; restarts). Then #30 (2.25.0), #32 (2.26.0) and later #31 (2.27.0), in the agreed release order. The robust, disposable host (owner decision, 2026-09-25) still needs the SSH deploy workflow from GitHub Actions, which takes the next free minor after #31; the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:

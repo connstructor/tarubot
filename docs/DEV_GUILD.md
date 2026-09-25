@@ -395,6 +395,16 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
+### 2.24.3 rollout (planned)
+
+Not yet deployed. 2.24.3 (#29) makes the officer Lodestone notices quieter; it needs a restart only, with no migration and no registration. Each step needs the owner's go-ahead:
+
+- **DevBot**, following CLAUDE.md "Updating DevBot": stop `tarubot`; `pg_dump` to `.cache/backups/tarubot_dev-before-2.24.3-<sha>.dump`; restore into `tarubot_dev_restore_test` and run `check-restore.js` at 008; no migration; `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3`; `commands.js list` as a read-only check (nothing to register); readiness (`writerLease`), logs and the plan in #chat. Then `/refresh force:true`: the officer notifications channel still gets "FC roster accepted: …".
+- **Production**, following [HOSTING.md](HOSTING.md#updating-to-a-release) "A release without a migration": `git pull --ff-only`, pin `TARUBOT_IMAGE_TAG=2.24.3`, pull, `up -d --wait --remove-orphans`; no registration. After the next scheduled roster read (every 6 hours), confirm no new `officer:<guild>` row and nothing in the officer channel.
+- **During an outage.** The new degraded key has no history, so a deploy during a Lodestone outage can post one more degraded notice, and later its recovery line.
+- **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
+- There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

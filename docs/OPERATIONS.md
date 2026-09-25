@@ -161,6 +161,32 @@ Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#
 
 Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
 
+## Officer notices
+
+`officer.notify` jobs post escaped plain text to the officer notifications channel. Since 2.24.3 (REQUIREMENTS.md "Approved officer-notice amendments"), these post:
+
+- **Lodestone degraded** (`officer:<guild>:degraded:<fc>`). It is queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posts only if it is still pending 5 minutes later. While the FC keeps failing it repeats at most once a day, counted from when the last one finished. A notice still waiting to post (held, paused or blocked) blocks new ones. Throttling and the queue's other waits post nothing.
+- **Recovered** (`officer:<guild>:recovered:<fc>`). One line after an accepted roster, only when a degraded notice posted (or was posting) during that outage.
+- **Character no longer on the Lodestone** (`officer:<guild>:missing:<link>`), one per link the two-404 rule ends (below).
+- **FC roster accepted** (`officer:<guild>`), on DevBot's test guild only.
+
+A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, while it was paused or blocked, or while the bot was out of that server) or `FC unlinked` (`/config fc unlink` during an outage) is expected. The queue never claims a row of a server the bot was removed from, so an accepted roster closes such a server's waiting notice too, and posts no recovery line there. `/sync status` lists only unfinished and failed work, so it never shows these closed rows; this query does:
+
+```sql
+SELECT dedupe_key, status, created_at, completed_at, message_id, result
+  FROM jobs
+ WHERE dedupe_key LIKE 'officer:%:degraded:%' OR dedupe_key LIKE 'officer:%:recovered:%'
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+Accepted edge cases and assumptions:
+- **A send in flight.** A degraded notice being sent when the roster is accepted counts as posted, so the recovery line is queued; one being sent during `/config fc unlink` is left to finish. If that send fails (or its worker dies) and the queue retries it, the degraded line can post after the recovery line, or about the unlinked FC, with nothing after it. The window is one send in flight during that transaction.
+- **An FC with no active server.** Rosters run only while a server linked to the FC is active. If the bot is removed from every such server during an outage, a waiting notice stays queued until the bot is added back. It can then post before the next roster, which, once accepted, posts the recovery line after it.
+- **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's. They must agree to within a few seconds (a roster fetch); NTP keeps the Docker host and managed PostgreSQL to milliseconds.
+
+The rate limit reads these rows, so don't prune `officer.notify` jobs ([PERSISTENCE.md](PERSISTENCE.md#query-and-transaction-conventions)).
+
 ## Profile refreshes, private profiles and deleted characters
 
 Since 2.17.0 (REQUIREMENTS.md "Approved Lodestone amendments"):
