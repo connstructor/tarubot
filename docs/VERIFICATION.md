@@ -21,6 +21,14 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.24.3** (quieter officer Lodestone notices, #29) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.24.3 above 2.24.2). `bun run test:unit` passed **1,152 tests** and `bun run test:contract` **26**, unchanged. New PostgreSQL scenarios in `tests/integration/persistence.test.ts`, each with its own guild and FC:
+- **"routine roster acceptance posts only on DevBot (#29)":** under the production configuration an accepted roster queues no `officer:<guild>` row; under DevBot's (`TEST_GUILD_ID` set to the guild) the line is queued with the departures count, the second replacing the first.
+- **"Lodestone outage notices are held, rate-limited and followed by one recovery line (#29)":** one held degraded row, unchanged by a second failure (generation and due time); closed as `recovered before posting` by a success within the hold, with no recovery line; a new outage's notice posts; no repeat within a day of the post; the repeat after a simulated day; recovery closes the pending repeat and queues exactly one recovery line, which posts; a `rate_limited` failure queues nothing, and its end queues no recovery line.
+- **"no channel, paused effects and a late release: the rate limit follows what was posted (#29)":** a notice with no officer channel completes skipped and counts for the day, with no recovery line; a `disabled` notice counts as pending and is closed at recovery; a notice released by `requeueParked` more than a day after it was queued posts, and the day then counts from that post, so the next failure adds nothing; its recovery queues one line.
+- **"a notice posting at recovery, then an FC unlink (#29)":** a degraded row `running` at recovery is left alone and earns one recovery line; waiting to retry, it still blocks new rows (generation and due time unchanged); `/config fc unlink` closes it as `FC unlinked`.
+
+The throttled-roster test follows the degraded notice's new key. The full container run (`test:docker`, with the supplied dump and the synthetic CI fixture) is still to record.
+
 **2.24.2** (code-scanning fixes) passed strict type checking, lint, formatting, the compiled build and `ci:version`. For alert #7, a probe worker under Bun received its parent's message with `origin` `""` and `source` `null`, which is what the new check accepts. The parser, worker, runner and selector tests (30) pass unchanged, and the compiled build parsed a live profile and the Woven Souls FC (105 members) through the worker. The PR's CodeQL run is the check that both alerts close.
 
 **2.24.1 rollouts (2026-09-25), with 2.24.0's backup schedule:** see [DEV_GUILD.md](DEV_GUILD.md#2241-rollout-with-2240s-backup-schedule--2026-09-25). The first backup from the host's real path uploaded 396,896 bytes, and the crontab line is installed.

@@ -53,6 +53,8 @@ import type {
   Lodestone,
 } from "../infrastructure/lodestone/client.js";
 import {
+  closeUnstarted,
+  degradedNoticeKey,
   enqueue,
   layoutGuildRoles,
   reconcileUser,
@@ -1158,6 +1160,10 @@ export class Service {
           0,
           { kind: "resource", resource: "fc_link", id: fcId },
         );
+      // A degraded notice waiting to post is about the FC this guild just left (#29): close it,
+      // since the roster's recovery only reaches guilds still linked. Link and /setup refuse while
+      // an FC is linked, so this is the only way a guild's FC changes.
+      await closeUnstarted(client, degradedNoticeKey(actor.guildId, fcId), "FC unlinked");
       await audit(client, actor.guildId, actor.userId, "fc.unlink", fcId);
       await enqueue(client, "reconcile.guild", `guild:${actor.guildId}`, {}, actor.guildId);
       return {

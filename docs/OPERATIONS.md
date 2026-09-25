@@ -161,6 +161,27 @@ Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#
 
 Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
 
+## Officer notices
+
+`officer.notify` jobs post escaped plain text to the officer notifications channel. Since 2.24.3 (REQUIREMENTS.md "Approved officer-notice amendments"), these post:
+
+- **Lodestone degraded** (`officer:<guild>:degraded:<fc>`). It is queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posts only if it is still pending 5 minutes later. While the FC keeps failing it repeats at most once a day, counted from when the last one finished. A notice still waiting to post (held, paused or blocked) blocks new ones. Throttling and the queue's other waits post nothing.
+- **Recovered** (`officer:<guild>:recovered:<fc>`). One line after an accepted roster, only when a degraded notice posted (or was posting) during that outage.
+- **Character no longer on the Lodestone** (`officer:<guild>:missing:<link>`), one per link the two-404 rule ends (below).
+- **FC roster accepted** (`officer:<guild>`), on DevBot's test guild only.
+
+A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, or while it was paused or blocked) or `FC unlinked` (`/config fc unlink` during an outage) is expected. `/sync status` lists only unfinished and failed work, so it never shows these closed rows; this query does:
+
+```sql
+SELECT dedupe_key, status, created_at, completed_at, message_id, result
+  FROM jobs
+ WHERE dedupe_key LIKE 'officer:%:degraded:%' OR dedupe_key LIKE 'officer:%:recovered:%'
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+The rate limit reads these rows, so don't prune `officer.notify` jobs ([PERSISTENCE.md](PERSISTENCE.md#query-and-transaction-conventions)).
+
 ## Profile refreshes, private profiles and deleted characters
 
 Since 2.17.0 (REQUIREMENTS.md "Approved Lodestone amendments"):

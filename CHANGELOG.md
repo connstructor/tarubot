@@ -1,6 +1,22 @@
 # Version history
 
-The current application version is **2.24.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.24.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.24.3 — Quieter officer Lodestone notices
+
+Issue #29. Production officers got "FC roster accepted: …" for every roster read, and during an outage the "degraded" line could repeat about once a minute. The owner decided ([first round](https://github.com/deconfined/tarubot/issues/29#issuecomment-5834639862), [second round](https://github.com/deconfined/tarubot/issues/29#issuecomment-5836920321)): the roster line stays on DevBot only, and production gets a held, rate-limited degraded notice and a recovery line (REQUIREMENTS.md "Approved officer-notice amendments"). There is no migration and no command change; a restart deploys it.
+
+- **Roster line.** "FC roster accepted: …" posts only in the test guild (`TEST_GUILD_ID`), unchanged there. Production posts nothing for a routine roster read, so its departures count goes too; issue #31 reports departures.
+- **Degraded notice.** The same text, now on its own key per guild and FC (`officer:<guild>:degraded:<fc>`):
+  - it is queued on the first non-waiting roster failure since the FC's last accepted roster, and posts only if it is still pending 5 minutes later (it was 60 seconds). A roster accepted in that time closes it unposted, as `{skipped: "recovered before posting"}`;
+  - while the FC keeps failing, another is queued at most once every 24 hours, counted from when the last one finished (posted or skipped);
+  - a notice still waiting to post (held, paused or blocked) blocks new ones, however old, so repeated failures no longer bump its generation or flip a blocked one back to queued;
+  - throttling and the queue's other waits still post nothing.
+- **Recovery line.** "Lodestone synchronization recovered: the FC roster was accepted again." posts once, 5 seconds after the accepted roster, on `officer:<guild>:recovered:<fc>`, and only when a degraded notice was actually posted (or was posting) during that outage. Officers who never heard an outage began aren't told it ended. Each outage longer than the hold gets its own pair.
+- **FC unlink.** `/config fc unlink` closes the guild's waiting degraded notice for the FC it leaves (`{skipped: "FC unlinked"}`). The degraded check share-locks the guild rows, as the roster publication does, so an unlink either waits for it and closes what it queued, or commits first and takes the guild out of it.
+- **Race fixed.** The roster line and the degraded notice shared `officer:<guild>`, and `enqueue` replaces an active row's payload, so a roster accepted before the degraded notice posted could replace it. Every notice now has its own key, in both environments.
+- **State.** The job rows are the notice history, read by exact key; nothing is kept in memory, so a restart during an outage resets nothing. The first deploy during an outage can post one more degraded notice, because the new key has no history. Rolling back to 2.24.2 is safe: queued rows keep the `{message}` payload that 2.24.2 posts.
+- **Tests.** Four PostgreSQL scenarios: the roster line only under DevBot's configuration, with the departures count; a held notice unchanged by further failures and closed by a success, the post, no repeat within a day, the daily repeat, one recovery line, and a throttle-only outage that posts nothing; no channel, paused effects and a notice released after more than a day parked (the day counts from its post); and a notice running at recovery that then waits to retry, closed by an FC unlink. The throttled-roster test follows the new key.
 
 ## 2.24.2 — Code-scanning fixes in the Lodestone parser
 

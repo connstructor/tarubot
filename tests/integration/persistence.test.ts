@@ -621,13 +621,14 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     lodestone.rosterFailure = true;
     await expect(publish(false, new Date(initial + 183000))).rejects.toThrow("incomplete");
     lodestone.rosterFailure = false;
-    // Throttling is a wait, not degradation (2.17.0): the FC records it for /sync status, but the
-    // queued officer notice is not re-enqueued, which would bump its generation.
+    // Throttling is a wait, not degradation (2.17.0): the FC records it for /config validate, but
+    // the queued degraded notice (its own key since #29) is not re-enqueued, which would bump its
+    // generation.
     const notice = async () =>
       (
         await db.query<{ generation: number }>(
           "SELECT generation FROM jobs WHERE dedupe_key=$1 AND status='queued'",
-          [`officer:${guild}`],
+          [`officer:${guild}:degraded:${fc}`],
         )
       )[0]?.generation;
     const noticed = await notice();
@@ -3253,8 +3254,14 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   /**
    * Publish one accepted roster for an isolated FC through the real acquisition path. An explicit
    * observation instant lets departure confirmation (two absences 60 s apart) run without waiting.
+   * Another Synchronization runs it under a different configuration, such as DevBot's test guild.
    */
-  async function publishRoster(fcId: string, roster: Roster["members"], observedAt = new Date()) {
+  async function publishRoster(
+    fcId: string,
+    roster: Roster["members"],
+    observedAt = new Date(),
+    synchronization = sync,
+  ) {
     lodestone.rosterValue = {
       company: {
         id: fcId,
@@ -3276,7 +3283,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // The dedupe key coalesces with an early acquisition that seedFreshLink may already have queued.
     const key = await enqueue(db.pool, "roster", `roster:${fcId}`, { fcId });
     try {
-      await sync.roster(await leased(key), async () => {});
+      await synchronization.roster(await leased(key), async () => {});
     } finally {
       await db.orm
         .update(t.jobs)
@@ -6641,6 +6648,348 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await db.query("DELETE FROM jobs WHERE kind='issue.report'");
       await db.query("DELETE FROM issue_reports WHERE source='trouble'");
     }
+  });
+
+  /** The officer Lodestone notices' texts (#29): the degraded one unchanged, the owner's recovery. */
+  const DEGRADED_TEXT =
+    "Lodestone synchronization is degraded. Existing accepted membership evidence is retained; inspect /sync status.";
+  const RECOVERED_TEXT = "Lodestone synchronization recovered: the FC roster was accepted again.";
+  /**
+   * A guild and FC of their own for one officer-notice scenario (#29): effects on, the given
+   * officer notifications channel, and the shared production configuration (no roster line).
+   */
+  async function noticeGuild(guildId: string, fcId: string, channel: string | null) {
+    await db.orm
+      .insert(t.freeCompanies)
+      .values({ id: fcId, name: `Notice FC ${fcId}`, world: "Diabolos", dc: "Crystal" });
+    await db.orm.insert(t.guilds).values({
+      id: guildId,
+      fc_id: fcId,
+      effects_enabled: true,
+      officer_notifications_channel_id: channel,
+    });
+  }
+  /**
+   * Pin the outage boundary (the FC's last accepted roster) to database time after an accepted
+   * roster, so these scenarios don't depend on the test process's clock matching the database's:
+   * job times come from the database, observations from the acquiring process.
+   */
+  async function pinBoundary(fcId: string) {
+    await db.query("UPDATE free_companies SET last_successful_roster_at=now() WHERE id=$1", [fcId]);
+  }
+  /** One failed roster attempt with a non-waiting failure, as a roster that changed mid-read. */
+  async function failRoster(fcId: string) {
+    lodestone.rosterFailure = true;
+    try {
+      await expect(publishRoster(fcId, [])).rejects.toThrow("incomplete");
+    } finally {
+      lodestone.rosterFailure = false;
+    }
+  }
+  /** A notice key's rows, oldest first; `held` means not due for at least another 290 seconds. */
+  const notices = (key: string) =>
+    db.query<{
+      id: string;
+      status: string;
+      generation: number;
+      due_at: Date;
+      created_at: Date;
+      completed_at: Date | null;
+      message_id: string | null;
+      payload: unknown;
+      result: unknown;
+      held: boolean;
+    }>(
+      "SELECT id,status,generation,due_at,created_at,completed_at,message_id,payload,result,due_at>now()+interval '290 seconds' AS held FROM jobs WHERE dedupe_key=$1 ORDER BY created_at,id",
+      [key],
+    );
+  /** Run one notice through the dispatcher as a queue worker would, whatever its due time. */
+  async function deliver(id: string) {
+    await new Queue(db, dispatcher(service, sync, access), () => {}).perform(await leased(id));
+  }
+
+  test("routine roster acceptance posts only on DevBot (#29)", async () => {
+    const guildId = "666666666666666712";
+    const fcId = "9232097761132950030";
+    const user = "90291";
+    await db.orm
+      .insert(t.freeCompanies)
+      .values({ id: fcId, name: "Roster Line FC", world: "Diabolos", dc: "Crystal" });
+    await db.orm.insert(t.guilds).values({ id: guildId, fc_id: fcId });
+    await ensureUser(db.pool, guildId, user, new Date("2026-01-01T00:00:00Z"));
+    await linkCharacter(guildId, user, "88290001");
+    const line = () =>
+      db.query<{ status: string; payload: { message: string } }>(
+        "SELECT status,payload FROM jobs WHERE dedupe_key=$1",
+        [`officer:${guildId}`],
+      );
+    // Production (TEST_GUILD_ID ""): an accepted roster queues no officer line. The linked
+    // character is recorded present.
+    await publishRoster(fcId, [rosterMember("88290001", fcId)]);
+    expect(await line()).toEqual([]);
+    // DevBot's test guild keeps the line, departures count included: the character is missing,
+    // then absent a minute later, and the second line replaces the first on the shared key.
+    const devbot = new Synchronization(
+      new Service(db, discord, lodestone, { ...config, TEST_GUILD_ID: guildId }),
+    );
+    const start = Date.now() + 1000;
+    await publishRoster(fcId, [], new Date(start), devbot);
+    await publishRoster(fcId, [], new Date(start + 61_000), devbot);
+    const rows = await line();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("queued");
+    expect(rows[0]?.payload.message).toMatch(
+      /^FC roster accepted: 0 members; 1 confirmed character departures\. Snapshot [0-9a-f-]{36}\.$/,
+    );
+  });
+
+  test("Lodestone outage notices are held, rate-limited and followed by one recovery line (#29)", async () => {
+    const guildId = "666666666666666713";
+    const fcId = "9232097761132950040";
+    const degraded = `officer:${guildId}:degraded:${fcId}`;
+    const recovered = `officer:${guildId}:recovered:${fcId}`;
+    await noticeGuild(guildId, fcId, "82105");
+    // An accepted roster ten minutes ago: the outage below starts from it.
+    await publishRoster(fcId, [], new Date(Date.now() - 600_000));
+    await pinBoundary(fcId);
+    // The first failure queues one degraded notice, held for five minutes.
+    await failRoster(fcId);
+    const [held] = await notices(degraded);
+    if (!held) throw new Error("Missing degraded notice");
+    expect(held).toMatchObject({
+      status: "queued",
+      held: true,
+      payload: { message: DEGRADED_TEXT },
+    });
+    // More failures while it waits change nothing: no second row, generation or due time.
+    await failRoster(fcId);
+    const waiting = await notices(degraded);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({
+      id: held.id,
+      status: "queued",
+      generation: held.generation,
+    });
+    expect(waiting[0]?.due_at.getTime()).toBe(held.due_at.getTime());
+    // A roster accepted within the hold closes it unposted, and officers who never heard of the
+    // outage aren't told it ended.
+    await publishRoster(fcId, []);
+    await pinBoundary(fcId);
+    expect(await notices(degraded)).toMatchObject([
+      {
+        id: held.id,
+        status: "succeeded",
+        message_id: null,
+        result: { skipped: "recovered before posting" },
+      },
+    ]);
+    expect(await notices(recovered)).toEqual([]);
+    // A new outage: the closed row belonged to the last one, so a new notice is queued...
+    await failRoster(fcId);
+    const [, second] = await notices(degraded);
+    if (!second) throw new Error("Missing second degraded notice");
+    expect(second).toMatchObject({ status: "queued", held: true });
+    // ...and, still failing after the hold, it posts.
+    const before = sent.length;
+    await deliver(second.id);
+    expect(sent.slice(before)).toEqual([
+      {
+        guild: guildId,
+        channel: "82105",
+        message: { kind: "text", text: DEGRADED_TEXT },
+        key: `${second.id}:${second.generation}`,
+      },
+    ]);
+    const [, posted] = await notices(degraded);
+    expect(posted).toMatchObject({ status: "succeeded", message_id: "123456789" });
+    expect(posted?.completed_at).toBeInstanceOf(Date);
+    // Within a day of that post, failures queue nothing.
+    await failRoster(fcId);
+    expect(await notices(degraded)).toHaveLength(2);
+    // A day passes while the FC keeps failing. The boundary moves back with the notices, so the
+    // posted one stays in this outage and the closed one in the last.
+    await db.query(
+      "UPDATE jobs SET created_at=created_at-interval '25 hours',completed_at=completed_at-interval '25 hours' WHERE dedupe_key=$1",
+      [degraded],
+    );
+    await db.query(
+      "UPDATE free_companies SET last_successful_roster_at=last_successful_roster_at-interval '25 hours' WHERE id=$1",
+      [fcId],
+    );
+    // The daily repeat.
+    await failRoster(fcId);
+    const [, , repeat] = await notices(degraded);
+    if (!repeat) throw new Error("Missing repeated degraded notice");
+    expect(repeat).toMatchObject({ status: "queued", held: true });
+    // Recovery closes the pending repeat and, because a notice posted in this outage, queues
+    // exactly one recovery line, which posts.
+    await publishRoster(fcId, []);
+    await pinBoundary(fcId);
+    expect((await notices(degraded))[2]).toMatchObject({
+      id: repeat.id,
+      status: "succeeded",
+      message_id: null,
+      result: { skipped: "recovered before posting" },
+    });
+    const [line] = await notices(recovered);
+    expect(await notices(recovered)).toHaveLength(1);
+    if (!line) throw new Error("Missing recovery line");
+    expect(line).toMatchObject({ status: "queued", payload: { message: RECOVERED_TEXT } });
+    await deliver(line.id);
+    expect(sent.at(-1)).toMatchObject({
+      guild: guildId,
+      channel: "82105",
+      message: { kind: "text", text: RECOVERED_TEXT },
+    });
+    // Throttling is a wait: it is recorded for /config validate but queues no notice...
+    lodestone.rosterError = new Failure("rate_limited", "Lodestone rate limited.", 30);
+    try {
+      await expect(publishRoster(fcId, [])).rejects.toMatchObject({ code: "rate_limited" });
+    } finally {
+      lodestone.rosterError = null;
+    }
+    expect(await notices(degraded)).toHaveLength(3);
+    expect(
+      (
+        await db.query<{ last_error: string | null }>(
+          "SELECT last_error FROM free_companies WHERE id=$1",
+          [fcId],
+        )
+      )[0]?.last_error,
+    ).toBe("rate_limited");
+    // ...and its end announces nothing, since nothing was posted in that outage.
+    await publishRoster(fcId, []);
+    expect(await notices(recovered)).toHaveLength(1);
+  });
+
+  test("no channel, paused effects and a late release: the rate limit follows what was posted (#29)", async () => {
+    const guildId = "666666666666666714";
+    const fcId = "9232097761132950041";
+    const degraded = `officer:${guildId}:degraded:${fcId}`;
+    const recovered = `officer:${guildId}:recovered:${fcId}`;
+    await noticeGuild(guildId, fcId, null);
+    await publishRoster(fcId, [], new Date(Date.now() - 600_000));
+    await pinBoundary(fcId);
+    // Without an officer channel the notice completes skipped, and nothing is sent.
+    await failRoster(fcId);
+    const [unconfigured] = await notices(degraded);
+    if (!unconfigured) throw new Error("Missing degraded notice");
+    const before = sent.length;
+    await deliver(unconfigured.id);
+    expect(sent.length).toBe(before);
+    expect((await notices(degraded))[0]).toMatchObject({
+      status: "succeeded",
+      message_id: null,
+      result: { skipped: "officer notifications unconfigured" },
+    });
+    // It still counts for the day, from when it completed.
+    await failRoster(fcId);
+    expect(await notices(degraded)).toHaveLength(1);
+    // Nothing was posted, so the recovery posts nothing either.
+    await publishRoster(fcId, []);
+    await pinBoundary(fcId);
+    expect(await notices(recovered)).toEqual([]);
+    // With a channel but Discord changes paused, a new outage's notice parks `disabled`...
+    await db.orm
+      .update(t.guilds)
+      .set({ officer_notifications_channel_id: "82106", effects_enabled: false })
+      .where(eq(t.guilds.id, guildId));
+    await failRoster(fcId);
+    const [, parked] = await notices(degraded);
+    if (!parked) throw new Error("Missing parked notice");
+    await deliver(parked.id);
+    const [, disabled] = await notices(degraded);
+    expect(disabled).toMatchObject({ id: parked.id, status: "disabled", completed_at: null });
+    // ...where it still counts as pending: failures neither add a row nor bump its generation.
+    await failRoster(fcId);
+    const still = await notices(degraded);
+    expect(still).toHaveLength(2);
+    expect(still[1]).toMatchObject({ status: "disabled", generation: disabled?.generation });
+    // Recovery closes the parked notice unposted, with no recovery line.
+    await publishRoster(fcId, []);
+    await pinBoundary(fcId);
+    expect((await notices(degraded))[1]).toMatchObject({
+      status: "succeeded",
+      message_id: null,
+      result: { skipped: "recovered before posting" },
+    });
+    expect(await notices(recovered)).toEqual([]);
+    // The next outage's notice parks too, and stays parked for more than a day (the FC's boundary
+    // moves back with it, so it stays in this outage).
+    await failRoster(fcId);
+    const [, , late] = await notices(degraded);
+    if (!late) throw new Error("Missing late notice");
+    await deliver(late.id);
+    await db.query("UPDATE jobs SET created_at=created_at-interval '25 hours' WHERE id=$1", [
+      late.id,
+    ]);
+    await db.query(
+      "UPDATE free_companies SET last_successful_roster_at=last_successful_roster_at-interval '25 hours' WHERE id=$1",
+      [fcId],
+    );
+    // Effects come back and a /config change releases it the real way; it posts now.
+    await db.orm.update(t.guilds).set({ effects_enabled: true }).where(eq(t.guilds.id, guildId));
+    expect(
+      await db.transaction((client) => requeueParked(client, [guildId], ["disabled"])),
+    ).toEqual([late.id]);
+    const sending = sent.length;
+    await deliver(late.id);
+    expect(sent.slice(sending)).toMatchObject([
+      { guild: guildId, channel: "82106", message: { kind: "text", text: DEGRADED_TEXT } },
+    ]);
+    const [, , released] = await notices(degraded);
+    expect(released).toMatchObject({ status: "succeeded", message_id: "123456789" });
+    // The day counts from that post, not from the 25-hour-old creation: no repeat minutes later.
+    await failRoster(fcId);
+    expect(await notices(degraded)).toHaveLength(3);
+    // The late post was this outage's, so the recovery queues exactly one line.
+    await publishRoster(fcId, []);
+    const lines = await notices(recovered);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ status: "queued", payload: { message: RECOVERED_TEXT } });
+  });
+
+  test("a notice posting at recovery, then an FC unlink (#29)", async () => {
+    const guildId = "666666666666666715";
+    const fcId = "9232097761132950042";
+    const degraded = `officer:${guildId}:degraded:${fcId}`;
+    const recovered = `officer:${guildId}:recovered:${fcId}`;
+    await noticeGuild(guildId, fcId, "82107");
+    await publishRoster(fcId, [], new Date(Date.now() - 600_000));
+    await pinBoundary(fcId);
+    // A worker is sending the degraded notice when the roster is accepted.
+    await failRoster(fcId);
+    const [sending] = await notices(degraded);
+    if (!sending) throw new Error("Missing degraded notice");
+    await leased(sending.id);
+    await publishRoster(fcId, []);
+    await pinBoundary(fcId);
+    // The running row is left to finish and counts as posted, so one recovery line is queued.
+    expect(await notices(degraded)).toMatchObject([
+      { id: sending.id, status: "running", generation: sending.generation },
+    ]);
+    const lines = await notices(recovered);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ status: "queued", payload: { message: RECOVERED_TEXT } });
+    // Its send fails and it waits to retry, as the queue writes a failed attempt.
+    await db.query("UPDATE jobs SET status='queued',lease_until=NULL WHERE id=$1", [sending.id]);
+    // A pending notice of any age counts: a new failure neither adds a row nor merges into it.
+    await failRoster(fcId);
+    const pending = await notices(degraded);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      id: sending.id,
+      status: "queued",
+      generation: sending.generation,
+    });
+    expect(pending[0]?.due_at.getTime()).toBe(sending.due_at.getTime());
+    // Unlinking the FC closes it, so nothing posts later about an FC the guild no longer uses.
+    expect(await service.unlinkCompany({ ...actor, guildId }, fcId)).toMatchObject({
+      status: "unlinked",
+    });
+    expect(await notices(degraded)).toMatchObject([
+      { id: sending.id, status: "succeeded", message_id: null, result: { skipped: "FC unlinked" } },
+    ]);
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {
