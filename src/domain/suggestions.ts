@@ -16,15 +16,18 @@
  * - a host whose `。` sits next to a Chinese or Japanese label or TLD, which reads as the end of a
  *   sentence (`例え。jp/パス`, `discord。コム/…`, `ディスコード。gg/…`, `abc.例え。jp/…`), whatever
  *   follows it;
- * - look-alike dots and slashes that have no compatibility form (`discord·gg`, `discordꓸgg`,
- *   `discord.gg∕x`). Browsers send these to a different host, so they aren't links, and several are
- *   real punctuation or digits in their own scripts (`·` in Catalan, `։` in Armenian, `٠`);
+ * - look-alike dots, slashes and colons that have no compatibility form (`discord·gg`,
+ *   `discordꓸgg`, `discord.gg∕x`, `2001∶db8∶∶1`). Browsers send these to a different host, so they
+ *   aren't links, and several are real punctuation or digits in their own scripts (`·` in Catalan,
+ *   `։` in Armenian, `٠`);
  * - IPv4 addresses written as one to three decimal numbers (`127.1`, `192.168.1`, `2130706433`),
  *   which can't be told apart from ratings, times, version ranges and counts (`3.5/5`, `10.30:00`,
  *   `2.26.0/2.27.0`, `24/7`);
  * - non-global IPv6 addresses (link-local `fe80::1`, unique-local `fd00::1`, loopback `::1`), which
- *   don't identify a connection publicly, and a global one inside a longer run of letters, digits
- *   or colons (`ip2001:db8::1`, `2001:db8::1x`, `2001:db8::1::`), which reads as part of it.
+ *   don't identify a connection publicly; a global one inside a longer run of letters, digits or
+ *   colons (`ip2001:db8::1`, `2001:db8::1x`, `2001:db8::1::`), which reads as part of it; and the
+ *   start of one, fewer than eight groups with no `::` (`2001:db8:1234`), which can't be told apart
+ *   from dates, scores and slices (`2025:09:25`, `2000:1500:1200`, `data[2000:3000:10]`).
  */
 import type { Actor } from "./policy.js";
 import { BODY_LIMIT, fenced, SECRET_PATTERNS } from "./reports.js";
@@ -200,26 +203,37 @@ const IP_DOT = `(?:${DOT}|。)`;
  */
 const IPV4 = String.raw`(?<!\d|\bv)(?:${IP_PART}(?:${IP_DOT}${IP_PART}){3}|(?:${IP_PART}${IP_DOT}){0,2}0x[\da-f]{0,8}(?:${IP_DOT}${IP_PART}){0,2}(?=${AFTER_HOST}))(?!\d)`;
 /**
- * A letter or digit that an IPv6 address can't touch: any script's, except Han, Hiragana and
- * Katakana, which are written without spaces (`サーバーは2001:db8::1です` keeps its words).
+ * Scripts whose words run straight into a number: Han, Hiragana, Katakana, Thai, Lao, Khmer and
+ * Myanmar are written without spaces between words, and Korean attaches its particles and copula
+ * to the word before them (`주소는 2001:db8::1입니다`).
  */
-const V6_EDGE = String.raw`[[\p{L}\p{N}]--${CJK}]`;
+const RUNS_ON = String.raw`[${CJK}\p{scx=Hang}\p{scx=Thai}\p{scx=Laoo}\p{scx=Khmr}\p{scx=Mymr}]`;
+/**
+ * A letter or digit that an IPv6 address can't touch: any script's but those (RUNS_ON), so
+ * `サーバーは2001:db8::1です`, `서버2001:db8::1번` and `ไอพีคือ2001:db8::1ครับ` keep their words.
+ */
+const V6_EDGE = String.raw`[[\p{L}\p{N}]--${RUNS_ON}]`;
 /** A group of an IPv6 address after the first: one to four hex digits. */
 const V6_GROUP = String.raw`[\da-f]{1,4}`;
+/** An IPv4 address in place of an IPv6 address's last two groups (`::ffff:192.0.2.1`). */
+const V6_TAIL = String.raw`\d{1,3}(?:\.\d{1,3}){3}`;
 /**
  * A global unicast IPv6 address (2000::/3), by @deconfined's rule: the first group is exactly four
- * hex digits and starts with 2 or 3, and the address has at least two colons. After the first group
- * comes either one `::`, with groups on either side of it (`2001::`, `2001:db8::1`), or at least two
- * more groups (`2001:db8:0:1`); an IPv4 tail may replace the last groups (`2001:db8::192.0.2.1`).
- * Times (`10:30:00`), ratios (`16:9`), one-colon forms (`2024:01`), scopes (`std::vector`) and
- * non-global addresses (`fe80::1`, `fd00::1`, `::1`, `1234:5678::1`) don't fit, and stay.
+ * hex digits and starts with 2 or 3, and the address has at least two colons. Those are true of
+ * every global address but not only of addresses (a photo's date `2025:09:25`, a score
+ * `2000:1500:1200`, a slice `data[2000:3000:10]`), so the rest must have an address's shape too:
+ * after the first group comes either one `::`, with any groups on either side of it (`2001::`,
+ * `2001:db8::1`), or all seven other groups (`2001:db8:0:0:0:0:0:1`); an IPv4 tail may replace the
+ * last two groups (`2001:db8::192.0.2.1`, `2001:db8:0:0:0:0:192.0.2.1`). Times (`10:30:00`), ratios
+ * (`16:9`), one-colon forms (`2024:01`), scopes (`std::vector`) and non-global addresses
+ * (`fe80::1`, `fd00::1`, `::1`, `1234:5678::1`) don't fit, and stay.
  * The address must be a whole run of groups and colons: it doesn't touch a letter or digit
  * (V6_EDGE), follow a group and a colon (`fe80:0:2001:db8::1`) or `::` (`fe80::2001:db8:1`), or run
  * on into another group; a word before a colon (`IPv6:`, `ip:`) is a label, not a group, and a
  * colon with no group after it is punctuation. Each colon starts at most one group and a run can
  * start only at its beginning, so a run is scanned about once.
  */
-const IPV6 = String.raw`(?<!${V6_EDGE}|(?<!${V6_EDGE})[\da-f]{1,4}:|::)[23][\da-f]{3}(?:(?::${V6_GROUP})*::(?:${V6_GROUP}(?::${V6_GROUP})*)?|(?::${V6_GROUP}){2,})(?:(?<=:\d{1,3})(?:\.\d{1,3}){3})?(?!${V6_EDGE}|:[\da-f:])`;
+const IPV6 = String.raw`(?<!${V6_EDGE}|(?<!${V6_EDGE})[\da-f]{1,4}:|::)[23][\da-f]{3}(?:(?::${V6_GROUP})*::(?:(?:${V6_GROUP}:)*(?:${V6_TAIL}|${V6_GROUP}))?|(?::${V6_GROUP}){7}|(?::${V6_GROUP}){5}:${V6_TAIL})(?!${V6_EDGE}|:[\da-f:])`;
 /** Rule f, as PUBLIC_PATTERNS describes it. */
 const LINK = new RegExp(
   [

@@ -471,9 +471,9 @@ describe("the hostile review's bypasses", () => {
 
 /**
  * Global IPv6 addresses (2000::/3, @deconfined's rule): the first group is exactly four hex digits
- * starting with 2 or 3, and there are at least two colons. `publicly` expects one idea's cleaned
- * text, its title and the fenced text in its body all to read `expected`, and the whole to pass
- * the final check.
+ * starting with 2 or 3, there are at least two colons, and the rest has an address's shape (`::`,
+ * or all eight groups). `publicly` expects one idea's cleaned text, its title and the fenced text
+ * in its body all to read `expected`, and the whole to pass the final check.
  */
 describe("global IPv6 addresses", () => {
   const publicly = (raw: string, expected: string) => {
@@ -490,17 +490,17 @@ describe("global IPv6 addresses", () => {
   test("an address goes whole, with `::`, in either case and with an IPv4 tail", () => {
     for (const address of [
       "2001:db8::1",
+      // All eight groups without compression, padded or not, and `::` inside or at the end.
       "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+      "2001:db8:0:0:0:0:0:1",
       "2001:db8:85a3::8a2e:370:7334",
-      // Two colons without compression, and `::` at the end.
-      "2001:db8:1:2",
       "2001::",
       "2001:db8::",
       // Upper-case hex, and the top of 2000::/3.
       "2001:DB8::1",
       "2A0B:4D07:1::1",
       "3fff:ffff::1",
-      // An IPv4 tail in place of the last two groups.
+      // An IPv4 tail in place of the last two groups, after `::` or six groups.
       "2001:db8::192.0.2.1",
       "2001:db8::ffff:192.0.2.1",
       "2001:db8:1:2:3:4:192.0.2.1",
@@ -519,6 +519,7 @@ describe("global IPv6 addresses", () => {
       // Unbracketed, a path (a prefix length too), query or fragment; a port needs brackets.
       "2001:db8::1/admin",
       "2001:db8::/32",
+      "2001:db8:1:2:3:4:5:6/64",
       "2001:db8::1?x=1",
       "2001:db8::1#top",
       // A user part, and the scheme rules, which already took any host after them.
@@ -544,6 +545,30 @@ describe("global IPv6 addresses", () => {
       publicly(raw ?? "", expected ?? "");
   });
 
+  test("Korean particles and the copula on an address don't hide it (hostile review)", () => {
+    // Korean attaches them straight to a number, as it does to an IPv4 address.
+    for (const [raw, expected] of [
+      ["제 서버 주소는 2001:db8::1입니다", "제 서버 주소는 [link removed]입니다"],
+      ["주소 2001:db8::1로 접속하세요", "주소 [link removed]로 접속하세요"],
+      ["주소는 2001:db8::1에서 접속", "주소는 [link removed]에서 접속"],
+      ["2001:db8::1번 서버", "[link removed]번 서버"],
+      ["서버2001:db8::1", "서버[link removed]"],
+      ["제 서버 주소는 192.168.1.10입니다", "제 서버 주소는 [link removed]입니다"],
+    ])
+      publicly(raw ?? "", expected ?? "");
+  });
+
+  test("Thai, Lao, Khmer and Myanmar text around an address doesn't hide it (hostile review)", () => {
+    // These scripts are written without spaces between words, like Chinese and Japanese.
+    for (const [raw, expected] of [
+      ["ไอพีของผมคือ2001:db8::1ครับ", "ไอพีของผมคือ[link removed]ครับ"],
+      ["ທີ່ຢູ່2001:db8::1ແມ່ນ", "ທີ່ຢູ່[link removed]ແມ່ນ"],
+      ["អាសយដ្ឋាន2001:db8::1គឺ", "អាសយដ្ឋាន[link removed]គឺ"],
+      ["လိပ်စာ2001:db8::1ပါ", "လိပ်စာ[link removed]ပါ"],
+    ])
+      publicly(raw ?? "", expected ?? "");
+  });
+
   test("times, ratios, one-colon forms, scopes and non-global addresses stay", () => {
     for (const phrase of [
       "meet at 10:30:00 or 20:30:00, until 23:59:59",
@@ -556,12 +581,45 @@ describe("global IPv6 addresses", () => {
       publicly(phrase, phrase);
   });
 
+  test("dates, totals, scores, slices and hex runs without `::` stay (hostile review)", () => {
+    // They fit the owner's rule, but not an address's shape: without `::`, an address has all
+    // eight groups, or six and an IPv4 tail.
+    for (const phrase of [
+      "photo taken 2025:09:25 14:30:00",
+      "[25/Sep/2025:14:30:00 +0000] GET /",
+      "2025:09:25:14:30:00 bot crashed",
+      "my playtime is 2150:30:12 so far",
+      "final score 2000:1500:1200",
+      "use data[2000:3000:10] instead",
+      "addr 3a4f:0012:ab77 value",
+      "mac 2c54:91c3:4e8a",
+      "the date 2026:9:25",
+      "we won 3000:2999:0",
+    ])
+      publicly(phrase, phrase);
+  });
+
+  test("the start of an address without `::` stays (an accepted limit)", () => {
+    // Fewer than eight groups with no `::` can't be told apart from the dates and scores above.
+    for (const phrase of [
+      "my prefix is 2001:db8:1234 now",
+      "server 2001:db8:1:2 now",
+      "server 2001:db8:1:2:3:4:5 now",
+    ])
+      publicly(phrase, phrase);
+    // With `::` it has an address's shape and goes, as the owner's rule requires, even as a slice.
+    publicly("my prefix is 2001:db8:1234::/48 now", "my prefix is [link removed] now");
+    publicly("use data[2000::2] instead", "use data[link removed] instead");
+  });
+
   test("an address inside a longer run of letters, digits or colons stays", () => {
     // Touching a letter or digit, or a longer first group.
     for (const phrase of [
       "server ip2001:db8::1 now",
       "server 2001:db8::1x now",
       "server \u{E9}2001:db8::1 now",
+      // A script written with spaces between words, where a word running on is part of it.
+      "server сервер2001:db8::1 now",
       "server 12001:db8::1 now",
       "server abcd2001:db8::1 now",
       "server 2001:db8::12345 now",
@@ -721,7 +779,8 @@ describe("the fixed point", () => {
   test("long colon and hex runs clean in linear time", () => {
     // IPv6 shapes: whole runs of groups, runs a letter at the end forces the rule to give up on
     // (so every group is backtracked), `::` runs, labels and brackets before groups, 5-digit
-    // groups, and IPv4 tails. Each takes under 1 ms warm; the bound catches only a regression.
+    // groups, IPv4 tails after six groups or `::`, and Korean words around addresses. Each takes
+    // under 1 ms warm; the bound catches only a regression.
     const fill = (unit: string) => unit.repeat(Math.ceil(1000 / unit.length)).slice(0, 1000);
     for (const text of [
       fill("2001:"),
@@ -735,6 +794,10 @@ describe("the fixed point", () => {
       fill("abcde:2001:1:"),
       fill("2001:1.1."),
       fill("ip:2001::1 "),
+      fill("2001:1:2:3:4:5:"),
+      fill("2001:1:2:3:4:1.1.1.1x "),
+      fill("2001::1:1:1:1:1:1.1.1"),
+      fill("주소2001:db8::1입"),
     ]) {
       const started = performance.now();
       clean(text);
