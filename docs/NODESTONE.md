@@ -13,7 +13,20 @@ Initialize a checkout with `git submodule update --init --recursive` **before `b
 
 `bun.lock` records the local dependency graph and selector revision, while `sidecar/upstream-revisions.json` records both full commit identities and a SHA-256 fingerprint of the parser's manifest/source files. The build checks the submodule commit when Git metadata is available, and always checks its source fingerprint, including inside Docker where repository metadata is excluded. These checks prevent a stale or different parser checkout from being mislabeled. `scripts/build-sidecar.ts` bundles the four parser classes and selector assets into the worker; TaruBot uses the HTTP adapter in `src/infrastructure/nodestone/client.ts`.
 
-### Keeping selectors current
+### Live selectors (2.19.0)
+
+The owner decided on 2026-09-25 that `xivapi/lodestone-css-selectors` **always runs at its latest version**. The sidecar no longer waits for a release to pick up new selectors:
+
+- **Loading.** The build rewrites Nodestone's static selector imports into runtime loads (`rewriteSelectorImports` in `sidecar/transforms.ts`). Each parser worker reads the *active* selector set when it starts (`sidecar/selector-runtime.ts`), and every request runs in a fresh worker, so a new set applies from the next request with no rebuild or restart. The build checks that all 9 selector files Nodestone references load this way, and writes them, at the lockfile's commit, to `dist/sidecar/selectors-baseline.json` as the bundled fallback.
+- **Following upstream.** On every upstream check (at startup, then every `NODESTONE_UPSTREAM_CHECK_SECONDS`, 15 minutes by default), a new selector HEAD goes to `SelectorStore.activate()` (`sidecar/selectors.ts`). It downloads the 9 files from `raw.githubusercontent.com`, pinned to that commit and each read at most 512 KiB into memory, and validates each: a definition needs a non-empty `selector` string and correctly typed options, and every definition and group of the bundled copy, at any depth, must still exist as the same kind. It then writes the set to `NODESTONE_SELECTORS_DIR` (default `<tmpdir>/tarubot-selectors`) and switches the `active.json` pointer atomically. It keeps the set it replaced until the next activation, because a worker reads the pointer and then the set it names.
+- **Regexes aren't compiled during validation.** Nodestone translates and applies them per column, and upstream already ships one it can't compile (achievements' `ENTRY.NAME`), which only affects that column.
+- **Failures and restarts.** A download or validation failure keeps the active set and logs `selectors_rejected` once per revision; a switch logs `selectors_updated` (from and to). A restarted container adopts the set it already activated only if that set is still there and passes the same validation; otherwise it removes the pointer, so workers load the bundled set it then reports, logs `selectors_not_restored` with the reason, and downloads HEAD again at the first check. The status follows a switch as soon as the pointer moves; removing older sets afterwards is best effort.
+- **Health.** `/health` reports `selectors: {revision, source: upstream|bundled, activatedAt, bundled}`, and the upstream `lodestone-css-selectors` component's `deployed` is the live revision.
+- **Worker environment.** Parser workers receive the process environment explicitly. A Bun worker otherwise sees only the environment from process start, which would miss the selector directory.
+
+Parser **code** (`xivapi/nodestone`) stays release-managed, through the update workflow below, which also refreshes the bundled selector fallback.
+
+### Keeping the parser and the bundled selectors current
 
 ```sh
 # Read-only check: nonzero exit status means the checkout or selector lock is behind HEAD.
@@ -26,9 +39,9 @@ bun run nodestone:update
 bun run nodestone:update --deploy
 ```
 
-The running sidecar checks upstream at startup and hourly by default. `/health` includes a cached `upstream` status (`checking`, `current`, `update_available`, or `unavailable`) and deployed/latest commits for each repository. Changes are reported in structured logs. Health probes themselves make no upstream requests, and GitHub availability does not disable otherwise working parsing.
+The running sidecar checks upstream at startup and every 15 minutes by default (2.19.0; hourly before). `/health` includes a cached `upstream` status (`checking`, `current`, `update_available`, or `unavailable`) and deployed/latest commits for each repository. Changes are reported in structured logs. Health probes themselves make no upstream requests, and GitHub availability does not disable otherwise working parsing.
 
-The monitor **detects** updates; the update command advances source for a verified PR. Merge the passing PR and pull its published images on registry-based deployments. The `--deploy` variant performs an explicit source build through `docker-compose.build.yml` for local development. The updater refuses to overwrite a dirty submodule. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit the updated **submodule pointer**, lockfile, and build metadata together after verification.
+For the parser, the monitor **detects** updates; the update command advances source for a verified PR. Selectors it **activates** itself (above). Merge the passing PR and pull its published images on registry-based deployments. The `--deploy` variant performs an explicit source build through `docker-compose.build.yml` for local development. The updater refuses to overwrite a dirty submodule. Failed compatibility checks stop deployment and identify the parser/fixture changes needed. Commit the updated **submodule pointer**, lockfile, and build metadata together after verification.
 
 `sidecar/transforms.ts` contains checked, narrow source-compatibility changes. Each targeted replacement must match exactly once, so an upstream change fails the build for review:
 
@@ -76,7 +89,8 @@ Responses are uncached. Verification always requests biography data through a ne
 | `LODESTONE_ATTEMPTS` | 3 | Maximum attempts for retryable transport failures |
 | `LODESTONE_MAX_PAGES` | 100 | Search/roster pagination bound |
 | `NODESTONE_RESPONSE_BYTES` | 8,000,000 | Maximum streamed sidecar response size |
-| `NODESTONE_UPSTREAM_CHECK_SECONDS` | 3,600 | Background checks of both upstream repositories; minimum 300, or 0 for offline operation |
+| `NODESTONE_UPSTREAM_CHECK_SECONDS` | 900 | Background checks of both upstream repositories; minimum 300, or 0 for offline operation |
+| `NODESTONE_SELECTORS_DIR` | `<tmpdir>/tarubot-selectors` | Where live selector sets are written; parser workers read the active one (2.19.0) |
 
 **Lodestone gate (2.17.0).** Start spacing and a shared cooldown live in `sidecar/gate.ts`. The first Lodestone 429 closes the gate for every request: new starts are refused locally with the remaining cooldown, without contacting the Lodestone. The cooldown starts at 15 s and doubles on each consecutive 429 up to 5 min, or follows a longer Retry-After of up to 15 min. Any other Lodestone answer resets the escalation. `/health` reports `lodestone: {cooldownSeconds, strikes}`, and each 429 logs one `lodestone_throttled` line.
 

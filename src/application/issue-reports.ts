@@ -694,6 +694,8 @@ export class IssueReports {
       return `${client}\n\n_The sidecar didn't answer its health check._`;
     }
     const gate = (health.lodestone ?? {}) as Record<string, unknown>;
+    // The live selector set (2.19.0): its commit, and whether it came from upstream or the bundle.
+    const live = (health.selectors ?? {}) as Record<string, unknown>;
     const upstream = (health.upstream ?? {}) as Record<string, unknown>;
     const components = Array.isArray(upstream.components)
       ? (upstream.components as Record<string, unknown>[])
@@ -708,6 +710,12 @@ export class IssueReports {
           ["429 cooldown", duration(gate.cooldownSeconds)],
           ["429s in a row", gate.strikes ?? "—"],
           ["Upstream parsers", upstream.status ?? "—"],
+          [
+            "Selectors",
+            typeof live.revision === "string"
+              ? `${sha(live.revision)} (${live.source === "upstream" ? `live since ${typeof live.activatedAt === "string" ? when(new Date(live.activatedAt)) : "—"}` : "bundled"})`
+              : "—",
+          ],
         ],
         ["Sidecar", "Value"],
       ),

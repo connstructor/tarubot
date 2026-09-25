@@ -25,7 +25,7 @@ services:
       LODESTONE_TIMEOUT_MS: ${LODESTONE_TIMEOUT_MS:-15000}
       LODESTONE_BODY_BYTES: ${LODESTONE_BODY_BYTES:-2000000}
       # Check parser and selector repositories independently; probes return the cached result.
-      NODESTONE_UPSTREAM_CHECK_SECONDS: ${NODESTONE_UPSTREAM_CHECK_SECONDS:-3600}
+      NODESTONE_UPSTREAM_CHECK_SECONDS: ${NODESTONE_UPSTREAM_CHECK_SECONDS:-900}
     healthcheck:
       test: [CMD, bun, -e, "const r=await fetch('http://localhost:8080/health');process.exit(r.ok?0:1)"]
       interval: 15s

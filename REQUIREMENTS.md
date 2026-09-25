@@ -119,6 +119,14 @@ Any sighting in between voids the first 404: a profile read, a private profile, 
 
 **Release order.** 2.17.0 ships these decisions with migration `007_profile_checks.sql`. The GitHub issue reporter and `/issue` follow in 2.18.0, then OPS-10/OPS-11.
 
+**Selectors always current (owner decision, 2026-09-25).** "xivapi/lodestone-css-selectors should ALWAYS be the latest version available." The sidecar follows the selector repository's HEAD at runtime:
+- it downloads each new revision's files at that commit, validates them structurally, and activates them for the next parser worker, with no release, rebuild or restart;
+- a revision that fails keeps the active set and is logged;
+- the build's bundled copy is the fallback;
+- parser code stays release-managed.
+
+Release 2.19.0 implements this. The owner also asked to go further and drop Nodestone, parsing the Lodestone with the selectors directly; that is planned for 2.20.0.
+
 ### Approved issue-reporting amendments (2026-09-24)
 
 The owner asked for "an 'unexpected behavior handler' that will auto-open a GitHub issue when something goes wonky, and include as much context as possible", and for "an /issue command … that accepts a user comment, same data state collection". Their answers set the policy below. Release 2.18.0 implements it with migration `008_issue_reports.sql`.

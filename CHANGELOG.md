@@ -1,6 +1,33 @@
 # Version history
 
-The current application version is **2.18.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.19.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.19.0 — Live Lodestone selectors
+
+The second test report showed the sidecar parsing with selectors `1e9dd65`, while `xivapi/lodestone-css-selectors` was at `a96d68b`. The owner: "xivapi/lodestone-css-selectors should ALWAYS be the latest version available." The selectors were a `#HEAD` Git dependency, but `bun.lock` pinned what it last resolved and the build bundled that into the worker, so only a manual `nodestone:update` release ever advanced them. 2.19.0 makes them follow upstream at runtime. The missing three commits only added Beastmaster selectors to `profile/classjob.json`, which TaruBot doesn't read. There is no migration and no command change.
+
+- **Runtime loading.**
+  - The build rewrites Nodestone's static selector imports into loads through `sidecar/selector-runtime.ts`. Each parser worker, which is fresh per request, reads the active set from `NODESTONE_SELECTORS_DIR`, or the bundled `dist/sidecar/selectors-baseline.json`.
+  - The build checks that all 9 referenced selector files load this way.
+- **Following HEAD.** The upstream monitor now activates a new selector HEAD instead of only reporting it. `SelectorStore` (`sidecar/selectors.ts`):
+  - downloads the 9 files from `raw.githubusercontent.com` at that commit, each read at most 512 KiB into memory;
+  - validates them structurally: a non-empty `selector` string, typed options, and no lost or reshaped definition or group at any depth;
+  - writes the set, then switches `active.json` atomically, keeping the replaced set until the next activation for workers that just read the old pointer.
+  - A failure keeps the active set and logs `selectors_rejected` once per revision; a switch logs `selectors_updated`.
+  - A restarted container adopts its active set only if the set is still there and valid; otherwise it removes the pointer so workers use the bundled set too, logs `selectors_not_restored`, and fetches HEAD again.
+  - The reported revision follows the pointer as soon as it moves; a failed removal of old sets can't make a live switch look rejected.
+- **Faster checks.** The monitor checks every 15 minutes (`NODESTONE_UPSTREAM_CHECK_SECONDS` default 900, was 3600) in both Compose files and both env templates.
+- **Visibility.** `/health` reports `selectors {revision, source, activatedAt, bundled}`, the upstream component shows the live revision, and issue reports show the live selectors.
+- **Worker environment.** Parser workers now receive the process environment explicitly. A Bun worker sees only the environment from process start, which would have missed the selector directory; `PAGE_REGION` worked only because Compose sets it.
+- **The bundled copy** moved to `a96d68b` through `bun run nodestone:update`. The parser, `5b7eec6`, was already current.
+- **Found while testing against real upstream.** Validation first compiled regexes, and that rejected the real selector set: upstream's `profile/achievements.json` `ENTRY.NAME` regex already fails Nodestone's own translation, affecting only that unused column. Regexes are no longer compiled during validation.
+- **Tests:**
+  - validation, activation, restore and failure handling of the store against a fake GitHub;
+  - from the code review (each fails without its fix): nested key loss, restoring a missing or damaged set and removing its pointer, keeping the replaced set, a failed cleanup after a live switch, and the size limit applied while reading;
+  - the monitor's live path;
+  - a contract test in which a real parser worker parses an FC page with an activated set whose name selector points at the tag;
+  - a one-off activation against the real upstream (9 files at `a96d68b`, 710 ms).
+- **Next.** The owner asked to drop Nodestone and parse with the selectors directly: planned for 2.20.0, reusing this selector store. The records also add the 2.18.1 rollouts and the reports-token rotation.
 
 ## 2.18.1 — Readable issue reports
 

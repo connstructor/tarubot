@@ -347,6 +347,21 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - From the operator clone, `register.js --global` registered 20 roots / 44 paths, and `commands.js list` exited 0 and clean (global 20, including `issue`).
 - **First report:** the owner's `/issue` opened issue #1 in `deconfined/tarubot-reports`, with the right title, labels and fenced description, and no secrets. Its layout problems, above all a code fence starting mid-line, are fixed in 2.18.1.
 
+### 2.18.1 rollout and reports-token rotation — 2026-09-25
+
+- PR #20 merged as `6a3973d`. The review round fixed a null roster age read as "0 s" and routine logs being filtered after truncation; the re-review had no comments. Publish run 36092052960 published `tarubot:2.18.1` (`sha256:e2e0d0ac…`) and `tarubot-nodestone:2.18.1` (`sha256:1848bdcb…`).
+- **DevBot:**
+  - 501 jobs, all succeeded. The writer stopped at 03:58:39 UTC, head 008.
+  - The backup `.cache/backups/tarubot_dev-before-2.18.1-6a3973d.dump` is 124,514 bytes, sha256 `eefcbd69e1a2693b58c93cd399ec45abb446cf53b5377ab0be9bf6d6aebabee4`. The restore was verified at 008.
+  - Healthy at 03:58:59, readiness 200.
+- **Production:** the no-migration procedure (pull, pin, `up -d --wait`). Healthy at 03:59:27, with the token present and info log lines only.
+- **Token rotation:**
+  - The first reports token had been pasted in chat, so the owner regenerated it. The new one can open issues only in `tarubot-reports` (the empty-body probe got 422 there, 403 on the main repository), and the old one answers 401.
+  - The production `.env` was swapped over SSH stdin (temporary file and rename, mode 600, checksum matching), and the bot container was recreated at 04:07:39.
+  - The owner swapped DevBot's `.env`, and the container was recreated at 04:08:29.
+  - Test report #3, which failed five times with 401 while the old token was active, was delivered as issue #2 at 04:08:50.
+  - Issue #2 rendered as 11 tables, 2 code blocks and the collapsible logs, with no stray fences and no secrets.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

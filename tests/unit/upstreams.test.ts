@@ -37,6 +37,37 @@ test("matching revisions are current and failed checks do not claim freshness", 
   monitor.stop();
 });
 
+test("a live upstream is brought to HEAD, and reports what actually runs (2.19.0)", async () => {
+  const selectorHead = "c".repeat(40);
+  const activated: string[] = [];
+  let accept = true;
+  const monitor = new UpstreamMonitor(
+    deployed,
+    async (repository) => (repository.endsWith("/nodestone") ? "a".repeat(40) : selectorHead),
+    () => {},
+    {
+      package: "lodestone-css-selectors",
+      async activate(latest) {
+        activated.push(latest);
+        // A rejected HEAD leaves the previous revision running.
+        return accept ? latest : "b".repeat(40);
+      },
+    },
+  );
+  await monitor.check();
+  expect(activated).toEqual([selectorHead]);
+  expect(monitor.status().status).toBe("current");
+  expect(monitor.status().components[1]).toMatchObject({ deployed: selectorHead, current: true });
+  accept = false;
+  await monitor.check();
+  expect(monitor.status().status).toBe("update_available");
+  expect(monitor.status().components[1]).toMatchObject({
+    deployed: "b".repeat(40),
+    current: false,
+  });
+  monitor.stop();
+});
+
 test("Bun locks the local parser path and an independent Git selector revision", () => {
   expect(
     lockedRevisions({

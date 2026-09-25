@@ -61,6 +61,16 @@ export function lockedRevisions(raw: unknown): Record<string, string> {
   );
 }
 
+/**
+ * An upstream the sidecar follows live rather than through releases (2.19.0: the selectors). The
+ * monitor hands it each new HEAD; activate() returns the revision active afterwards, which stays the
+ * previous one when the new HEAD couldn't be downloaded or validated.
+ */
+export interface LiveUpstream {
+  readonly package: string;
+  activate(latest: string, signal: AbortSignal): Promise<string>;
+}
+
 /** Keep a periodic cached health result; probes themselves never trigger upstream traffic. */
 export class UpstreamMonitor {
   private state: UpstreamState = { status: "checking", checkedAt: null, components: [] };
@@ -72,6 +82,7 @@ export class UpstreamMonitor {
     private readonly deployed: Revisions,
     private readonly resolve: typeof latestRevision = latestRevision,
     private readonly report: (state: UpstreamState) => void = () => {},
+    private readonly live?: LiveUpstream,
   ) {}
 
   /** The returned state is read-only presentation data, independent of parser readiness. */
@@ -91,11 +102,16 @@ export class UpstreamMonitor {
           if (!deployed || deployed.repository !== upstream.repository)
             throw new Error("Missing deployed revision metadata.");
           const latest = await this.resolve(upstream.repository, this.cancellation.signal);
+          // A live upstream (the selectors) is brought to HEAD here; `deployed` is then what runs.
+          const running =
+            this.live?.package === upstream.package
+              ? await this.live.activate(latest, this.cancellation.signal)
+              : deployed.revision;
           return {
             ...upstream,
-            deployed: deployed.revision,
+            deployed: running,
             latest,
-            current: deployed.revision === latest,
+            current: running === latest,
           };
         }),
       );

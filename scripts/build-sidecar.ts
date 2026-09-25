@@ -1,5 +1,5 @@
 /** Compile the pinned submodule and lockfile-resolved selectors into an isolated Bun ESM worker. */
-import { transform } from "../sidecar/transforms.js";
+import { selectorImports, transform } from "../sidecar/transforms.js";
 import { fileURLToPath } from "node:url";
 import { lockedRevisions, revisionsSchema, upstreams } from "../sidecar/upstreams.js";
 import { nodestoneDirectory, nodestoneRevision, nodestoneSourceHash } from "./nodestone-source.js";
@@ -59,8 +59,33 @@ const result = await Bun.build({
   ],
 });
 if (!result.success) throw new AggregateError(result.logs, "Sidecar compilation failed");
+// Every selector file Nodestone references must load at runtime (2.19.0): a reference the rewrite
+// missed would be bundled statically and never follow upstream.
+const referenced = new Set<string>();
+for await (const path of new Bun.Glob("src/**/*.ts").scan({ cwd: `${root}${nodestoneDirectory}` }))
+  for (const match of (await Bun.file(`${root}${nodestoneDirectory}/${path}`).text()).matchAll(
+    /lodestone-css-selectors\/([\w/-]+\.json)/gu,
+  ))
+    if (match[1]) referenced.add(match[1]);
+const loaded = [...selectorImports].sort();
+if (!loaded.length || JSON.stringify(loaded) !== JSON.stringify([...referenced].sort()))
+  throw new Error(
+    "Some Nodestone selector imports weren't rewritten to load at runtime; update sidecar/transforms.ts.",
+  );
+// The bundled fallback: the lockfile's selectors, the files the parsers load, and their commit.
+const selectors = revisions["lodestone-css-selectors"];
+if (!selectors) throw new Error("Missing lodestone-css-selectors revision metadata.");
+const files: Record<string, unknown> = {};
+for (const path of loaded)
+  files[path] = await Bun.file(`${root}node_modules/lodestone-css-selectors/${path}`).json();
+await Bun.write(
+  `${root}dist/sidecar/selectors-baseline.json`,
+  `${JSON.stringify({ repository: selectors.repository, revision: selectors.revision, files })}\n`,
+);
 await Bun.write(
   `${root}dist/sidecar/upstream-revisions.json`,
   `${JSON.stringify(revisions, null, 2)}\n`,
 );
-console.log("Compiled Nodestone parsers and selectors with verified upstream revision metadata.");
+console.log(
+  `Compiled Nodestone parsers with ${loaded.length} runtime-loaded selector files and verified upstream revision metadata.`,
+);
