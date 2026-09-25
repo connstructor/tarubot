@@ -7,11 +7,11 @@ import {
   type AccessFacts,
   type Actor,
 } from "../domain/policy.js";
-import { effectsPaused } from "../domain/failures.js";
+import { effectsPaused, WAITING_CODES } from "../domain/failures.js";
 import { PROFILE_RETRY_SECONDS } from "../domain/profiles.js";
 import { Failure, json, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
-import { ensureUser, orm } from "../infrastructure/postgres/database.js";
+import { ensureUser, orm, type Connection } from "../infrastructure/postgres/database.js";
 import {
   and,
   desc,
@@ -20,6 +20,7 @@ import {
   getTableColumns,
   gt,
   inArray,
+  isNotNull,
   isNull,
   lt,
   lte,
@@ -31,9 +32,12 @@ import {
 } from "drizzle-orm";
 import * as t from "../infrastructure/postgres/schema.js";
 import {
+  closeUnstarted,
+  degradedNoticeKey,
   enqueue,
   layoutGuildRoles,
   reconcileUser,
+  recoveredNoticeKey,
   scheduleJob,
   secureGuildChannels,
   type Job,
@@ -45,6 +49,24 @@ import { accessFacts } from "./access-facts.js";
 
 /** Bound the per-job role-delta history; a long-lived blocked job is re-run indefinitely. */
 const APPLIED_HISTORY = 20;
+/**
+ * Officer Lodestone notices (owner decisions on #29, 2026-09-25; REQUIREMENTS.md "Approved
+ * officer-notice amendments"). A degraded notice waits this long before posting, so a failure the
+ * next retries fix posts nothing: a roster that changed mid-read retries only after the 60 s FC
+ * cooldown, and the accepted roster then closes the notice unposted.
+ */
+const DEGRADED_HOLD_SECONDS = 300;
+/**
+ * While the FC keeps failing, each guild's officers get at most one degraded notice a day,
+ * counted from when the last one finished (posted or skipped), or from when it was queued if it
+ * hasn't finished.
+ */
+const DEGRADED_REPEAT_SECONDS = 24 * 3600;
+/** Unchanged from before #29, so officers read the text they already know. */
+const DEGRADED_NOTICE =
+  "Lodestone synchronization is degraded. Existing accepted membership evidence is retained; inspect /sync status.";
+/** The owner's wording (#29, second round): one line after a posted degraded notice. */
+const RECOVERED_NOTICE = "Lodestone synchronization recovered: the FC roster was accepted again.";
 /** One role delta sent to Discord by a reconciliation pass, even if that pass is later superseded. */
 type AppliedDelta = {
   generation: number;
@@ -191,6 +213,16 @@ export class Synchronization {
             "lease_lost",
             "Worker lease expired or was reclaimed; another worker owns this job.",
           );
+        // The outage this roster ends, read before the FC update below clears it: every failure
+        // since the last accepted roster left last_error set, and the notices it queued are newer
+        // than `since` (#29).
+        const [previous] = await db
+          .select({
+            since: t.freeCompanies.last_successful_roster_at,
+            error: t.freeCompanies.last_error,
+          })
+          .from(t.freeCompanies)
+          .where(eq(t.freeCompanies.id, fcId));
         await this.app.storeCompany(client, roster.company);
         const [snapshot] = await db
           .insert(t.rosterSnapshots)
@@ -316,18 +348,31 @@ export class Synchronization {
                 .where(and(eq(t.syncRuns.guild_id, guild.id), eq(t.syncRuns.job_id, job.id))),
             )
             .onConflictDoNothing();
-          await enqueue(
-            client,
-            "officer.notify",
-            `officer:${guild.id}`,
-            {
-              message: `FC roster accepted: ${roster.members.length} members; ${departures} confirmed character departures. Snapshot ${snapshot.id}.`,
-            },
-            guild.id,
-            null,
-            5,
-          );
+          // Routine acceptance is a DevBot diagnostic (owner decision, #29): only the test guild
+          // posts it. Production's TEST_GUILD_ID is "" (docker-compose.production.yml sets it and
+          // env.ts defaults to it; deployment.ts refuses anything else for the maintenance tools),
+          // which never equals a guild.
+          if (guild.id === this.app.config.TEST_GUILD_ID)
+            await enqueue(
+              client,
+              "officer.notify",
+              `officer:${guild.id}`,
+              {
+                message: `FC roster accepted: ${roster.members.length} members; ${departures} confirmed character departures. Snapshot ${snapshot.id}.`,
+              },
+              guild.id,
+              null,
+              5,
+            );
         }
+        // Only a roster that follows a failure can end an outage officers were told about.
+        if (previous?.error)
+          await this.recovered(
+            client,
+            fcId,
+            guilds.map((guild) => guild.id),
+            previous.since,
+          );
         await db
           .update(t.freeCompanies)
           .set({ last_successful_roster_at: roster.observedAt, last_error: null })
@@ -347,29 +392,12 @@ export class Synchronization {
           .update(t.freeCompanies)
           .set({ last_error: error instanceof Failure ? error.code : "acquisition_failed" })
           .where(eq(t.freeCompanies.id, fcId));
-        // Lodestone throttling and busy waits (a full sidecar until 2.21.0) are waits since 2.17.0:
-        // the job retries after the cooldown without spending attempts, so a notice per wait would
-        // repeat for as long as the throttling lasts. /sync status still shows the FC's last_error.
-        const throttled = error instanceof Failure && ["rate_limited", "busy"].includes(error.code);
-        const guilds = throttled
-          ? []
-          : await this.app.db.orm
-              .select({ id: t.guilds.id })
-              .from(t.guilds)
-              .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)));
-        for (const guild of guilds)
-          await enqueue(
-            this.app.db.pool,
-            "officer.notify",
-            `officer:${guild.id}`,
-            {
-              message:
-                "Lodestone synchronization is degraded. Existing accepted membership evidence is retained; inspect /sync status.",
-            },
-            guild.id,
-            null,
-            60,
-          );
+        // Waits aren't degradation (2.17.0): Lodestone throttling and busy retry after the
+        // cooldown without spending attempts, so a notice per wait would repeat for as long as the
+        // throttling lasts. /config validate shows the FC's failed attempt once the roster is
+        // stale, and /sync status lists the retrying roster job with its error. Every other
+        // failure may queue a held, rate-limited degraded notice (#29).
+        if (!(error instanceof Failure && WAITING_CODES.has(error.code))) await this.degraded(fcId);
       }
       throw error;
     } finally {
@@ -378,6 +406,134 @@ export class Synchronization {
           .query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [`fc:${fcId}`])
           .catch(() => {});
       connection.release();
+    }
+  }
+  /**
+   * Queue each linked guild's degraded notice, held and rate-limited (#29). It is skipped while
+   * any degraded notice for the guild and FC is pending (queued, running, blocked or parked
+   * `disabled`), whatever its age. Otherwise enqueue() would merge each failure into a queued,
+   * running or blocked row (bumping its generation, and flipping a blocked one back to queued),
+   * and would add a second row beside a parked `disabled` one, which its active-job index doesn't
+   * cover. It is also skipped while this outage's newest notice finished (or, if unfinished, was
+   * queued) less than a day ago; measuring from creation alone would let a notice released after
+   * a day parked be followed by a repeat minutes later. The outage began at the FC's last accepted
+   * roster, and jobs rows are never deleted, so they are the notice history. Roster attempts for
+   * one FC hold its advisory lock, so this check and the enqueue don't race.
+   *
+   * Clock assumption: the boundary, `last_successful_roster_at`, is the accepted roster's
+   * `observedAt` from the acquiring process's clock, while `jobs.created_at` is the database's
+   * now(). The FC lock orders them: the last outage's notices were queued before the accepted
+   * attempt began fetching, and this outage's after it published and a later attempt fetched. So
+   * the clocks must agree to within those seconds, which NTP keeps to milliseconds on the Docker
+   * host and managed PostgreSQL. A bot clock far ahead of the database's would let this outage's
+   * notices look older than the boundary and switch the daily limit off; one far behind would let
+   * the last outage's notices suppress this one's first.
+   */
+  private async degraded(fcId: string): Promise<void> {
+    await this.app.db.transaction(async (client) => {
+      const db = orm(client);
+      const [fc] = await db
+        .select({ since: t.freeCompanies.last_successful_roster_at })
+        .from(t.freeCompanies)
+        .where(eq(t.freeCompanies.id, fcId));
+      // Share-locked, as the roster publication does: an FC unlink waits for this transaction and
+      // then closes whatever it queued, or commits first and takes the guild out of this list.
+      const guilds = await db
+        .select({ id: t.guilds.id })
+        .from(t.guilds)
+        .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)))
+        .for("share");
+      for (const guild of guilds) {
+        const key = degradedNoticeKey(guild.id, fcId);
+        const [told] = await db
+          .select({ id: t.jobs.id })
+          .from(t.jobs)
+          .where(
+            and(
+              eq(t.jobs.dedupe_key, key),
+              or(
+                inArray(t.jobs.status, ["queued", "running", "blocked", "disabled"]),
+                and(
+                  fc?.since ? gt(t.jobs.created_at, fc.since) : undefined,
+                  gt(
+                    sql`coalesce(${t.jobs.completed_at},${t.jobs.created_at})`,
+                    sql`now()-${DEGRADED_REPEAT_SECONDS}*interval '1 second'`,
+                  ),
+                ),
+              ),
+            ),
+          )
+          .limit(1);
+        if (!told)
+          await enqueue(
+            client,
+            "officer.notify",
+            key,
+            { message: DEGRADED_NOTICE },
+            guild.id,
+            null,
+            DEGRADED_HOLD_SECONDS,
+          );
+      }
+    });
+  }
+  /**
+   * An accepted roster ends the outage for the FC's guilds (#29). A degraded notice still waiting
+   * to post is closed unposted: posting it and then the recovery would be two lines about an
+   * outage that is over. One recovery line follows only a degraded notice that was posted (or is
+   * posting) during this outage, so officers who never heard an outage began aren't told it
+   * ended. `active` holds the publication's share-locked active guilds; `since` is the FC's
+   * previous accepted roster, where this outage began. The clock assumption in degraded()
+   * applies to `since` too.
+   *
+   * Accepted edge case: a notice `running` now is left to finish and counted as posted. If that
+   * send fails (or its worker dies), the queue retries it, and it can post after the recovery
+   * line with nothing after it; the window is one send in flight during this transaction.
+   */
+  private async recovered(
+    client: Connection,
+    fcId: string,
+    active: readonly string[],
+    since: Date | null,
+  ): Promise<void> {
+    const db = orm(client);
+    // Every guild still linked to the FC, including one the bot was removed from: the queue never
+    // claims an inactive guild's rows, so its waiting notice would otherwise post about this ended
+    // outage once the bot is added back, with no recovery line after it. One query, so a guild
+    // reactivated meanwhile is still in it.
+    const linked = await db
+      .select({ id: t.guilds.id })
+      .from(t.guilds)
+      .where(eq(t.guilds.fc_id, fcId));
+    for (const guild of linked)
+      await closeUnstarted(client, degradedNoticeKey(guild.id, fcId), "recovered before posting");
+    // Recovery lines only for active guilds: an inactive guild's would wait, like its notices, and
+    // post long after this outage once the bot is added back.
+    for (const guild of active) {
+      // Creation, not completion, places a notice in an outage: one running at the previous
+      // recovery that posted just after it belongs to that outage, and counting it here would
+      // post a second recovery line for it.
+      const [posted] = await db
+        .select({ id: t.jobs.id })
+        .from(t.jobs)
+        .where(
+          and(
+            eq(t.jobs.dedupe_key, degradedNoticeKey(guild, fcId)),
+            since ? gt(t.jobs.created_at, since) : undefined,
+            or(isNotNull(t.jobs.message_id), eq(t.jobs.status, "running")),
+          ),
+        )
+        .limit(1);
+      if (posted)
+        await enqueue(
+          client,
+          "officer.notify",
+          recoveredNoticeKey(guild, fcId),
+          { message: RECOVERED_NOTICE },
+          guild,
+          null,
+          5,
+        );
     }
   }
   /** Evaluate links not yet observed, requesting early acquisition when fresh evidence is absent. */

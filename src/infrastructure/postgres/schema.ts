@@ -91,6 +91,18 @@ export const guilds = pgTable("guilds", {
   guest_grandfather: text("guest_grandfather", { enum: ["pending", "completed"] }),
   /** Set exactly when guest_grandfather is 'completed' (the guest_grandfather_completion CHECK). */
   guest_grandfathered_at: instant("guest_grandfathered_at"),
+  /**
+   * Where update posts go (migration 009, owner decisions 2026-09-25); NULL means posts are off.
+   * The changelog_baseline CHECK requires changelog_version whenever this is set.
+   */
+  changelog_channel_id: externalId("changelog_channel_id"),
+  /**
+   * The newest version this guild was told about: MAJOR.MINOR.PATCH[-pre] (the migration's CHECK).
+   * Setting a channel for the first time raises it to the running version, so nothing is posted
+   * until the next release with a member note; a delivered or empty post moves it forward with a
+   * compare-and-set. The bot never lowers it, so restarts and rollbacks never post again.
+   */
+  changelog_version: text("changelog_version"),
   created_at: instant("created_at").notNull().defaultNow(),
 });
 export const guildUsers = pgTable(

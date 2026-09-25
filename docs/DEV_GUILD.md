@@ -395,11 +395,40 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
+### 2.24.2 rollout — 2026-09-25
+
+- 2.24.2 (PR #28, `4a64609`, the two CodeQL fixes) was published by run 36149105225 as `tarubot:2.24.2` (`sha256:760d963d…`). Open code-scanning alerts on main: 0.
+- **DevBot:** 589 jobs, all succeeded. The writer stopped at 14:47:08 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.2-4a64609.dump` is 132,457 bytes, sha256 `3382e84068f429a8d6076eb0e10c68b6b1a7c5d3152a0686fed8cfc3127fa7c9`; the restore was verified at 008 and the copy dropped. Healthy at 14:47:27, readiness 200.
+- **Production:** the host clone pulled `4a64609`, then `TARUBOT_IMAGE_TAG=2.24.2`, pull, and `up -d --wait --remove-orphans` at 14:47:38, healthy at 14:47:45. Readiness 200 with the heartbeat on. A live parse inside the container, through the worker with its new origin check, read the Woven Souls FC (105 members). The backup crontab line is unchanged.
+
+### 2.24.3 rollout — 2026-09-25
+
+2.24.3 (#29, PR #34, `ef0893b`) makes the officer Lodestone notices quieter; it needs a restart only, with no migration and no registration. The owner gave the go-ahead after the merge. Publish run 36183605313 published `tarubot:2.24.3` (`sha256:e9bb7ac753c2afced195835322da0db4c3d0bac85c9b3ee681212ac67842fa6a`, revision label `ef0893b`) and promoted `latest`.
+
+- **DevBot:** 619 jobs, all succeeded. The writer stopped at 20:10:01 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.3-ef0893b.dump` is 135,241 bytes (mode 600), sha256 `2f62ca6673d9b4d0f44243d6caf5c2dcf2102961216d93d460ebc363bbae09d6`; 2.24.3's `check-restore.js` verified the restore at 008 and the copy was dropped. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3` at 20:10:15, healthy at 20:10:31; readiness 200 with the writer lease held, and no warning or error at startup.
+- **Production:** the host clone pulled `ef0893b`, then `TARUBOT_IMAGE_TAG=2.24.3` (the `.env` stays mode 600), pull, and `up -d --wait --remove-orphans` at 20:10:57, healthy at 20:11:03 on the same image digest. Readiness 200 with the writer lease held, `publicTestResponses` false and effects on; the heartbeat URL is set; no warning or error at startup; the backup crontab line is present.
+- **Not run:** the DevBot `/refresh force:true` check (it writes to Discord) and the read-only `commands.js list` (nothing was registered). The production check after the next scheduled roster read (no new `officer:<guild>` row, nothing in the officer channel) is still to record.
+- **During an outage.** The new degraded key has no history, so a deploy during a Lodestone outage can post one more degraded notice, and later its recovery line.
+- **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
+- There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
+
+### 2.25.0 rollout plan (update posts; not yet run)
+
+2.25.0 adds migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). It includes 2.24.3's changes and follows the 2.24.3 rollout above. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+
+1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.25.0-<sha>.dump`.
+2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version` naming the current head (`008_issue_reports.sql`).
+3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`), then run `migrate.js` against `tarubot_dev`.
+4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.25.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on.
+5. `register.js --guild 1040379370159743139`, then `commands.js list`: clean, with the one new `/config` path.
+6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line, and choosing it again gives the no-change card with a Visibility field; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
+7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
+
 ### 2.26.0 rollout plan (`/suggest`; not yet run)
 
 Planned only: 2.26.0 (issue #32) is not merged or deployed. It follows 2.24.3 and 2.25.0 in the agreed release order, and each step below needs the owner's go-ahead.
 
-- **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head, `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 45 paths), `commands.js list`, then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
+- **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head, `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 46 paths), `commands.js list`, then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
 - **DevBot checks:**
   - a member's `/suggest` opens a preview issue in `deconfined/tarubot-reports`; check its title, fixed first line, fenced text, footer and the labels `enhancement` and `from-discord` (created there on first use), and that the reply names `deconfined/tarubot-reports#N`;
   - a second try within the hour gets "You can suggest again later";

@@ -988,6 +988,28 @@ const CONFIG_PATHS: readonly {
     call: ["configure", "400", "officer_notifications_channel_id", null, {}],
   },
   {
+    // /config changelog (2.25.0) routes like the other channel settings.
+    command: configCommand,
+    options: [
+      subcommand("changelog", [{ type: S.Channel, name: "channel", value: CHANNEL.changelog }]),
+    ],
+    resolved: resolvedChannels(CHANNEL.changelog),
+    actor: OFFICER,
+    results: { configure: C.changelogSet },
+    title: "Changelog channel set",
+    call: ["configure", "400", "changelog_channel_id", CHANNEL.changelog, {}],
+  },
+  {
+    command: configCommand,
+    options: [subcommand("changelog", [{ type: B, name: "unset_channel", value: true }])],
+    actor: OFFICER,
+    results: {
+      configure: configChange("changelog_channel_id", null, { previous: CHANNEL.changelog }),
+    },
+    title: "Changelog posts turned off",
+    call: ["configure", "400", "changelog_channel_id", null, {}],
+  },
+  {
     // The switch and the channel go to one service call (owner decision, 2026-09-24).
     command: configCommand,
     options: [subcommand("guest_applications", [{ type: B, name: "enabled", value: false }])],
@@ -1124,6 +1146,19 @@ test("/config's exactly-one checks are input failures that never reach the servi
       "role",
     ],
     [[subcommand("ledger")], "Choose a channel or set unset_channel:true, not both.", "channel"],
+    // /config changelog (2.25.0): neither, or both, is refused before the service.
+    [[subcommand("changelog")], "Choose a channel or set unset_channel:true, not both.", "channel"],
+    [
+      [
+        subcommand("changelog", [
+          { type: S.Channel, name: "channel", value: CHANNEL.changelog },
+          { type: B, name: "unset_channel", value: true },
+        ]),
+      ],
+      "Choose a channel or set unset_channel:true, not both.",
+      "channel",
+      resolvedChannels(CHANNEL.changelog),
+    ],
     // /config guest_applications needs at least one option, and never a channel with its unset.
     [
       [subcommand("guest_applications")],
@@ -1212,8 +1247,8 @@ test("the path tables return one embed for every registered command path", async
   );
   const paths = await registeredPaths();
   // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24), plus /issue
-  // (2.18.0) and /suggest (2.26.0).
-  expect(paths).toHaveLength(45);
+  // (2.18.0), /config changelog (2.25.0) and /suggest (2.26.0).
+  expect(paths).toHaveLength(46);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
   // /version reads GitHub, which version.test stubs, and /issue and /suggest have their own tests
   // below; every other path is exercised above.

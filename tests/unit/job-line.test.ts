@@ -205,6 +205,33 @@ describe("job markers and lines", () => {
     );
   });
 
+  test("update posts (2.25.0) read as 'Update post' for members, raw for officers", () => {
+    expect(jobLabel("changelog.post")).toBe("Update post");
+    const post = (overrides: Parameters<typeof job>[0]) =>
+      jobLine(job({ kind: "changelog.post", ...overrides }), VIEWERS.member);
+    expect(post({ status: "succeeded", completed_at: NOW })).toBe(
+      "`✓ DONE` Update posted <t:1790169000:R>",
+    );
+    // A range with no member notes moves the baseline without posting.
+    expect(
+      post({ status: "succeeded", completed_at: NOW, result: { skipped: "nothing for members" } }),
+    ).toBe("`– SKIPPED` Update post: nothing to do");
+    expect(post({ status: "blocked", last_error: "blocked: x" })).toBe(
+      "`! BLOCKED` Update post: an officer needs to fix permissions",
+    );
+    expect(
+      jobLine(
+        job({
+          kind: "changelog.post",
+          status: "succeeded",
+          completed_at: NOW,
+          result: { skipped: "already announced" },
+        }),
+        VIEWERS.officer,
+      ),
+    ).toBe("`– SKIPPED` changelog.post `1a2b3c4d` · <t:1790169000:R>\n> already announced");
+  });
+
   test("paused work names the deployment switch when effects are off for the deployment", () => {
     expect(
       jobLine(job({ status: "disabled" }), VIEWERS.member, { effectsMode: "deployment_disabled" }),

@@ -65,6 +65,7 @@ test("command inventory exactly matches the declared public surface", async () =
       "officer reset",
       "config ledger",
       "config officer_notifications",
+      "config changelog",
       "config guest_applications",
       "config show",
       "config validate",

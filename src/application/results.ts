@@ -305,6 +305,14 @@ export interface FcHealthRow {
   readonly attemptFailed: boolean;
 }
 
+/**
+ * Who can read a changelog channel in a guild whose onboarding manages channel visibility (2.25.0):
+ * 'members' when onboarding shows it to members and guests; 'hidden' for the lobby, the officer
+ * room or a channel it keeps staff-only; 'unmanaged' when onboarding has no record of it (a channel
+ * created since the last repair pass, or the Community Updates channel, which it never manages).
+ */
+export type ChangelogAudience = "members" | "hidden" | "unmanaged";
+
 /** /config show and /config validate: stored configuration plus live resource checks. */
 export interface ConfigurationReport {
   readonly configuration: GuildRecord;
@@ -316,6 +324,8 @@ export interface ConfigurationReport {
   /** Applications open only when both the review channel and the Guest role are set. */
   readonly guestApplicationsOpen: boolean;
   readonly fc: readonly FcHealthRow[] | null;
+  /** The changelog channel's audience; absent with onboarding off or no changelog channel set. */
+  readonly changelogAudience?: ChangelogAudience;
 }
 
 /** Holders an Officer-role binding adopted as manual officer grants. */
@@ -346,6 +356,8 @@ export type ConfigChange =
       /** The configuration row after the change. */
       readonly guild: GuildRecord;
       readonly officerHolders?: OfficerHolders;
+      /** A changelog channel's audience, when onboarding manages channel visibility (2.25.0). */
+      readonly audience?: ChangelogAudience;
     };
 
 /**

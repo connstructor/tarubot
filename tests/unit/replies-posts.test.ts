@@ -3,16 +3,22 @@
  * (ledger#29 and #32) and the reply-spec states are reproduced exactly; ledger posts color by
  * operation, use U+2212 and grouped gil, show the full escaped note and are byte-identical for the
  * same entry; the review message has one embed, disabled controls once decided and escaped answers;
- * the decision DM speaks to the applicant, with or without the server name; and the gateway sends
- * each through Discord's REST API with content '', allowed_mentions {parse: []} and the unchanged
- * nonce keys, while officer notices stay plain text.
+ * the decision DM speaks to the applicant, with or without the server name; the update post
+ * (2.25.0) lists at most ten releases without cutting anything and is byte-identical per view; and
+ * the gateway sends each through Discord's REST API with content '', allowed_mentions {parse: []}
+ * and the unchanged nonce keys, while officer notices stay plain text.
  */
 import { createHash } from "node:crypto";
 import { describe, expect, spyOn, test } from "bun:test";
-import { ClientUser, DiscordAPIError } from "discord.js";
+import { ClientUser, DiscordAPIError, embedLength } from "discord.js";
 import type { APIEmbed } from "discord.js";
-import type { ApplicationRecord, LedgerPostView } from "../../src/application/records.js";
+import type {
+  ApplicationRecord,
+  ChangelogPostView,
+  LedgerPostView,
+} from "../../src/application/records.js";
 import { DiscordGateway } from "../../src/discord/gateway.js";
+import { CHANGELOG_POST_KINDS, changelogPost } from "../../src/discord/presenters/changelog.js";
 import { gilText, plain } from "../../src/discord/presenters/format.js";
 import {
   decisionDm,
@@ -34,6 +40,7 @@ import { E42, E43, entry, IMPORTED } from "../fixtures/replies/ledger.js";
 import {
   APPLICATIONS,
   application,
+  CHANGELOG_POST,
   COOLDOWN,
   CORRECTION_POST,
   DEPOSIT_POST,
@@ -63,7 +70,7 @@ const controlsOf = (presented: Parameters<typeof buttonsOf>[0]) =>
 
 test("the catalog covers every post and DM kind", () => {
   expect(Object.keys(POST_CASES).sort()).toEqual(
-    [...LEDGER_POST_KINDS, ...GUEST_POST_KINDS].sort(),
+    [...LEDGER_POST_KINDS, ...GUEST_POST_KINDS, ...CHANGELOG_POST_KINDS].sort(),
   );
 });
 
@@ -194,6 +201,75 @@ describe("ledger posts", () => {
       expect(JSON.stringify(ledgerPost(view).options)).toBe(first);
       // Nothing about the send time or attempt reaches the post.
       expect(first).not.toContain(new Date().toISOString().slice(0, 13));
+    }
+  });
+});
+
+describe("the update post (2.25.0)", () => {
+  test("one field per release note under 'What's new', linking the CHANGELOG, with no timestamp", () => {
+    expect(embedOf("changelog.update")).toEqual({
+      color: 0x5865f2,
+      title: "TaruBot updated to v2.25.0",
+      url: "https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md",
+      description: "What's new since v2.24.2.",
+      fields: [
+        {
+          name: "v2.25.0",
+          value:
+            "Officers can now pick a channel where TaruBot shares what's new for members when an update changes something for them.",
+        },
+      ],
+    });
+    // No button: the title is the post's only link.
+    expect(buttonsOf(POST_CASES["changelog.update"].render())).toEqual([]);
+  });
+
+  test("the largest post lists ten releases, counts the rest in the footer and cuts nothing", () => {
+    // Twelve releases with prerelease versions and 300-character notes, newest first.
+    const note = `${"Members see a change here. ".repeat(12).slice(0, 299)}.`;
+    expect(note).toHaveLength(HOUSE_LIMITS.userText);
+    const view: ChangelogPostView = {
+      version: "12.11.0-rc.11",
+      previous: "11.0.0",
+      notes: Array.from({ length: 12 }, (_, index) => ({
+        version: `12.${11 - index}.0-rc.${11 - index}`,
+        note,
+      })),
+      url: CHANGELOG_POST.url,
+    };
+    const presented = changelogPost(view);
+    const embed = expectHouseStyle(presented, { tone: "info", timestamp: false });
+    expect(presented.truncated).toBe(false);
+    expect(embed.fields).toHaveLength(HOUSE_LIMITS.fields);
+    expect(embed.fields?.[0]?.name).toBe("v12.11.0-rc.11");
+    for (const field of embed.fields ?? []) {
+      expect(field.name.length).toBeLessThanOrEqual(DISCORD_LIMITS.fieldName);
+      // Nothing was cut: every note is shown whole.
+      expect(field.value).toBe(note);
+    }
+    expect(embed.footer?.text).toBe("…and 2 more in the full changelog");
+    expect(embedLength(embed)).toBeLessThanOrEqual(DISCORD_LIMITS.embedTotal);
+    expect(embed.title?.length ?? 0).toBeLessThanOrEqual(HOUSE_LIMITS.title);
+  });
+
+  test("the same view renders byte-identical JSON, so a nonce retry is identical", () => {
+    const first = JSON.stringify(changelogPost(CHANGELOG_POST).options);
+    expect(JSON.stringify(changelogPost(CHANGELOG_POST).options)).toBe(first);
+    // Nothing about the send time reaches the post.
+    expect(first).not.toContain(new Date().toISOString().slice(0, 13));
+    expect(onlyEmbed(changelogPost(CHANGELOG_POST)).url).toStartWith("https://");
+  });
+
+  test("notes are escaped like user text, so they never render a mention or a link", () => {
+    const embed = expectHouseStyle(
+      changelogPost({
+        ...CHANGELOG_POST,
+        notes: [{ version: "2.25.0", note: stress.text(300) }],
+      }),
+    );
+    for (const field of embed.fields ?? []) {
+      expect(field.value).not.toMatch(/(?<!\\)<[@#t]/u);
+      expect(field.value.length).toBeLessThanOrEqual(HOUSE_LIMITS.userText);
     }
   });
 });
@@ -501,6 +577,29 @@ describe("the gateway renders posts through the presenters", () => {
         components: [],
         allowed_mentions: { parse: [] },
         nonce: nonceOf("officer:1"),
+      });
+    });
+  });
+
+  test("an update post is the presenter's embed under the changelog:<guild>:<version> nonce", async () => {
+    await withGateway(async (gateway, posts) => {
+      await gateway.client.guilds.fetch("100");
+      await gateway.send(
+        "100",
+        "200",
+        { kind: "changelog", view: CHANGELOG_POST },
+        "changelog:100:2.25.0",
+      );
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.route).toBe("/channels/200/messages");
+      expect(posts[0]?.body).toEqual({
+        ...(posts[0]?.body as object),
+        content: "",
+        embeds: changelogPost(CHANGELOG_POST).options.embeds,
+        components: [],
+        allowed_mentions: { parse: [] },
+        nonce: nonceOf("changelog:100:2.25.0"),
+        enforce_nonce: true,
       });
     });
   });

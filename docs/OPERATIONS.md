@@ -36,7 +36,8 @@ Every reply is one embed in the house style of [REPLIES.md](REPLIES.md). Officer
 - `/config show` and `/config validate`: every setting, and a read-only checklist of `[OK]`, `[WARN]`, `[FAIL]`, `[OFF]` and `[WAIT]` lines for resource existence, permissions and hierarchy, the linked FC and its roster freshness, onboarding, Discord changes, the role layout and pending grandfathering. The title gives the verdict (problems, warnings, ready for activation, or all checks passed); **Run health check** and **Re-check** re-run it in place.
 - `/config role_layout enabled:<true|false>`: a server manager with Manage Server and Manage Roles turns managed-role display and ordering on or off. Disabling leaves the current display as it is; a queued `roles.layout` job then completes as `skipped: layout disabled` (`– SKIPPED`).
 - `/config guest_applications [enabled:<true|false>] [channel:#…] [unset_channel:true]`: officers switch guest applications on or off separately from the review channel, in any combination and one revision. `/apply` opens only while the switch is on and a review channel and the Guest role are set. A named channel is always validated first, and switching on also validates the kept one it will use (such as an import's legacy channel), so a deleted or unusable channel refuses the call (`blocked`) before anything is saved. Switching off or `unset_channel:true` never validates the kept channel, so a deleted one never blocks closing. Switching off keeps the channel, and waiting applications stay reviewable. `/config show` reads "Off · reviews in #channel" while the switch is off, and `/config validate` lists the channel's check only while applications are on. See [SETUP.md](SETUP.md#unverified-visitor-applications).
-- Unsetting a `/config` setting uses `unset_channel:true` (`ledger`, `officer_notifications`, `guest_applications`), `unset_role:true` (`roles …`) or `unset_rank:true` (`officer_rank`); these replaced `clear:true` in 2.15.0.
+- `/config changelog channel:#… | unset_channel:true` (2.25.0): officers choose where [update posts](#update-posts) go, or turn them off.
+- Unsetting a `/config` setting uses `unset_channel:true` (`ledger`, `officer_notifications`, `changelog`, `guest_applications`), `unset_role:true` (`roles …`) or `unset_rank:true` (`officer_rank`); these replaced `clear:true` in 2.15.0.
 - Repeats change nothing (2.15.0). `/main` naming the current main, `/nickname` repeating the saved setting, a `/config guest_applications` request that matches what is saved, `/config officer_rank` naming the saved rank (or `unset_rank:true` with none set), and an `/officer reset` or `/guest reset` with no override to remove each reply with a `= NO CHANGE` card (info, or neutral for "Nickname sync already off"), save and audit nothing, advance no configuration revision, and queue no reconciliation. Resuming nickname sync that a manual nickname suspended is still a change.
 - `/sync status`: run outcomes and queued, running, blocked, paused and failed work as [status markers](#status-markers). A failure stops being listed once the same work (its dedupe key) succeeds after it (2.24.1); the job row stays as history. The queue stamps a failed job's `completed_at` for this, and `retry.js` clears it when it requeues the row. Officers see guild-wide runs, outstanding work, what runs next and what needs attention, with raw job kinds, short job IDs, attempts and diagnostics, plus Full details; other users see their own requests and pending work in plain words. `/sync status run_id:<uuid>` shows one run.
 - `/guest status`: durable decisions, grants with their provenance (Application approved, Granted by an officer, Imported from the previous bot, Granted at launch), revocations, and the member's own delivery work. An officer who names a member gets the record view with the latest three deliveries and Full details. `/guest revoke` is the lasting removal for every kind of Guest access; a later `/guest grant` restores it as a manual grant. `/guest reset` (2.15.0) removes both kinds of override: it lifts the revocation and ends every active grant, so FC membership and registered characters decide Guest again. Ended grants stay in `guest_grants` with `ended_at`, `ended_by` and `ended_reason`, and the `guest.reset` audit lists their provenances; they no longer appear in `/guest status`.
@@ -159,7 +160,33 @@ Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#
 | `disabled` | `‖ PAUSED` | "waiting for activation" or "Discord changes are off for this deployment" |
 | `failed` | `✗ FAILED` | "stopped and won't retry"; a closed-DM decision DM says the decision still stands |
 
-Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
+Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
+
+## Officer notices
+
+`officer.notify` jobs post escaped plain text to the officer notifications channel. Since 2.24.3 (REQUIREMENTS.md "Approved officer-notice amendments"), these post:
+
+- **Lodestone degraded** (`officer:<guild>:degraded:<fc>`). It is queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posts only if it is still pending 5 minutes later. While the FC keeps failing it repeats at most once a day, counted from when the last one finished. A notice still waiting to post (held, paused or blocked) blocks new ones. Throttling and the queue's other waits post nothing.
+- **Recovered** (`officer:<guild>:recovered:<fc>`). One line after an accepted roster, only when a degraded notice posted (or was posting) during that outage.
+- **Character no longer on the Lodestone** (`officer:<guild>:missing:<link>`), one per link the two-404 rule ends (below).
+- **FC roster accepted** (`officer:<guild>`), on DevBot's test guild only.
+
+A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, while it was paused or blocked, or while the bot was out of that server) or `FC unlinked` (`/config fc unlink` during an outage) is expected. The queue never claims a row of a server the bot was removed from, so an accepted roster closes such a server's waiting notice too, and posts no recovery line there. `/sync status` lists only unfinished and failed work, so it never shows these closed rows; this query does:
+
+```sql
+SELECT dedupe_key, status, created_at, completed_at, message_id, result
+  FROM jobs
+ WHERE dedupe_key LIKE 'officer:%:degraded:%' OR dedupe_key LIKE 'officer:%:recovered:%'
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+Accepted edge cases and assumptions:
+- **A send in flight.** A degraded notice being sent when the roster is accepted counts as posted, so the recovery line is queued; one being sent during `/config fc unlink` is left to finish. If that send fails (or its worker dies) and the queue retries it, the degraded line can post after the recovery line, or about the unlinked FC, with nothing after it. The window is one send in flight during that transaction.
+- **An FC with no active server.** Rosters run only while a server linked to the FC is active. If the bot is removed from every such server during an outage, a waiting notice stays queued until the bot is added back. It can then post before the next roster, which, once accepted, posts the recovery line after it.
+- **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's. They must agree to within a few seconds (a roster fetch); NTP keeps the Docker host and managed PostgreSQL to milliseconds.
+
+The rate limit reads these rows, so don't prune `officer.notify` jobs ([PERSISTENCE.md](PERSISTENCE.md#query-and-transaction-conventions)).
 
 ## Profile refreshes, private profiles and deleted characters
 
@@ -180,6 +207,19 @@ SELECT id, name, world, profile_at, profile_retry_at, profile_missing_at
 ```
 
 To undo an automatic unlink (for example, a character that reappears after a rename or transfer glitch), the owner claims and verifies the character again, or an officer runs `/assign`.
+
+## Update posts
+
+Since 2.25.0 (REQUIREMENTS.md "Approved changelog amendments", CFG-09), when the bot starts on a newer version it posts what's new for members in each server's changelog channel.
+
+- **Choosing the channel.** `/config changelog channel:#…` takes a normal text channel that members and guests can read; Announcement channels are refused, like every channel setting. Setting it posts nothing at once: `guilds.changelog_version` becomes the running version (or keeps a higher one), and the first post comes with the next release that has a member note (`src/domain/release-notes.ts`). Moving the channel keeps the version; `unset_channel:true` turns posts off, and releases published while no channel is set are never posted.
+- **Onboarding servers.** Where TaruBot's onboarding manages visibility, the receipt and `/config validate` warn (`[WARN] Changelog`) when the channel is the lobby, the officer room or a staff-only channel, or one onboarding has no record of: a channel created since the last repair pass (the pass the `/config` save queues classifies it), or the Community Updates channel and its category, which onboarding never manages, so choosing it always warns. TaruBot changes no permissions for the changelog channel; pick another channel instead.
+- **Startup.** Each present server with a channel and an older `changelog_version` gets one `changelog.post` job (`changelog:<guild>`), logged as "Queued update posts" with the count and version. A restart while it is pending merges into it.
+- **Outcomes.** The job reads the range when it runs. It completes as `– SKIPPED` with `changelog unconfigured` (the channel was unset), `already announced` (the version is already at or past the running one), or `nothing for members` (no notes in the range; the version still moves). A post succeeds with its `messageId`, `channelId` and `version`, and writes a `changelog.advanced` audit.
+- **Missing permissions.** The job is `! BLOCKED` and the version doesn't move. The scheduler requeues it about every 10 minutes (due 5 minutes after it picks it up), and it is released at once by a `/config` save of the FC link, a role, the ledger, officer notifications or changelog channel, or `/config guest_applications`, and by `retry.js`, activation or the next startup. `/config officer_rank`, `role_layout` and `fc unlink` don't release it. It never fails on its own, so a problem never fixed leaves a warning line and a started/failed delivery attempt about every 10 minutes. A restart merge keeps its attempt count, so about seven restarts inside one scheduler window use up its 8 attempts; the first transient error after that ends it as failed, and the next startup queues it again without a double post.
+- **Paused.** With Discord changes off (the deployment or the server), a post parks as `‖ PAUSED`, and each restart on a newer version adds one more parked row. Resuming keeps only the newest and closes the rest as `superseded`, so one post goes out.
+- **Duplicates.** A retry within a few minutes reuses Discord's nonce check (`changelog:<guild>:<running version>`). A kill, OOM or host loss between the send and the version update, followed by a different version, can repeat that post's releases once, the same risk ledger posts accept. A graceful stop can't cause it.
+- **Restores and baselines.** Restoring a snapshot taken before a post was delivered can post it again; raise `changelog_version` by hand before starting the bot. An operator may move a baseline with `UPDATE guilds SET changelog_version='X.Y.Z' WHERE id='<guild>'` (the CHECK takes `MAJOR.MINOR.PATCH[-pre]` only); lowering it announces the notes in between again at the next startup.
 
 ## Live selectors
 

@@ -118,6 +118,16 @@ export const layoutGuildRoles = (client: Connection, guild: string): Promise<str
 export const secureGuildChannels = (client: Connection, guild: string): Promise<string> =>
   enqueue(client, "channels.access", `channel-access:${guild}`, {}, guild);
 
+/**
+ * At most one active (queued, running or blocked) update post per guild (2.25.0): a deploy while
+ * one waits merges into it, and the job reads the release range when it runs, so one post covers
+ * every release since the last. A post parked as disabled isn't merged, so paused restarts can
+ * park several; resuming collapses them to one (requeueParked). The payload stays {}: the job never
+ * reads it, and a merge would overwrite it anyway.
+ */
+export const announceChangelog = (client: Connection, guild: string): Promise<string> =>
+  enqueue(client, "changelog.post", `changelog:${guild}`, {}, guild);
+
 /** The parked job states that activation, a /config change or a restart can put back in the queue. */
 export type ParkedStatus = "disabled" | "blocked";
 /** The states the active_job unique index covers: at most one such row per dedupe key. */
@@ -278,6 +288,45 @@ async function supersedeAndRequeue(
       );
   }
   return requeued.map((row) => row.id);
+}
+
+/**
+ * Officer Lodestone notice keys (#29), per guild and FC, so these never share a key with each
+ * other, the DevBot roster line (officer:<guild>) or the per-link missing-character notices:
+ * enqueue() replaces an active row's payload, which let a success overwrite a pending degraded
+ * notice before #29. They live here because Synchronization and Service (the FC unlink) both use
+ * them.
+ */
+export const degradedNoticeKey = (guild: string, fc: string): string =>
+  `officer:${guild}:degraded:${fc}`;
+/** The recovery line that follows a posted degraded notice (#29). */
+export const recoveredNoticeKey = (guild: string, fc: string): string =>
+  `officer:${guild}:recovered:${fc}`;
+
+/**
+ * Close a key's unstarted rows (queued, blocked or parked `disabled`) as succeeded with
+ * {skipped: reason}, the way supersedeAndRequeue closes superseded rows: for work that became
+ * pointless before it ran, such as a degraded notice once the roster recovered or the FC was
+ * unlinked (#29). A running row is left to finish. If a worker claims a row concurrently, READ
+ * COMMITTED re-checks it under its row lock, finds it `running`, and leaves it alone.
+ */
+export async function closeUnstarted(
+  client: Connection,
+  key: string,
+  reason: string,
+): Promise<void> {
+  await orm(client)
+    .update(t.jobs)
+    .set({
+      status: "succeeded",
+      completed_at: sql`now()`,
+      lease_until: null,
+      last_error: null,
+      result: { skipped: reason },
+    })
+    .where(
+      and(eq(t.jobs.dedupe_key, key), inArray(t.jobs.status, ["queued", "blocked", "disabled"])),
+    );
 }
 
 /**

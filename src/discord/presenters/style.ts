@@ -126,7 +126,10 @@ export const HOUSE_LIMITS = {
   description: 1_000,
   /** Labelled fields per embed. */
   fields: 10,
-  /** /config show keeps the approved 12-field layout (13 with grandfathering), tested to 15. */
+  /**
+   * /config show keeps the approved field-per-setting layout: 13 fields configured (14 with
+   * grandfathering) since the changelog channel (2.25.0), and exactly 15 at its widest.
+   */
   configShowFields: 15,
   /** User-written notes and reasons shown in fields. */
   userText: 300,

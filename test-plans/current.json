@@ -1,6 +1,6 @@
 {
   "title": "Session: 2.26.0 public suggestions",
-  "objective": "2.26.0 adds /suggest: members and guests post feature ideas as public GitHub issues, cleaned of links, mentions, emails and IDs. DevBot previews into the private reports repository. Limits: 1 an hour and 3 a day per member, 10 a day in total. No migration; 21 roots / 45 paths.",
+  "objective": "2.26.0 adds /suggest: members and guests post feature ideas as public GitHub issues, cleaned of links, mentions, emails and IDs. DevBot previews into the private reports repository. Limits: 1 an hour and 3 a day per member, 10 a day in total. No migration (schema 009 from 2.25.0); 21 roots / 46 paths.",
   "user": [
     "Run /suggest idea:<an idea of 10+ characters> as a member or guest: the reply links a preview issue in deconfined/tarubot-reports.",
     "Open that issue: check the title, the fixed first line, the fenced text, 'Sent by TaruBot 2.26.0.' and the labels enhancement and from-discord.",
@@ -10,7 +10,7 @@
     "From an account without the Member or Guest role: 'FC membership needed', with steps to either role."
   ],
   "assistant": [
-    "Deploy 2.26.0 to DevBot with the owner's go-ahead (restart, no migration), register guild commands and read them back (21 roots / 45 paths).",
+    "Deploy 2.26.0 to DevBot with the owner's go-ahead (restart, no migration), register guild commands and read them back (21 roots / 46 paths).",
     "With the go-ahead, put GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY in the production host's .env and refresh the settings copy.",
     "Deploy to production, probe the GitHub App (expect 422, no issue created), then register.js --global and commands.js list (21 global).",
     "Record the rollouts and the owner's test /suggest in docs/DEV_GUILD.md and docs/VERIFICATION.md."
