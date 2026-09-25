@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment"); 2026-09-25 (owner public-suggestion decisions; see "Approved public-suggestion amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -169,6 +169,30 @@ Known secret shapes and the deployment's own secret values are removed from ever
 **Durability.** A report is saved in PostgreSQL first and delivered by a job, so a GitHub outage loses nothing. Without a token, reports are saved and `/issue` says so. They are sent once a token is configured.
 
 **Command surface.** `/issue` brings the command surface to 20 roots and 44 paths (AC-23). It must be registered after the deployment.
+
+### Approved public-suggestion amendments (2026-09-25)
+
+Issue [#32](https://github.com/deconfined/tarubot/issues/32) asked for a command that lets people in the Discord server suggest TaruBot features as public issues in this repository. The owner answered the plan's questions in [the decision comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5836092045) and clarified who may post in chat the same day, which was recorded on the issue. Release 2.26.0 implements these decisions; it has no migration.
+
+**Command.** `/suggest idea:…` (10–1,000 characters) opens an issue in the public repository `deconfined/tarubot` at once, labelled `enhancement` and `from-discord`, and replies privately with its link. The owner moderates afterwards ("I can close issues as won't implement or deal with abuse on my own"); nothing waits for approval.
+
+**Who may post.** Anyone with server access in the Free Company's own server: "someone that's verified a character and received member/guest, or whom an officer has granted guest access." In practice the person must hold the server's bound Member role or its bound Guest role when they run the command (roles are read fresh from Discord). Officers qualify through their Member role; officer access alone, or a server manager holding neither role, does not qualify, and an unbound role qualifies nobody. The command works only in the servers this deployment serves: production's guild list (`deployments.production.guilds`) and DevBot's test guild. Any other server that adds the bot is refused, even for its managers. The refusal for someone without either role reads "Only members and guests of this server can suggest features."
+
+**What goes public.** Only the member's cleaned text and TaruBot's version, in a fixed format: the start of the text, cut at a word within 80 characters, as the title; a fixed first line saying where the text came from; the text in a `text` code block; and "Sent by TaruBot X.Y.Z." Before posting, TaruBot removes invisible and control characters and folds look-alike forms, then removes links (with or without a scheme), Discord mentions, email addresses, credential shapes and runs of 17 or more digits, and replaces every `@` with `＠` (no GitHub mentions) and `#` in titles with `＃` (no cross-references). A final check refuses anything that still carries an `@`, a long ID, a link or an invisible character. The member's name and Discord ID, server, channel and role IDs, FC and character data, logs and the environment never go public. Who sent which suggestion is recorded privately in the audit table (`suggestion.posted`, target `#N`).
+
+**Limits.** One suggestion per member per hour, three per member in any 24 hours, and ten in any 24 hours for the whole deployment. An attempt GitHub doesn't confirm (`suggestion.unconfirmed`) counts toward every limit, because the issue may exist; its reply asks the member to check GitHub before trying again. GitHub's own rate limit and a refused request count nothing.
+
+**Identity.** Suggestions are posted by the dedicated GitHub App "TaruBot" (App ID 5076273), which has Issues write and Metadata read only, no webhook, and is installed on `deconfined/tarubot` alone. Its issues show the app's bot account as author, never the owner's account. The bot signs a short JWT with the app's private key and mints a one-hour installation token, narrowed to this repository's issues, for each post. The client ID and key (`GITHUB_APP_CLIENT_ID`, `GITHUB_APP_PRIVATE_KEY`) are production settings in the host's `.env` only; emptying either switches `/suggest` off, and members are told it is switched off.
+
+**DevBot.** DevBot previews suggestions into the private reports repository (`GITHUB_REPORTS_REPO`) with the reports token, creating the two labels there, so testing never posts publicly. It ignores the app settings.
+
+**Claude workflow.** `.github/workflows/claude.yml` never starts the agent for an issue whose body carries the suggestion marker ("Suggested in Discord with TaruBot"), whatever its author or text.
+
+**Durability.** Unlike `/issue` (see the issue-reporting "Durability" paragraph), a suggestion is **not** saved first and delivered by a job. It is posted in the interaction the router already deferred, so there is no table, job or migration; a GitHub outage refuses the suggestion, and an idea is easy to retype.
+
+**Accepted risks.** A public post is permanent once GitHub's events, archives and notification emails copy it. Anyone who verifies a character gets Guest, so a few alternate accounts could use up the deployment's daily limit; the owner accepts this and moderates after posting. Names typed freely, and IDs deliberately split with visible separators, can't be recognised.
+
+**Command surface.** `/suggest` brings the command surface to 21 roots and 45 paths (AC-23). It must be registered after the deployment. Release order (agreed 2026-09-25): #29 as 2.24.3, #30 as 2.25.0, #32 as 2.26.0, then #31 as 2.27.0.
 
 ## 1. Purpose and interpretation
 
@@ -396,6 +420,8 @@ Starting values: migration 006 turned the switch on for guilds that already had 
 | `/ping` | Guild user | Report Discord gateway latency with an appropriate label. |
 | `/channel` | Guild user | Report the current channel's ID, name, and type. |
 | `/version [commits]` | Guild user | Show the installed SemVer and recent GitHub commit IDs, links, titles, and verified-signature badges. |
+| `/issue description` | Guild user | Report a problem to TaruBot's maintainers in the private reports repository, with a snapshot of the member's account and the bot (see Approved issue-reporting amendments). |
+| `/suggest idea` | Holder of the bound Member or Guest role, in the deployment's own server | Post a feature suggestion publicly as an issue in `deconfined/tarubot`, with only the cleaned text and the version, and reply with its link (see Approved public-suggestion amendments). |
 
 **UX-01.** Bound input sizes and honor Discord message, embed, autocomplete, and component limits. Escape user-controlled display content and set an explicit allowed-mentions policy, defaulting to no parsed mentions. Authorize any intended recipient mention separately from user-supplied text.
 
@@ -770,7 +796,7 @@ Verification must cover observable behavior, policy invariants, concurrency, and
 | AC-20 | Crashes after commit, during roster acquisition, during approval, and during notification delivery resume persisted work with the same committed application decisions, entry identities, and confirmed membership evidence. |
 | AC-21 | Lodestone operations obey concurrency/rate/deadline bounds, terminate timed-out underlying work, and keep Discord interaction acknowledgement responsive. Library fixtures cover missing selectors, explicit zero, malformed numbers, 404, maintenance, rate limits, and network exceptions. |
 | AC-22 | Docker images build reproducibly, Compose validates, PostgreSQL data survives container recreation, and the bot recovers from database/Discord reconnects. Health probes operate independently of Lodestone acquisition. Graceful shutdown and backup restoration are exercised. A second bot process against the same database waits for the writer lease, stays unready, and takes over only after the first releases it or loses its session. |
-| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (20 root commands / 44 paths since 2.18.0, including `/config role_layout`, `/officer reset`, `/guest reset`, and `/issue`). |
+| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (21 root commands / 45 paths since 2.26.0, including `/config role_layout`, `/officer reset`, `/guest reset`, `/issue`, and `/suggest`). |
 | AC-24 | A user with several trusted links becomes Member when any is a confirmed FC member, receives Officer when any holds the configured rank (except through a bot-only officer's assignment), and is Guest when none is in the FC, with onboarding enabled or disabled. Unknown/stale evidence creates no new role, removing the last link removes derived Guest, and onboarding-disabled guilds receive no channel-visibility work. |
 | AC-25 | First activation of an imported guild grandfathers exactly the previewed set of current non-member humans, once; reruns and later activations add nothing. Bots, Member-eligible users, existing grant holders (including users whose grant `/guest reset` ended), and revoked users are excluded. A mismatched plan checksum, a stale roster, or a linked FC character awaiting departure confirmation rolls activation back unchanged. Grandfathered grants survive refresh/restart/rejoin, yield to Member precedence and explicit revocation, and can be restored by an explicit grant. |
 | AC-26 | With the role-layout switch off, startup, activation, setup, role configuration, role events, refresh, and requeued work make no hoist/position writes, and layout work completes as skipped. Enabling it (manager-only, audited, revision-fenced) queues one pass that converges; disabling during a pass supersedes it before any further write. |

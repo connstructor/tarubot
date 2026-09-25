@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", and "Approved issue-reporting amendments (2026-09-24)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", and "Approved public-suggestion amendments (2026-09-25)".
 
 ## Project map
 
@@ -19,11 +19,12 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
   - `heartbeat.ts`: the healthchecks.io dead-man's switch (2.22.0), pinged every five minutes while ready (`HEALTHCHECKS_PING_URL`; empty is off).
   - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
+  - `suggestions.ts`: `/suggest` (2.26.0), public feature suggestions posted at once to `deconfined/tarubot` as the TaruBot GitHub App (`src/infrastructure/github/app.ts` signs the JWT and mints an installation token per post), with limits counted from the audit table. The pure cleaning, public format and final check live in `src/domain/suggestions.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
   - `values.ts` holds `Failure`, `json`, and ID parsing.
-- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard.
+- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard; since 2.26.0 its production guild list also gates `/suggest` at runtime.
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
@@ -117,6 +118,12 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
   - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` needs the owner to add the token.
+- Public suggestions (2.26.0):
+  - Text reaches the public repository only through `normalise`, `clean` (the shared `PUBLIC_PATTERNS`, repeated until nothing changes) and `assertPublic`, never through `IssueReports`. A change to the rules changes both the cleaner and the check.
+  - `/suggest` needs the bound Member or Guest role in an allowlisted server (production's `deployments.production.guilds`, or DevBot's test guild). Officer access alone doesn't qualify.
+  - `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` are production-only: they go in `docker-compose.production.yml` and the host's `.env`, never in `docker-compose.yml` or DevBot's `.env`. DevBot previews into the reports repository with `GITHUB_REPORTS_TOKEN`. Either app setting empty switches `/suggest` off.
+  - Nothing is saved first. Limits come from `audit` rows (`suggestion.posted`, `suggestion.unconfirmed`); any GitHub error other than `rate_limited`, `invalid_data` or `configuration` writes `suggestion.unconfirmed`.
+  - Any new workflow gated on the OWNER, MEMBER or COLLABORATOR association must also skip issues carrying `SUGGESTION_MARKER` ("Suggested in Discord with TaruBot"), as `claude.yml` does. A trusted `@claude` comment on a `from-discord` issue still hands the member's text to the agent.
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
 - `/setup` enables onboarding, switches guest applications on (adopting the officer room as the review channel when none is set, and validating a kept one first), and adopts every Officer-role holder.
 - Leave the old `feat/lobby-access` stash alone. It has been superseded. It exists only in the original Mac clone; this Linux clone has no stashes.

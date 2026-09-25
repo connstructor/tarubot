@@ -2,14 +2,16 @@
  * The private reports repository's issues (2.18.0): create an issue, comment on one, and read its
  * state. The token is a fine-grained token limited to that repository's issues. Failures map to
  * catalog codes so the job queue treats them correctly: GitHub's rate limits and outages wait or
- * retry, and a refused token is a configuration failure an operator must fix.
+ * retry, and a refused token is a configuration failure an operator must fix. Since 2.26.0
+ * /suggest also creates issues through it, in the public repository with a GitHub App
+ * installation token (src/infrastructure/github/app.ts), naming its own settings when refused.
  */
 import { z } from "zod";
 import { project } from "../../config/project.js";
 import { Failure } from "../../domain/values.js";
 
 /** A small fetch boundary, so contract tests run against a local fake without credentials. */
-type Request = (url: string, init: RequestInit) => Promise<Response>;
+export type Request = (url: string, init: RequestInit) => Promise<Response>;
 
 const issueSchema = z.object({ number: z.number().int().positive(), state: z.string() });
 
@@ -24,6 +26,8 @@ export class GitHubIssues {
     private readonly repository: string,
     private readonly request: Request = fetch,
     private readonly api = "https://api.github.com",
+    /** The settings a refusal tells the operator to check; /suggest names the GitHub App's. */
+    private readonly settings = "GITHUB_REPORTS_TOKEN and GITHUB_REPORTS_REPO",
   ) {}
 
   /** Open an issue; labels GitHub doesn't know yet are created with it. */
@@ -100,7 +104,7 @@ export class GitHubIssues {
     if ([401, 403, 404, 410].includes(response.status))
       throw new Failure(
         "configuration",
-        `GitHub refused the issue report (${response.status}); check GITHUB_REPORTS_TOKEN and GITHUB_REPORTS_REPO.`,
+        `GitHub refused the issue report (${response.status}); check ${this.settings}.`,
       );
     throw new Failure("invalid_data", `GitHub rejected the issue report (${response.status}).`);
   }

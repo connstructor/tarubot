@@ -96,6 +96,8 @@ test("command inventory exactly matches the declared public surface", async () =
       "version",
       // 2.18.0: any member reports a problem to the maintainers.
       "issue",
+      // 2.26.0: members and guests suggest features publicly on GitHub.
+      "suggest",
     ].sort(),
   );
 });

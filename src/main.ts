@@ -12,6 +12,7 @@ import {
   lifecycleKey,
   synchronizationKey,
   roleAdministrationKey,
+  suggestionsKey,
   versionInformationKey,
 } from "./application/keys.js";
 import { Heartbeat } from "./application/heartbeat.js";
@@ -20,6 +21,7 @@ import { ApplicationLifecycle } from "./application/lifecycle.js";
 import { RecentLogs } from "./application/recent-logs.js";
 import { createReporter, type Reporter } from "./application/reporting.js";
 import { Service } from "./application/service.js";
+import { Suggestions, suggestionTarget } from "./application/suggestions.js";
 import { Synchronization } from "./application/synchronization.js";
 import { RoleAdministration } from "./application/role-administration.js";
 import { VersionInformation } from "./application/version-information.js";
@@ -82,6 +84,9 @@ const report: Reporter = (error, operation, options = {}) => {
   logReport(error, operation, options);
   if ((options.level ?? "error") === "error") void reports.error(error, operation, options.scope);
 };
+// Public suggestions (2.26.0): production posts as the GitHub App, DevBot previews into the
+// reports repository; without their settings /suggest says it is switched off.
+const suggestions = new Suggestions(app, suggestionTarget(config), report);
 const queue = new Queue(db, dispatcher(app, sync, access, reports), (event) => {
   if (event.type === "worker") return report(event.error, event.job?.id ?? "queue");
   // Classified attempts log at their own level: expected waits stay at debug unless they stall.
@@ -133,6 +138,7 @@ const services = new Services()
   .provide(versionInformationKey, new VersionInformation(new GitHubHistory()))
   .provide(guildEventsKey, new GuildEvents(db))
   .provide(issueReportsKey, reports)
+  .provide(suggestionsKey, suggestions)
   .provide(lifecycleKey, lifecycle);
 const context: BotContext = {
   client: gateway.client,

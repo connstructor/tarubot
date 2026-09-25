@@ -194,3 +194,11 @@ Both start NULL. Follow the same stopped-writer backup/migration procedure; on t
 - `/issue` is a new command: 20 roots, 44 paths.
 
 Follow the stopped-writer backup/migration procedure, then register the commands: DevBot's guild, or production with `register.js --global`. Set `GITHUB_REPORTS_TOKEN` in the bot's `.env` for reports to be sent; without it they are saved.
+
+**2.26.0 adds `/suggest`** (no migration):
+
+- `/suggest` is a new command: 21 roots, 45 paths. It posts feature suggestions publicly as issues in `deconfined/tarubot`.
+- Production needs the TaruBot GitHub App's `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` (a double-quoted multi-line PEM, like the CA); without them `/suggest` says it is switched off. DevBot needs nothing new: with `GITHUB_REPORTS_TOKEN` set, it previews suggestions into the private reports repository.
+- `GITHUB_REPORTS_REPO` may no longer name the public repository; startup refuses it.
+
+Deploy as a restart (no backup or migration step), then register the commands: DevBot's guild, or production with `register.js --global`. Probe the app in production before announcing the command ([OPERATIONS.md](OPERATIONS.md#public-suggestions)).

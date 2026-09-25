@@ -15,6 +15,8 @@ import { Failure } from "../domain/values.js";
 /**
  * Public Discord snowflakes (not credentials) owned by each managed deployment, and where each
  * registers its commands. A rotated application or a new guild is deliberately a code change.
+ * Since 2.26.0 production's guild list also gates /suggest at runtime: a server outside it can't
+ * post public suggestions, even if it invites the bot (src/application/suggestions.ts).
  */
 export const deployments = {
   production: {

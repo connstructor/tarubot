@@ -10,6 +10,7 @@ import { failureReply } from "../../../src/discord/presenters/failure.js";
 import { userId } from "../../../src/discord/selectors.js";
 import type { FailureCode, FailureDetail } from "../../../src/domain/failures.js";
 import { authorize, authorizeRoleManager } from "../../../src/domain/policy.js";
+import { suggestionAccessRefused } from "../../../src/domain/suggestions.js";
 import { Failure, id, note } from "../../../src/domain/values.js";
 import { ACTORS, at, CHARACTER, GUEST_ID, MEMBER_ID, NOW, REF, VIEWERS } from "../results.js";
 import type { ReplyCase, ReplyCatalog } from "./index.js";
@@ -200,6 +201,25 @@ export const FAILURE_CASES = {
       scope: "membership",
     }),
     "/ledger deposit",
+  ),
+  // 2.26.0: /suggest accepts guests too, so its "How to qualify" steps lead to either role.
+  "forbidden membership · /suggest · member": card(
+    "forbidden.membership",
+    "member",
+    { tone: "warning", title: "FC membership needed" },
+    suggestionAccessRefused(),
+    "/suggest",
+  ),
+  // 2.26.0: a server outside the allowlist is refused even for its managers.
+  "forbidden foreign server · /suggest · manager": card(
+    "forbidden.context",
+    "manager",
+    NOT_AVAILABLE,
+    failure(
+      "forbidden",
+      "Suggestions can be sent only from the Free Company server this TaruBot serves.",
+    ),
+    "/suggest",
   ),
   "forbidden human · DM · any": card(
     "forbidden.context",
@@ -725,6 +745,32 @@ export const FAILURE_CASES = {
     ),
     "/issue",
   ),
+  // 2.26.0: /suggest's limits (one an hour and three a day per member, ten a day in total), and
+  // GitHub's rate limit on new issues, share one card.
+  "suggest limit · /suggest · member": card(
+    "wait.suggest",
+    "member",
+    { tone: "pending", title: "You can suggest again later" },
+    failure(
+      "cooldown",
+      "You sent a suggestion in the last hour. You can send one an hour, and three a day.",
+      { kind: "limit", limit: "suggest", until: at(3600) },
+      3600,
+    ),
+    "/suggest",
+  ),
+  "github rate limit · /suggest · member": card(
+    "wait.suggest",
+    "member",
+    { tone: "pending", title: "You can suggest again later" },
+    failure(
+      "rate_limited",
+      "GitHub is limiting new issues right now.",
+      { kind: "limit", limit: "suggest", until: at(60) },
+      60,
+    ),
+    "/suggest",
+  ),
   "rate limited · /claim · any": card(
     "wait.retry",
     "any",
@@ -877,6 +923,22 @@ export const FAILURE_CASES = {
     { tone: "warning", title: "Discord isn't responding" },
     discordError(0, 502),
     "/setup",
+  ),
+
+  // 2.26.0: GitHub didn't confirm a /suggest post; it may exist, and the try counts.
+  "github unconfirmed · /suggest · member": card(
+    "upstream.github",
+    "member",
+    { tone: "warning", title: "GitHub didn't confirm your suggestion" },
+    failure("unavailable", "GitHub didn't confirm the suggestion.", { kind: "github" }, 60),
+    "/suggest",
+  ),
+  "github unconfirmed · /suggest · officer": card(
+    "upstream.github",
+    "officer",
+    { tone: "warning", title: "GitHub didn't confirm your suggestion" },
+    failure("unavailable", "GitHub didn't confirm the suggestion.", { kind: "github" }, 60),
+    "/suggest",
   ),
 
   // blocked, paused, unexpected ---------------------------------------------------------------

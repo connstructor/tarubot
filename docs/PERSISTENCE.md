@@ -46,12 +46,14 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.24.2** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
+The current **2.26.0** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
 - the source (`user`, `error`, `job` or `trouble`), title, the first occurrence's Markdown body and the newest repeat's (`latest`);
 - the server and member for `/issue`;
 - occurrence counts, and the GitHub issue number, creation time and last post.
 
 Partial indexes serve `/issue`'s per-member and per-server limits, and the delivery sweep's pending reports. A report is saved on its caller's client (`/issue` checks its limits under a per-server transaction lock), and an `issue.report` job delivers it. The job records the posted occurrences and the issue number after GitHub answers. The daily caps count succeeded `issue.report` jobs by their `result`. The Drizzle mapping covers 26 application tables.
+
+`/suggest` (2.26.0) adds no table. Its limits and its private record of who sent each public issue are `audit` rows, written with `audit()` on the pool: `suggestion.posted` (target `#N`, details `{repository, issue}`) after GitHub confirms the issue, and `suggestion.unconfirmed` (no target, details `{repository}`) when GitHub's answer is unclear. The three limit reads filter those two actions by actor and `event_at` against the database clock; `audit` has no index for them, which is fine at its size. Submissions run one at a time in the writer process, so no database connection or lock is held across the GitHub calls.
 
 `007_profile_checks.sql`, introduced in **2.17.0**, adds two nullable columns to `characters`:
 

@@ -235,8 +235,11 @@ export type FailureDetail =
   /** Which limit refused the request, and when it lifts if known. */
   | {
       readonly kind: "limit";
-      /** `issue`: /issue's per-member and per-server limits (2.18.0). */
-      readonly limit: "claims_own" | "claims_all" | "apply" | "issue";
+      /**
+       * `issue`: /issue's per-member and per-server limits (2.18.0). `suggest`: /suggest's limits,
+       * and GitHub's own rate limit on new issues while posting one (2.26.0).
+       */
+      readonly limit: "claims_own" | "claims_all" | "apply" | "issue" | "suggest";
       readonly until?: Date;
     }
   /** The recorded balance and the requested amount, both exact. */
@@ -254,7 +257,12 @@ export type FailureDetail =
    */
   | { readonly kind: "discord"; readonly what: "join_context"; readonly user?: string }
   /** The command option the input failure concerns, which selects the reply's Example. */
-  | { readonly kind: "option"; readonly option: string };
+  | { readonly kind: "option"; readonly option: string }
+  /**
+   * GitHub didn't confirm a /suggest post (2.26.0): it may or may not exist, so the reply asks the
+   * member to check before sending it again, and never blames the Lodestone.
+   */
+  | { readonly kind: "github" };
 
 /** Options a reporter accepts: the classified level, and the interaction path for context. */
 export interface ReportOptions {

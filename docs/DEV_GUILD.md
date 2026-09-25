@@ -395,6 +395,19 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
+### 2.26.0 rollout plan (`/suggest`; not yet run)
+
+Planned only: 2.26.0 (issue #32) is not merged or deployed. It follows 2.24.3 and 2.25.0 in the agreed release order, and each step below needs the owner's go-ahead.
+
+- **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head, `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 45 paths), `commands.js list`, then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
+- **DevBot checks:**
+  - a member's `/suggest` opens a preview issue in `deconfined/tarubot-reports`; check its title, fixed first line, fenced text, footer and the labels `enhancement` and `from-discord` (created there on first use), and that the reply names `deconfined/tarubot-reports#N`;
+  - a second try within the hour gets "You can suggest again later";
+  - an idea of fewer than 10 visible characters gets "Check your input" with the Example;
+  - an account without the Member or Guest role gets "FC membership needed" with the steps to either role (PigeonMuffin, with his roles removed for the test, or a fresh account).
+- **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.26.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [OPERATIONS.md](OPERATIONS.md#public-suggestions)), then `register.js --global` from the operator clone and `commands.js list` (21 global).
+- **Owner test:** one `/suggest` in Woven Souls. Check that the author is the app's bot account, both labels are applied, `＠` replaces `@`, no IDs appear, and no Claude run starts in Actions. Then close or delete the test issue and record the result here and in VERIFICATION.md.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

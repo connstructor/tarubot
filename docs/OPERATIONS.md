@@ -127,9 +127,9 @@ docker compose logs tarubot | grep '"operation":"1290000000000000001"'
 | `stale` | This control is out of date, Please reopen /apply, This review message is out of date | A button, form or review message from an older state or release | Re-register commands after a deploy if it persists |
 | `expired` | Token expired during verification | The claim token expired while being checked | None; `/claim` again |
 | `pending_proof` | Token not on the Lodestone yet | The Lodestone has not published the biography token yet | None; wait and use Check again |
-| `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim and apply limits) | A limit, contention, a temporary Discord change or shutdown | None; the reply gives the retry time |
+| `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim, apply, report and suggestion limits, which have their own titles) | A limit, contention, a temporary Discord change or shutdown; for `/suggest`, also GitHub's rate limit | None; the reply gives the retry time |
 | `eligible` | No application needed | The visitor already qualifies for access | None |
-| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone or Discord failed or returned something unusable, including a malformed Lodestone ID in parsed output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check readiness's `lodestone` object and Discord status; logged at warn |
+| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, GitHub didn't confirm your suggestion, … | The Lodestone or Discord failed or returned something unusable, including a malformed Lodestone ID in parsed output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member); or GitHub didn't confirm a `/suggest` post (since 2.26.0) | Check readiness's `lodestone` object and Discord status; for `/suggest`, check the repository's issues ([Public suggestions](#public-suggestions)); logged at warn |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
 | `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key, and clears its paused diagnostic. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` (which refuses a job a newer active job already covers) are the fallbacks |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
@@ -213,6 +213,41 @@ SELECT source, title, occurrences, posted_occurrences, issue_number, last_at
 ```
 
 A refused token (401/403/404) fails the delivery job with `configuration`; fix the token or repository and retry the job. GitHub's rate limits and outages wait and retry on their own.
+
+## Public suggestions
+
+Since 2.26.0 (REQUIREMENTS.md "Approved public-suggestion amendments"), `/suggest idea:…` opens an issue in the **public** repository `deconfined/tarubot` at once, labelled `enhancement` and `from-discord`, and replies privately with its link. It works only in the FC's own server (production's `deployments.production.guilds`; DevBot's test guild), for people holding the bound Member or Guest role. Limits: one per member per hour, three per member and ten in total in any 24 hours.
+
+**What goes public:** only the member's cleaned text, in a code block under a fixed first line that says it came from Discord, and "Sent by TaruBot X.Y.Z." Links, Discord mentions, email addresses, credential shapes and runs of 17 or more digits are removed, every `@` becomes `＠`, `#` in titles becomes `＃`, and invisible characters are removed; a final check refuses anything that slipped through, as an unexpected failure with a private issue report. The member's name and ID, server, channel and role IDs, FC and character data, logs and the environment never go public. Names typed freely, and IDs deliberately split with visible separators, can't be recognised.
+
+**The GitHub App.** Production posts as the TaruBot GitHub App (App ID 5076273, client ID in `GITHUB_APP_CLIENT_ID`), which has Issues write and Metadata read only, no webhook, and is installed on `deconfined/tarubot` alone. Its issues show the app's bot account as author.
+- **Key storage.** The private key lives only in the host's `.env` as `GITHUB_APP_PRIVATE_KEY` (a double-quoted multi-line PEM, like `DATABASE_CA_CERT`), and in the operator's `~/tarubot-cutover/` (mode 600). It is never pasted in chat and never goes into DevBot's `.env` or `docker-compose.yml`. After changing it, refresh the encrypted settings copy (`bun run host:env-backup`).
+- **Tokens.** Each post signs a nine-minute JWT with the key, looks up the app's installation on the repository and mints a one-hour installation token narrowed to that repository's issues. Nothing is cached or stored.
+- **Rotation.** Generate a second key on the app's settings page, put it in the host's `.env`, restart the bot, check one `/suggest` or the probe below, then delete the old key on GitHub. There is no downtime.
+- **Probe (no issue created).** Inside the deployed image on the host, mint a token from the container's settings and POST an empty body to `/repos/deconfined/tarubot/issues`, printing only the status:
+
+  ```sh
+  docker compose -f docker-compose.production.yml run --rm --no-deps -T tarubot bun -e 'import {GitHubApp} from "./dist/src/infrastructure/github/app.js"; const app = new GitHubApp(process.env.GITHUB_APP_CLIENT_ID, process.env.GITHUB_APP_PRIVATE_KEY, "deconfined/tarubot"); const token = await app.installationToken(); const r = await fetch("https://api.github.com/repos/deconfined/tarubot/issues", {method: "POST", headers: {authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "TaruBot probe"}, body: "{}"}); console.log(r.status);'
+  ```
+
+  Expect `422` (the empty issue is rejected after authentication). A `configuration` failure or a 401, 403 or 404 means the key, the client ID or the installation is wrong.
+
+**Moderation.** Suggestions go up immediately; the owner closes (for example as not planned), locks or deletes them. Deleting an issue can't recall notification emails, GitHub's events feed or archives that already copied it. To find who sent issue `#N` (the audit table is private):
+
+```sql
+SELECT guild_id, actor_id, event_at FROM audit WHERE action = 'suggestion.posted' AND target = '#N';
+```
+
+An attempt GitHub didn't confirm is recorded as `action = 'suggestion.unconfirmed'` with no target; match it by time against the issue's creation. Revoking a member's Guest role (or `/guest revoke`) ends their access to `/suggest`.
+
+**Off switch.** Empty `GITHUB_APP_CLIENT_ID` in the host's `.env` and restart the bot (no migration). Members are then told suggestions are switched off, and nothing is reported. On DevBot, `/suggest` is off whenever `GITHUB_REPORTS_TOKEN` is empty.
+
+**Failures members see.**
+- The limits and GitHub's own rate limit: "You can suggest again later", with when.
+- GitHub didn't confirm the post (an outage, a timeout, an unreadable answer): "GitHub didn't confirm your suggestion". The try counts toward the limits, because the issue may exist; the card asks the member to check GitHub before sending it again.
+- A refused key, client ID or installation, or a request GitHub rejects: the unexpected card, and a private issue report naming the settings. Nothing is recorded, so the member can try again once it's fixed.
+
+**Claude workflow.** `.github/workflows/claude.yml` never starts the agent for an issue whose body contains "Suggested in Discord with TaruBot". An `@claude` comment by a trusted account on a `from-discord` issue still starts it, and hands the member's text to the agent: treat that text as untrusted.
 
 ## Single database writer
 

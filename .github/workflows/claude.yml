@@ -20,6 +20,9 @@ jobs:
     name: Claude assistant
     # Start only for @claude mentions by trusted accounts; the action separately rejects actors
     # without write access. Review events on fork pull requests receive no secrets or OIDC token.
+    # An issue opened by /suggest (2.26.0) carries the marker 'Suggested in Discord with TaruBot'
+    # and never starts the agent, even if the text cleaning regressed or the posting identity
+    # changes. A trusted @claude comment on one still does, and hands it the member's text.
     if: |
       (github.event_name == 'issue_comment'
         && contains(github.event.comment.body, '@claude')
@@ -34,7 +37,8 @@ jobs:
         && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'issues'
         && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+        && !contains(github.event.issue.body, 'Suggested in Discord with TaruBot'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     concurrency:

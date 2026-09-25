@@ -143,6 +143,7 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 ## Daily use
 
 - `/issue description:…` sends a problem report to TaruBot's maintainers, with a snapshot of the member's account and the bot's state (one per member per 10 minutes). Unexpected errors, failed jobs and repeated trouble are reported automatically. See [OPERATIONS.md](docs/OPERATIONS.md#issue-reports).
+- `/suggest idea:…` posts a feature suggestion publicly as an issue in this repository, for anyone holding the server's Member or Guest role (one an hour, three a day per member, ten a day in total). Only the cleaned idea and TaruBot's version are posted, by the TaruBot GitHub App; links, mentions, email addresses and long IDs are removed first. See [OPERATIONS.md](docs/OPERATIONS.md#public-suggestions).
 - `/version [commits]` shows the running SemVer and recent commits from GitHub (`main`): five by default, up to ten, with linked IDs/titles and `✓ verified` for verified signatures. History is cached for up to five minutes; version output remains available during GitHub outages. See [CHANGELOG.md](CHANGELOG.md) for the versioned development milestones.
 - `/claim` resolves an ID/profile URL or an exact full-name/world match. Put its proof token in the public biography, then use `/verify`. Tokens expire after 30 minutes by default.
 - `/characters`, `/main`, and `/nickname` manage local identity preferences. Existing-link operations use stored IDs and work during Lodestone outages.

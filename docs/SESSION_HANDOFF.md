@@ -176,12 +176,22 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
 - **Status.** Merged ([PR #27](https://github.com/deconfined/tarubot/pull/27), `8a580de`) after one review round: failures are timestamped, and `retry.js` clears the stamp. Deployed on 2026-09-25 to DevBot and production (14:30 UTC) together with 2.24.0's host step: the pull, the backup crontab line and a first run from the real path.
 
-**Update, 2.24.2 (current version):**
+**Update, 2.24.2:**
 - **Why.** The owner asked to address the two open CodeQL alerts.
 - **Change.**
   - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
   - #8: `isDefinition` checks null before `typeof`.
 - **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
+
+**Update, 2.26.0 (current version on its branch; issue #32):**
+- **Why.** Issue #32 asked for public feature suggestions from Discord. The owner answered the plan's questions on 2026-09-25 ([decision comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5836092045)) and clarified in chat that anyone with server access (the Member or Guest role) may post. REQUIREMENTS.md "Approved public-suggestion amendments (2026-09-25)" records it.
+- **Change.**
+  - `/suggest idea:…` posts at once as a public issue in `deconfined/tarubot` (labels `enhancement`, `from-discord`) and replies with its link. Only the cleaned text and the version go public; `src/domain/suggestions.ts` holds the cleaning, format and final check.
+  - Only in the FC's server (production's guild list, DevBot's test guild), for holders of the bound Member or Guest role. Limits: one an hour and three a day per member, ten a day in total, counted from `audit` rows; an attempt GitHub didn't confirm counts.
+  - Production posts as the TaruBot GitHub App (App ID 5076273) with `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY`, minting an installation token per post. DevBot previews into `deconfined/tarubot-reports` with its reports token.
+  - `claude.yml` never starts the agent for an issue carrying the suggestion marker. `GITHUB_REPORTS_REPO` may no longer name the public repository.
+  - No migration; 21 roots / 45 paths.
+- **Status.** Branch `feat/suggest-2.26.0`; not yet pushed. It follows 2.24.3 (#29) and 2.25.0 (#30) in the agreed release order, then #31 is 2.27.0. Deploying it is a restart plus the app settings in the host's `.env`, registration and a probe ([DEV_GUILD.md](DEV_GUILD.md#2260-rollout-plan-suggest-not-yet-run)).
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -248,7 +258,8 @@ Keep these owner-approved decisions intact:
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
 4. Merge and deploy 2.24.2 (a restart). Then finish the robust, disposable host (owner decision, 2026-09-25): the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done; the SSH deploy workflow from GitHub Actions remains.
-5. After that, OPS-10/OPS-11.
+5. The agreed release order (2026-09-25): #29 as 2.24.3, #30 as 2.25.0, #32 as 2.26.0 (`/suggest`), then #31 as 2.27.0. For 2.26.0, with the owner's go-ahead: the app settings into the host's `.env`, the deploys, registration, the app probe and the owner's test `/suggest` ([OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover)); and the owner confirms "Public Bot" is off for the production application.
+6. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
 

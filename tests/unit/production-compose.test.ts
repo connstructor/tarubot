@@ -75,6 +75,24 @@ test("the production file carries every setting the registry deployment passes",
   expect(missing).toEqual([]);
 });
 
+test("the GitHub App settings reach production only (2.26.0)", async () => {
+  // /suggest posts publicly as the TaruBot GitHub App in production; DevBot previews into the
+  // private reports repository and never holds the app's key.
+  const production = composeFile.parse(YAML.parse(await read("docker-compose.production.yml")));
+  const base = composeFile.parse(YAML.parse(await read("docker-compose.yml")));
+  const devbot = await read("docker-compose.devbot.yml");
+  expect(production.services.tarubot?.environment).toMatchObject({
+    // Compose interpolation, written escaped so it isn't a template placeholder here.
+    GITHUB_APP_CLIENT_ID: `\${GITHUB_APP_CLIENT_ID:-}`,
+    GITHUB_APP_PRIVATE_KEY: `\${GITHUB_APP_PRIVATE_KEY:-}`,
+  });
+  // The daily dump never needs them.
+  expect(production.services.backup?.environment).not.toHaveProperty("GITHUB_APP_PRIVATE_KEY");
+  expect(base.services.tarubot?.environment).not.toHaveProperty("GITHUB_APP_CLIENT_ID");
+  expect(base.services.tarubot?.environment).not.toHaveProperty("GITHUB_APP_PRIVATE_KEY");
+  expect(devbot).not.toContain("GITHUB_APP_");
+});
+
 test("no deployment file keeps the retired sidecar or its settings (2.21.0)", async () => {
   for (const path of [
     "docker-compose.yml",

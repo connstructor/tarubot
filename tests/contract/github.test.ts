@@ -1,8 +1,14 @@
-/** GitHub response contracts, signature status, request coalescing, and outage isolation. */
+/**
+ * GitHub response contracts, signature status, request coalescing, and outage isolation; the issue
+ * client's refusals; and the GitHub App sign-in behind /suggest (2.26.0), against local fakes.
+ */
 import { describe, expect, test } from "bun:test";
+import { generateKeyPairSync, verify } from "node:crypto";
+import { GitHubApp } from "../../src/infrastructure/github/app.js";
 import { GitHubHistory } from "../../src/infrastructure/github/client.js";
 import { GitHubIssues } from "../../src/infrastructure/github/issues.js";
 import { project } from "../../src/config/project.js";
+import { Failure } from "../../src/domain/values.js";
 
 /** Commit bodies and untrusted response URLs must not leak into rendered titles/links. */
 const fixture = (
@@ -234,5 +240,221 @@ describe("issue reports client (2.18.0)", () => {
         await server.stop(true);
       }
     }
+  });
+});
+
+describe("issue client settings (2.26.0)", () => {
+  /** A client against a local fake that answers every request with `status`. */
+  async function refusedWith(status: number, settings?: string) {
+    const server = Bun.serve({ port: 0, fetch: () => new Response("", { status }) });
+    try {
+      const client = new GitHubIssues(
+        "secret-token-value",
+        "owner/repo",
+        fetch,
+        `http://localhost:${server.port}`,
+        ...(settings === undefined ? [] : [settings]),
+      );
+      return await client.create("Title", "Body", []).then(
+        () => {
+          throw new Error("Expected a refusal");
+        },
+        (error: unknown) => error,
+      );
+    } finally {
+      await server.stop(true);
+    }
+  }
+
+  test("the reports client keeps its exact messages", async () => {
+    expect(await refusedWith(401)).toMatchObject({
+      code: "configuration",
+      message:
+        "GitHub refused the issue report (401); check GITHUB_REPORTS_TOKEN and GITHUB_REPORTS_REPO.",
+    });
+  });
+
+  test("/suggest's client names the GitHub App's settings, never the token", async () => {
+    const settings =
+      "the GitHub App (GITHUB_APP_CLIENT_ID, GITHUB_APP_PRIVATE_KEY) and its installation";
+    for (const status of [401, 404]) {
+      const error = await refusedWith(status, settings);
+      expect(error).toMatchObject({
+        code: "configuration",
+        message: `GitHub refused the issue report (${status}); check ${settings}.`,
+      });
+      expect(String((error as Error).message)).not.toContain("secret-token-value");
+    }
+  });
+});
+
+describe("GitHub App sign-in (2.26.0)", () => {
+  // A throwaway key pair made for this run: no PEM is committed (the repository is public, and
+  // secret scanning would flag one). GitHub downloads app keys as PKCS#1, so the test uses it too.
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+  const NOW = Date.parse("2026-09-25T12:00:00Z");
+
+  /** A fake GitHub that records requests and answers from a script, one response per call. */
+  function fakeGitHub(script: (() => Response)[], key = pem) {
+    const seen: { method: string; path: string; auth: string | null; body: unknown }[] = [];
+    let call = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        seen.push({
+          method: request.method,
+          path: url.pathname,
+          auth: request.headers.get("authorization"),
+          body: request.method === "POST" ? await request.json() : null,
+        });
+        return (script[Math.min(call++, script.length - 1)] ?? (() => new Response()))();
+      },
+    });
+    const app = new GitHubApp(
+      "Iv23testclientid",
+      key,
+      "deconfined/tarubot",
+      fetch,
+      `http://localhost:${server.port}`,
+      () => NOW,
+    );
+    return { server, app, seen };
+  }
+
+  /** Decode one base64url JWT segment. */
+  const segment = (value: string | undefined) =>
+    JSON.parse(Buffer.from(value ?? "", "base64url").toString()) as Record<string, unknown>;
+
+  test("signs an RS256 JWT GitHub accepts: backdated a minute, nine minutes long", () => {
+    const { app, server } = fakeGitHub([]);
+    try {
+      const [header, claims, signature] = app.jwt().split(".");
+      expect(segment(header)).toEqual({ alg: "RS256", typ: "JWT" });
+      const seconds = Math.floor(NOW / 1000);
+      expect(segment(claims)).toEqual({
+        iat: seconds - 60,
+        exp: seconds + 540,
+        iss: "Iv23testclientid",
+      });
+      expect(
+        verify(
+          "sha256",
+          Buffer.from(`${header}.${claims}`),
+          publicKey,
+          Buffer.from(signature ?? "", "base64url"),
+        ),
+      ).toBe(true);
+    } finally {
+      void server.stop(true);
+    }
+  });
+
+  test("finds the installation, then mints a token narrowed to this repository's issues", async () => {
+    const { app, server, seen } = fakeGitHub([
+      () => Response.json({ id: 164885413, account: { login: "deconfined" } }),
+      () =>
+        Response.json({ token: "ghs_minted", expires_at: "2026-09-25T13:00:00Z" }, { status: 201 }),
+    ]);
+    try {
+      expect(await app.installationToken()).toBe("ghs_minted");
+      expect(seen.map(({ method, path, body }) => ({ method, path, body }))).toEqual([
+        { method: "GET", path: "/repos/deconfined/tarubot/installation", body: null },
+        {
+          method: "POST",
+          path: "/app/installations/164885413/access_tokens",
+          body: { repositories: ["tarubot"], permissions: { issues: "write" } },
+        },
+      ]);
+      // Both calls carry the app's JWT, never a stored token.
+      for (const request of seen) expect(request.auth).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/u);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("GitHub's failures become catalog codes, never plain errors or secrets", async () => {
+    const malformed = () =>
+      new Response("{not json", { status: 200, headers: { "content-type": "application/json" } });
+    const cases: [(() => Response)[], string][] = [
+      // A refused JWT, or the app not installed on the repository, needs the operator.
+      [[() => new Response("", { status: 401 })], "configuration"],
+      [[() => new Response("", { status: 404 })], "configuration"],
+      [[() => Response.json({ id: 1 }), () => new Response("", { status: 422 })], "configuration"],
+      // Outages are unavailable; an unreadable 2xx is invalid_response.
+      [[() => new Response("", { status: 502 })], "unavailable"],
+      [[malformed], "invalid_response"],
+      [[() => Response.json({ account: "no id" })], "invalid_response"],
+      [
+        [() => Response.json({ id: 1 }), () => Response.json({ expires_at: "no token" })],
+        "invalid_response",
+      ],
+    ];
+    for (const [script, code] of cases) {
+      const { app, server } = fakeGitHub(script);
+      try {
+        const error = await app.installationToken().then(
+          () => new Error("Expected a failure"),
+          (caught: unknown) => caught,
+        );
+        expect(error).toBeInstanceOf(Failure);
+        expect(error).toMatchObject({ code });
+        const message = (error as Error).message;
+        if (code === "configuration")
+          expect(message).toContain(
+            "check GITHUB_APP_CLIENT_ID, GITHUB_APP_PRIVATE_KEY and the app's installation on deconfined/tarubot",
+          );
+        expect(message).not.toContain("PRIVATE KEY-----");
+        expect(message).not.toMatch(/eyJ/u);
+      } finally {
+        await server.stop(true);
+      }
+    }
+  });
+
+  test("a timeout, before or after GitHub answers, is never a plain error", async () => {
+    const timeout = () => new DOMException("The operation timed out.", "TimeoutError");
+    // No answer at all.
+    const silent = new GitHubApp("Iv23x", pem, "deconfined/tarubot", async () => {
+      throw timeout();
+    });
+    await expect(silent.installationToken()).rejects.toMatchObject({ code: "unavailable" });
+    // An answer whose body times out while it is read.
+    const stalled = new GitHubApp(
+      "Iv23x",
+      pem,
+      "deconfined/tarubot",
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(timeout());
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    await expect(stalled.installationToken()).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  test("an unreadable or non-RSA key is a configuration failure naming the setting", async () => {
+    for (const key of [
+      "not a key",
+      generateKeyPairSync("ec", { namedCurve: "P-256" })
+        .privateKey.export({ type: "pkcs8", format: "pem" })
+        .toString(),
+    ]) {
+      const app = new GitHubApp("Iv23x", key, "deconfined/tarubot", async () => {
+        throw new Error("No request may be made with a bad key");
+      });
+      await expect(app.installationToken()).rejects.toMatchObject({
+        code: "configuration",
+        message: expect.stringContaining("GITHUB_APP_PRIVATE_KEY"),
+      });
+    }
+    // A key pasted on one line with \n escapes still signs.
+    const escaped = new GitHubApp("Iv23x", pem.replaceAll("\n", "\\n"), "deconfined/tarubot");
+    expect(escaped.jwt().split(".")).toHaveLength(3);
   });
 });
