@@ -160,7 +160,7 @@ Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#
 | `disabled` | `‖ PAUSED` | "waiting for activation" or "Discord changes are off for this deployment" |
 | `failed` | `✗ FAILED` | "stopped and won't retry"; a closed-DM decision DM says the decision still stands |
 
-Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
+Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice, Status notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
 
 ## Officer notices
 
@@ -187,6 +187,36 @@ Accepted edge cases and assumptions:
 - **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's. They must agree to within a few seconds (a roster fetch); NTP keeps the Docker host and managed PostgreSQL to milliseconds.
 
 The rate limit reads these rows, so don't prune `officer.notify` jobs ([PERSISTENCE.md](PERSISTENCE.md#query-and-transaction-conventions)).
+
+## Status notices
+
+Since 2.27.0 (REQUIREMENTS.md "Approved status-notice amendments", OPS-11), one post in the officer notifications channel lists what changed about members:
+
+- **What posts.** "Member status changes": members who gained or lost Member, Guest, Officer or FC Leader, grouped by change and the reason the bot decided it ("Member → Guest · no linked character is in the FC", "No access → Guest · guest grant", "Officer added · officer override"), then "Left the FC": each confirmed departure of a linked character (missing, then absent a minute later), with its owner's mention. Departures post even when nobody's access changes: an alt whose owner keeps Member, or an owner who already left the server. Officers' own changes read like automatic ones; the audit keeps who. Mentions never ping.
+- **When.** About 2 minutes after the first change, one `officer.status` job per server (key `officer:<guild>:status`) posts everything that changed in that window; a change undone inside it cancels out. A post names at most 100 members, fewer when their lines wouldn't fit, and further posts follow in the same run. While it waits, `/sync status` shows `↻ WAITING Status notice` (`ordered`, logged at debug); nothing to post completes `– SKIPPED` (`nothing to post`).
+- **Not announced.** Decisions made while evidence is unconfirmed (an out-of-date roster, an unchecked new link, an unknown rank), until a fresh roster confirms them; hand edits the bot keeps in those times; role changes after `/config roles` or `/setup` binding changes, except officers adopted when a new Officer role replaces one already set; roles given on joining; people who left the server; nicknames; and the first pass after the deploy, activation or a new member row, which only records a baseline. Linking an FC to a server whose roles are set up posts its confirmed members as "Guest → Member" after the first roster, the mirror of the unlink post.
+- **No channel.** With the officer notifications channel unset the job completes `– SKIPPED` (`officer notifications unconfigured`), even with Discord changes off, and what waited counts as announced: nothing posts later. With Discord changes paused and a channel set, it parks as `‖ PAUSED` and posts on resume.
+- **Failures.** Missing permissions block the job (`! BLOCKED`) with its batch frozen. The scheduler requeues it about every 10 minutes, and a `/config` save or `retry.js` releases it at once; the retry resends the same batch under the same nonce (`status:<batch>`), so a retry within Discord's window returns the first message. Each send records a `started`, then a `delivered` (with the message ID) or `failed` delivery attempt. A job that ends failed keeps what waits: `retry.js` or the next change in that server posts it.
+
+To see what waits, or is being sent, in a server:
+
+```sql
+SELECT user_id, status_since, status_posting IS NOT NULL AS sending
+  FROM guild_users
+ WHERE guild_id = '<guild>' AND (status_since IS NOT NULL OR status_posting IS NOT NULL)
+ ORDER BY status_since NULLS LAST;
+```
+
+**Manual reversal**, to run an image older than 2.27.0. Migration 010 only adds columns, so nothing else is lost; an older image otherwise refuses to start on schema 010. Stop the bot, run the writer-lease gate, then in one transaction:
+
+```sql
+ALTER TABLE guild_users DROP COLUMN status_state, DROP COLUMN status_since, DROP COLUMN status_posting;
+UPDATE jobs SET status='succeeded', completed_at=now(), lease_until=NULL, result='{"skipped":"reverted"}'
+ WHERE kind='officer.status' AND status IN ('queued','running','blocked','disabled');
+DELETE FROM schema_migrations WHERE version='010_status_notices.sql';
+```
+
+Then pin the older tag and `up`. The `UPDATE` matters: an older image would fail those jobs as `invalid_job`.
 
 ## Profile refreshes, private profiles and deleted characters
 

@@ -27,7 +27,7 @@ Issue [#31](https://github.com/deconfined/tarubot/issues/31): officers see mater
   - `tests/unit/status.test.ts`: the probe table for `accessDecisive` and `rankDecisive`, recording (baselines, changes, cancelling, unbinding, rejoining), every reason code, entries and every access transition, the mark (including a rejoin while the post was in flight) and the no-channel drop;
   - the post: the plan's example, group order, 100 members in three fields, a departure-heavy batch sized by the budget, the "Not listed" guard, byte-identical renders and the gateway's `status:<batch>` nonce; `splitFields` with a separator; the job label;
   - on PostgreSQL: migration 010; the first-pass baseline and an unchanged pass leaving the row untouched; grant, grant-and-revoke, stale hand edits, Member rebinds, an Officer rebind with adoption, `/setup` naming a new FC, an FC unlink and relink, an unchecked link, unbinding and rebinding, a rejoin, no `guild_users` row, a blocked role write; departures (lost Member, an alt, an owner who left), 105 members plus former-member guests in two posts, a departure-heavy batch; the roster and `sync.guild` lock order; a blocked send resent first, a lost lease after the send, a lapsed lease, no channel with Discord changes off, a change during a run, paused and resumed, and the queue's attempt reset.
-- **Docs:** REQUIREMENTS.md (the amendment and OPS-11), OPERATIONS.md, REPLIES.md, SETUP.md, CONFIGURATION.md, PERSISTENCE.md and CLAUDE.md.
+- **Docs:** REQUIREMENTS.md (the amendment and OPS-11), OPERATIONS.md, REPLIES.md, SETUP.md, README.md, CONFIGURATION.md, PERSISTENCE.md and CLAUDE.md, with the planned DevBot rollout in DEV_GUILD.md.
 
 ## 2.25.0 — Update posts in a changelog channel
 

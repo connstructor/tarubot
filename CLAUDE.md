@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", and "Approved changelog amendments (2026-09-25)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", "Approved changelog amendments (2026-09-25)", and "Approved status-notice amendments (2026-09-25)".
 
 ## Project map
 
@@ -18,12 +18,14 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `lifecycle.ts`: readiness, startup, and the database writer lease.
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
   - `heartbeat.ts`: the healthchecks.io dead-man's switch (2.22.0), pinged every five minutes while ready (`HEALTHCHECKS_PING_URL`; empty is off).
+  - `status-notices.ts`: the officer status posts (2.27.0, #31): recording decisive changes after each role update and confirmed departures in the roster transaction, and the `officer.status` job (resume a frozen batch, the two-minute window, budget-sized batches, send, mark). The pure rules are in `src/domain/status.ts`, and the post in `src/discord/presenters/officer.ts`.
   - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
   - `values.ts` holds `Failure`, `json`, and ID parsing.
   - `changelog.ts` decides update posts (2.25.0): the release range and what one `changelog.post` job does. `release-notes.ts` is the member-note map it reads.
+  - `status.ts` holds the status-post state (2.27.0): its zod schemas, recording a pass (`observe`), departures, entries, the mark and the reasons. `policy.ts` `accessDecisive` and `rank-policy.ts` `rankDecisive` say which decisions don't depend on held roles.
 - `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard.
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
@@ -35,7 +37,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `runner.ts` fetches under the network policy (region, `gate.ts` spacing and 429 cooldown, body bound, private-profile detection), then parses in a fresh worker (`worker.ts`), terminated at the deadline.
   - `parser.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages. `pages.ts` says which page, files and keys each operation reads.
   - Selectors follow upstream HEAD live, in memory: `selectors.ts` downloads and validates them, and `upstreams.ts` checks HEAD. `bundled.ts` is the set shipped with the release (`bun run selectors:update` refreshes it).
-- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `009_changelog_channel.sql`; 2.24.x required `008_issue_reports.sql`).
+- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `010_status_notices.sql`; 2.25.0 and 2.26.x required `009_changelog_channel.sql`, 2.24.x `008_issue_reports.sql`).
 
 ## Commands
 
@@ -93,7 +95,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11.
+  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11 (2.24.3 quiets the roster notices, and 2.27.0 posts member status changes, with migration 010).
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
@@ -129,5 +131,10 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Update posts (2.25.0):
   - `guilds.changelog_version` is the newest version a guild was told about. Setting `/config changelog` where no channel was sets it to the running version (or keeps a higher one), so nothing posts until the next release with a member note. Moving or unsetting the channel keeps it, and the bot never lowers it: restarts and rollbacks on the same schema post nothing.
   - Startup queues one `changelog.post` (`changelog:<guild>`, payload `{}`) per present guild with a channel and an older baseline; a pending one merges. The job reads the range when it runs. `changelog unconfigured`, `already announced` and `nothing for members` complete before the effects gate, like `layout disabled`; only a post parks or blocks. The nonce key is `changelog:<guild>:<running version>`, and a compare-and-set moves the baseline.
+- Officer status posts (2.27.0, #31):
+  - `Synchronization.user` records Member, Guest, Officer and FC Leader on `guild_users.status_state` after a successful role write, only when the decision doesn't depend on held roles (`accessDecisive`, `rankDecisive`); a first decisive value, an unbound role and a new join time are silent. The roster records confirmed departures in its snapshot transaction.
+  - Lock order: the roster locks departing owners' `guild_users` rows in `(guild_id, user_id)` order (`COLLATE "C"`) before any `characters` row, and `sync.guild` locks its guild's rows up front in that order.
+  - One `officer.status` job per guild (`officer:<guild>:status`, payload `{}`) resends a frozen batch first, then waits `ordered` (debug) until the oldest change is 2 minutes old, then posts budget-sized batches under `status:<batch>` nonces, marking each before the lease check. No officer channel completes `officer notifications unconfigured` before the effects gate and drops what waits. Recovery after a terminal failure is `retry.js` or the next change.
+  - A successful run requeued for a newer generation now gets `attempts` reset (every kind).
 - `/setup` enables onboarding, switches guest applications on (adopting the officer room as the review channel when none is set, and validating a kept one first), and adopts every Officer-role holder.
 - Leave the old `feat/lobby-access` stash alone. It has been superseded. It exists only in the original Mac clone; this Linux clone has no stashes.

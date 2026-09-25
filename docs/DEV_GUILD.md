@@ -424,6 +424,20 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line, and choosing it again gives the no-change card with a Visibility field; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
 7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
 
+### 2.27.0 rollout plan (member status posts; not yet run)
+
+2.27.0 (#31) adds migration `010_status_notices.sql` (three nullable `guild_users` columns) and no command change. It follows 2.25.0 (migration 009) and 2.26.0 (#32, no migration) in the agreed release order. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+
+1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.27.0-<sha>.dump`; record its size and sha256.
+2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version 009_changelog_channel.sql`.
+3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`, and the three `status_*` columns are NULL), then run `migrate.js` against `tarubot_dev`.
+4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.27.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on. Nothing to register.
+5. After the startup repair pass, nothing waits and nothing posted: `SELECT count(*) FROM guild_users WHERE status_since IS NOT NULL OR status_posting IS NOT NULL` is 0, and no `officer.status` job sent a message.
+6. The owner's checks from `test-plans/current.json`: `/officer revoke` on a rank officer gives one "Member status changes" post with "Officer removed · officer access revoked" within about 3 minutes, and `/officer reset` then gives "Officer added · FC officer rank" (after `/refresh` if the roster is older than 6 hours); a `/guest grant` revoked within a minute posts nothing. Afterwards `status_since` is clear again.
+7. Check readiness (including `writerLease`), the logs and the plan posted in #chat, then record the results here and in VERIFICATION.md.
+
+**Production** follows HOSTING.md's migration procedure, unless the SSH deploy workflow ships first and handles a pending migration: pin and pull, stop, the writer-lease gate, an off-provider `pg_dump` with its checksum, `migrate.js` in the new image (its restore-point line names 010, then `Schema ready.`), then `up -d --wait`. The first pass posts nothing. An older image refuses schema 010: the ways back are a fix release, a restore, or the manual reversal in OPERATIONS.md "Status notices".
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

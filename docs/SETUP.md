@@ -209,3 +209,10 @@ Follow the stopped-writer backup/migration procedure, then register the commands
 - `/config changelog` is a new command path: 20 roots, 45 paths.
 
 Follow the stopped-writer backup/migration procedure, start the new release, then register the commands (DevBot's guild, or production with `register.js --global`) and read them back with `commands.js list`. An older image refuses to start on schema 009.
+
+**2.27.0 adds `010_status_notices.sql`** for the [member status posts](OPERATIONS.md#status-notices) in the officer notifications channel:
+
+- three nullable `guild_users` columns: `status_state`, `status_since` and `status_posting`. All start NULL, so the first pass only records everyone's status and the deploy posts nothing;
+- no command change, so nothing to register.
+
+Follow the stopped-writer backup/migration procedure, then start the new release. An older image refuses to start on schema 010; OPERATIONS.md "Status notices" has the manual reversal.
