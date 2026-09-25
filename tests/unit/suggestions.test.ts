@@ -888,7 +888,10 @@ describe("seeded fuzz", () => {
     }
     // Most runs are long enough to post.
     expect(checked).toBeGreaterThan(1500);
-  });
+    // About a second natively, but the linux/arm64 image build runs the unit suite under QEMU,
+    // where these 2,000 ideas took 5.3 s and hit the 5 s default (CI run 36196012856). This test
+    // checks correctness; the linear-time tests above bound the speed.
+  }, 60_000);
 });
 
 describe("titles", () => {
