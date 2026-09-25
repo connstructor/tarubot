@@ -289,7 +289,7 @@ const companyName = (fc: Pick<FcRef, "id" | "name">): string => fc.name.trim() |
 
 /**
  * An FC tag without its guillemets, or null when there is none. The Lodestone shows a tag as
- * «Souls», and Nodestone and the stored row keep that form, while fixtures and older rows may hold
+ * «Souls», and the parser and the stored row keep that form, while fixtures and older rows may hold
  * the bare tag. Every presenter adds its own «…», so one surrounding pair is removed first; without
  * this, a stored tag rendered as ««Souls»» (2.14.0 reply session, D1).
  */

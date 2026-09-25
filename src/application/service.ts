@@ -50,8 +50,8 @@ import {
 import type {
   CharacterIdentity,
   CompanyIdentity,
-  Nodestone,
-} from "../infrastructure/nodestone/client.js";
+  Lodestone,
+} from "../infrastructure/lodestone/client.js";
 import {
   enqueue,
   layoutGuildRoles,
@@ -213,7 +213,7 @@ export class Service {
   constructor(
     readonly db: Database,
     readonly discord: DiscordPort,
-    readonly lodestone: Nodestone,
+    readonly lodestone: Lodestone,
     readonly config: Configuration,
   ) {}
   /** Delegate bot-only officer authority without granting Discord server permissions. */

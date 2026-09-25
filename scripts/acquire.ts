@@ -6,7 +6,7 @@ import { DiscordGateway } from "../src/discord/gateway.js";
 import { Service } from "../src/application/service.js";
 import { Synchronization } from "../src/application/synchronization.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
-import { Nodestone } from "../src/infrastructure/nodestone/client.js";
+import { Lodestone } from "../src/infrastructure/lodestone/client.js";
 import { enqueue } from "../src/jobs/queue.js";
 import { id, json } from "../src/domain/values.js";
 import { and, eq, gt, ne, sql } from "drizzle-orm";
@@ -22,6 +22,10 @@ assertToolScope(process.env, {
   databases: ["DATABASE_URL"],
 });
 const db = new Database(config.DATABASE_URL);
+// The parser runs in this process (2.21.0). Like the bot, it parses with the selector repository's
+// HEAD, checked once here; the bundled set stays if GitHub can't be reached or HEAD is rejected.
+const lodestone = new Lodestone();
+await lodestone.refresh();
 try {
   await db.schema();
   const [configured] = await db.orm
@@ -48,7 +52,7 @@ try {
     // Constructing the gateway supplies the port contract; this acquisition never logs into Discord.
     db,
     new DiscordGateway(),
-    new Nodestone(config.NODESTONE_URL),
+    lodestone,
     config,
   );
   const sync = new Synchronization(service);

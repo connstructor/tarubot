@@ -1,10 +1,20 @@
-/** Typed HTTP adaptation and complete-crawl validation for the source-built Nodestone sidecar. */
+/**
+ * TaruBot's Lodestone adapter (2.21.0: in process; the sidecar is gone). It runs each operation
+ * through the runner (fetch under the gate, parse in a fresh worker) with the live selector set,
+ * bounds concurrency, retries transient outages, and validates every parsed field before it becomes
+ * an application fact. It also follows the selector repository's HEAD (selectors.ts, upstreams.ts).
+ */
 import { decode } from "html-entities";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { FailureCode, FailureDetail } from "../../domain/failures.js";
 import { Failure, id, normalized } from "../../domain/values.js";
-import { responseSchema, type ParseRequest } from "./protocol.js";
+import { LodestoneGate } from "./gate.js";
+import { pagePlan } from "./pages.js";
+import type { ParseRequest, ParseResponse } from "./protocol.js";
+import { REGIONS, run, type RunnerOptions } from "./runner.js";
+import { type SelectorStatus, SelectorStore } from "./selectors.js";
+import { UpstreamMonitor, type UpstreamState } from "./upstreams.js";
 
 /**
  * Which Lodestone page an operation reads, so a failure's reply can say "Character not found"
@@ -26,28 +36,27 @@ const RESOURCE_CODES: ReadonlySet<string> = new Set([
   "invalid_response",
   "private_profile",
 ]);
-/** Sidecar wire codes as catalog codes: only a private profile is renamed. */
+/** Parse failure codes as catalog codes: only a private profile is renamed. */
 export const WIRE_CODES = {
   not_found: "not_found",
   unavailable: "unavailable",
   rate_limited: "rate_limited",
-  busy: "busy",
   private: "private_profile",
   invalid_response: "invalid_response",
   incomplete: "incomplete",
 } as const satisfies Record<string, FailureCode>;
 /**
- * Failures worth another attempt inside one request: a sidecar outage and the sidecar's own full
- * capacity. The Lodestone's rate limit is not retried here (2.17.0): the sidecar refuses every
- * start for the cooldown it returns, so an immediate retry only spends the deadline. The job queue
- * waits that retryAfter without spending an attempt, and a command tells the user when to retry.
+ * Failures worth another attempt inside one request: the Lodestone unreachable or timing out. Its
+ * rate limit is not retried here (2.17.0): the gate refuses every start for the cooldown it returns,
+ * so an immediate retry only spends the deadline. The job queue waits that retryAfter without
+ * spending an attempt, and a command tells the user when to retry.
  */
-const RETRYABLE: ReadonlySet<string> = new Set(["unavailable", "busy"]);
+const RETRYABLE: ReadonlySet<string> = new Set(["unavailable"]);
 /**
- * Outcomes that mean TaruBot couldn't get an answer from the Lodestone: the sidecar or Lodestone
- * down, throttling, or the sidecar full. A not-found, private or unreadable page is still an answer.
+ * Outcomes that mean TaruBot couldn't get an answer from the Lodestone: down, unreachable or
+ * throttling. A not-found, private or unreadable page is still an answer.
  */
-const UNREACHABLE: ReadonlySet<string> = new Set(["unavailable", "rate_limited", "busy"]);
+const UNREACHABLE: ReadonlySet<string> = new Set(["unavailable", "rate_limited"]);
 
 /** Whether the Lodestone has been answering, for the "unreachable for an hour" report (2.18.0). */
 export interface LodestoneReachability {
@@ -76,7 +85,7 @@ function notFoundMessage(input: ParseRequest): string {
 }
 /**
  * Attach the operation's resource to a detail-less failure; retry timing is unchanged. The
- * sidecar's generic not-found text becomes the page-specific wording; other messages are kept,
+ * runner's generic not-found text becomes the page-specific wording; other messages are kept,
  * because officers see them as the diagnostic.
  */
 function withResource(failure: Failure, input: ParseRequest): Failure {
@@ -91,28 +100,45 @@ function withResource(failure: Failure, input: ParseRequest): Failure {
 }
 
 const object = z.record(z.string(), z.unknown());
+/** Every Lodestone setting (2.21.0: the sidecar's own settings joined the bot's). */
 const limitsSchema = z
-  // Request and overall crawl budgets are independent; every retry shares the crawl deadline.
   .object({
+    // Which regional Lodestone to read (formerly the sidecar's PAGE_REGION).
+    LODESTONE_REGION: z.enum(REGIONS).default("na"),
+    // Parses at once; more wait for a free slot within their deadline.
+    LODESTONE_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+    // The least time between two Lodestone request starts, process-wide.
+    LODESTONE_START_MS: z.coerce.number().int().min(1000).max(60000).default(1000),
+    // One Lodestone fetch, and the most page bytes read.
+    LODESTONE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+    LODESTONE_BODY_BYTES: z.coerce.number().int().min(1024).max(8000000).default(2000000),
+    // Request and overall crawl budgets are independent; every retry shares the crawl deadline.
     LODESTONE_JOB_TIMEOUT_MS: z.coerce.number().int().min(35000).max(900000).default(300000),
     LODESTONE_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(35000),
     LODESTONE_ATTEMPTS: z.coerce.number().int().min(1).max(3).default(3),
     LODESTONE_MAX_PAGES: z.coerce.number().int().min(1).max(100).default(100),
-    NODESTONE_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(16000000).default(8000000),
+    // How often to check the selector repository's HEAD; 0 keeps the bundled set (offline use).
+    LODESTONE_SELECTOR_CHECK_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .refine((value) => value === 0 || value >= 300)
+      .default(900),
   })
   .refine(
     (value) => value.LODESTONE_JOB_TIMEOUT_MS >= value.LODESTONE_REQUEST_TIMEOUT_MS,
     "Job deadline must cover a request deadline",
   );
+export type LodestoneLimits = z.infer<typeof limitsSchema>;
 /** Convert schema failures to one application-owned invalid-response category. */
 function validate<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
   if (!result.success)
-    throw new Failure("invalid_response", "Nodestone returned missing or invalid required fields.");
+    throw new Failure("invalid_response", "The Lodestone page lacked required fields.");
   return result.data;
 }
 /**
- * A malformed ID in sidecar output is unexpected Lodestone data, never the user's input: id()'s own
+ * A malformed ID in parsed output is unexpected Lodestone data, never the user's input: id()'s own
  * failure is the input card that advises the user, so parse sites reclassify it as an unreadable
  * upstream response (warn level, 'Unexpected Lodestone page', a neutral job diagnostic).
  */
@@ -120,7 +146,7 @@ function upstreamId(value: unknown): string {
   try {
     return id(value);
   } catch {
-    throw new Failure("invalid_response", "Nodestone returned an invalid Lodestone ID.");
+    throw new Failure("invalid_response", "The Lodestone page had an invalid Lodestone ID.");
   }
 }
 /** Canonical public identity; fcId is a profile hint and never roster authority. */
@@ -287,17 +313,65 @@ export function page(
   return { members: list.map((entry) => character(entry)), total: pageTotal };
 }
 
-/** Bound HTTP work and deduplicate only in-flight profiles, never cached verification proofs. */
-export class Nodestone {
+/** The selector package, as bun.lock and upstream-revisions.json name it. */
+const BUNDLED_SELECTORS_PACKAGE = "lodestone-css-selectors";
+
+/** A structured log line from the adapter; the composition root routes it to the bot's logger. */
+export type LodestoneLog = (
+  level: "info" | "warn",
+  fields: Record<string, unknown>,
+  message: string,
+) => void;
+
+/** Runs one operation: the runner by default; tests script parse results instead. */
+export type ParseRunner = (input: ParseRequest, signal: AbortSignal) => Promise<ParseResponse>;
+
+export interface LodestoneOptions {
+  readonly log?: LodestoneLog;
+  /** Replaces the runner (and so the network and workers) with scripted parse results. */
+  readonly run?: ParseRunner;
+  /** Runner overrides: a Lodestone transport, a worker script or a gate of the test's own. */
+  readonly runner?: Partial<Pick<RunnerOptions, "transport" | "workerURL" | "gate">>;
+  readonly selectors?: SelectorStore;
+  /** The selector repository's HEAD, for the monitor; tests supply their own. */
+  readonly resolveHead?: ConstructorParameters<typeof UpstreamMonitor>[1];
+}
+
+/** What issue reports and /health/ready show about the Lodestone. */
+export interface LodestoneStatus {
+  /** Parses running, and requests waiting for a parse slot. */
+  readonly parsing: number;
+  readonly waiting: number;
+  /** The gate: the remaining 429 cooldown and the Lodestone 429s in a row. */
+  readonly cooldownSeconds: number;
+  readonly strikes: number;
+  readonly selectors: SelectorStatus;
+  readonly upstream: UpstreamState;
+}
+
+/**
+ * Bound Lodestone work and deduplicate only in-flight profiles, never cached verification proofs.
+ * One instance per process: the gate's spacing and 429 cooldown cover every request it makes.
+ */
+export class Lodestone {
   private profiles = new Map<string, Promise<CharacterIdentity>>();
   private lastAnswerAt: Date | null = null;
   private failingSince: Date | null = null;
   private lastFailure: string | null = null;
   private lastAttemptAt: Date | null = null;
   private shutdown = new AbortController();
-  private readonly limits: z.infer<typeof limitsSchema>;
+  private readonly limits: LodestoneLimits;
+  private readonly gate: LodestoneGate;
+  private readonly selectors: SelectorStore;
+  private readonly monitor: UpstreamMonitor;
+  private readonly runner: ParseRunner;
+  private readonly log: LodestoneLog;
+  /** Parse slots in use, and requests waiting for one, woken in arrival order. */
+  private active = 0;
+  private waiting: (() => void)[] = [];
+
   /** Validate limits independently of Discord credentials so acquisition tools can share the adapter. */
-  constructor(private readonly endpoint: string) {
+  constructor(options: LodestoneOptions = {}) {
     const result = limitsSchema.safeParse(process.env);
     if (!result.success)
       throw new Failure(
@@ -305,7 +379,81 @@ export class Nodestone {
         `Invalid Lodestone limit configuration: ${result.error.issues.map((issue) => issue.path.join(".") || "job/request deadline").join(", ")}`,
       );
     this.limits = result.data;
+    this.log = options.log ?? (() => {});
+    this.gate = options.runner?.gate ?? new LodestoneGate(this.limits.LODESTONE_START_MS);
+    this.selectors = options.selectors ?? new SelectorStore();
+    const runner: RunnerOptions = {
+      region: this.limits.LODESTONE_REGION,
+      gate: this.gate,
+      fetchTimeoutMs: this.limits.LODESTONE_TIMEOUT_MS,
+      bodyBytes: this.limits.LODESTONE_BODY_BYTES,
+      // Throttled jobs wait quietly (debug), so one line per 429 says the gate closed.
+      throttled: (state) =>
+        this.log(
+          "info",
+          state,
+          "The Lodestone throttled TaruBot; new requests wait for the cooldown",
+        ),
+      ...options.runner,
+    };
+    this.runner =
+      options.run ??
+      ((input, signal) =>
+        run(input, this.selectors.selectorFiles(pagePlan(input).files), signal, runner));
+    // Each new selector HEAD is activated live; a rejected one is logged once, then retried quietly.
+    let rejected: string | undefined;
+    const store = this.selectors;
+    this.monitor = new UpstreamMonitor(
+      {
+        [BUNDLED_SELECTORS_PACKAGE]: {
+          repository: store.repository,
+          revision: store.status().bundled,
+        },
+      },
+      options.resolveHead,
+      (state) => this.log("info", { ...state }, "Lodestone selector upstream status changed"),
+      {
+        package: BUNDLED_SELECTORS_PACKAGE,
+        activate: async (latest, signal) => {
+          const before = store.status().revision;
+          try {
+            const after = await store.activate(latest, signal);
+            if (after !== before)
+              this.log("info", { from: before, to: after }, "Lodestone selectors updated");
+            rejected = undefined;
+            return after;
+          } catch (error) {
+            if (rejected !== latest)
+              this.log(
+                "warn",
+                {
+                  revision: latest,
+                  active: before,
+                  reason: error instanceof Error ? error.message : "unknown",
+                },
+                "Lodestone selector revision rejected; the active set stays",
+              );
+            rejected = latest;
+            return store.status().revision;
+          }
+        },
+      },
+    );
   }
+
+  /**
+   * Follow the selector repository: check HEAD now, then every LODESTONE_SELECTOR_CHECK_SECONDS.
+   * The first check runs in the background, so startup never waits for GitHub.
+   */
+  start(): void {
+    this.monitor.start(this.limits.LODESTONE_SELECTOR_CHECK_SECONDS);
+  }
+
+  /** One selector check now, for maintenance tools that parse right away. */
+  async refresh(): Promise<void> {
+    if (this.limits.LODESTONE_SELECTOR_CHECK_SECONDS > 0) await this.monitor.check();
+  }
+
   /** Whether the Lodestone has been answering this process's requests. */
   reachability(): LodestoneReachability {
     return {
@@ -315,14 +463,27 @@ export class Nodestone {
       lastAttemptAt: this.lastAttemptAt,
     };
   }
-  /** Abort active requests and retry sleeps when the bot relinquishes work. */
+
+  /** Parse slots, the gate and the selectors, for issue reports and /health/ready. */
+  status(): LodestoneStatus {
+    return {
+      parsing: this.active,
+      waiting: this.waiting.length,
+      ...this.gate.status(),
+      selectors: this.selectors.status(),
+      upstream: this.monitor.status(),
+    };
+  }
+
+  /** Abort active requests, slot waits and retry sleeps, and stop following upstream. */
   stop(): void {
     this.shutdown.abort();
+    this.monitor.stop();
   }
+
   /**
-   * Stream-bound responses and retry only sidecar outages and capacity waits, with shared
-   * cancellation. A not-found, private, outage, incomplete or invalid failure names the page the
-   * operation read.
+   * Retry only transient outages, with shared cancellation. A not-found, private, outage,
+   * incomplete or invalid failure names the page the operation read.
    */
   async request(
     input: ParseRequest,
@@ -335,7 +496,7 @@ export class Nodestone {
       return result;
     } catch (error) {
       // Only a page that says something about the request is an answer; an unreachable code or
-      // any other error (a cancelled request, a transport fault) is not.
+      // any other error (a cancelled request) is not.
       if (!(error instanceof Failure) || UNREACHABLE.has(error.code)) {
         this.failingSince ??= new Date();
         this.lastFailure = error instanceof Failure ? error.code : "unavailable";
@@ -349,50 +510,55 @@ export class Nodestone {
     this.failingSince = null;
     this.lastFailure = null;
   }
+  /**
+   * Take one of LODESTONE_CONCURRENCY parse slots, waiting in arrival order for one to free. Returns
+   * the release; rejects with the signal's reason if it aborts while waiting.
+   */
+  private async slot(signal: AbortSignal): Promise<() => void> {
+    while (this.active >= this.limits.LODESTONE_CONCURRENCY) {
+      signal.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const wake = (): void => {
+          signal.removeEventListener("abort", abort);
+          resolve();
+        };
+        const abort = (): void => {
+          this.waiting = this.waiting.filter((waiter) => waiter !== wake);
+          reject(signal.reason);
+        };
+        this.waiting.push(wake);
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    }
+    this.active++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      this.waiting.shift()?.();
+    };
+  }
   /** The retry loop behind request(); its failures gain their resource detail there. */
   private async attempts(input: ParseRequest, signal: AbortSignal): Promise<unknown> {
     signal = AbortSignal.any([signal, this.shutdown.signal]);
     for (let attempt = 0; attempt < this.limits.LODESTONE_ATTEMPTS; attempt++) {
       try {
-        const response = await fetch(new URL("/v1/parse", this.endpoint), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(input),
-          signal: AbortSignal.any([
-            signal,
-            AbortSignal.timeout(this.limits.LODESTONE_REQUEST_TIMEOUT_MS),
-          ]),
-        });
-        if (response.status >= 500) {
-          await response.body?.cancel();
-          throw new Failure("unavailable", "The Nodestone sidecar is unavailable.");
+        const deadline = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(this.limits.LODESTONE_REQUEST_TIMEOUT_MS),
+        ]);
+        const release = await this.slot(deadline);
+        let result: ParseResponse;
+        try {
+          result = await this.runner(input, deadline);
+        } finally {
+          release();
         }
-        if (Number(response.headers.get("content-length")) > this.limits.NODESTONE_RESPONSE_BYTES) {
-          await response.body?.cancel();
-          throw new Failure("invalid_response", "Sidecar response exceeds the size limit.");
-        }
-        const reader = response.body?.getReader();
-        if (!reader) throw new Failure("invalid_response", "Missing sidecar response body.");
-        const chunks: Uint8Array[] = [];
-        let bytes = 0;
-        for (;;) {
-          const chunk = await reader.read();
-          if (chunk.done) break;
-          bytes += chunk.value.byteLength;
-          if (bytes > this.limits.NODESTONE_RESPONSE_BYTES) {
-            await reader.cancel();
-            throw new Failure("invalid_response", "Sidecar response exceeds the size limit.");
-          }
-          chunks.push(chunk.value);
-        }
-        const raw: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        const result = responseSchema.parse(raw);
         if (result.ok) return result.data;
         throw new Failure(
           WIRE_CODES[result.code],
-          result.code === "busy"
-            ? "The Nodestone sidecar is busy."
-            : `Lodestone ${result.code.replaceAll("_", " ")}.`,
+          `Lodestone ${result.code.replaceAll("_", " ")}.`,
           result.retryAfter,
         );
       } catch (error) {
@@ -404,9 +570,7 @@ export class Nodestone {
         const failure =
           error instanceof Failure
             ? error
-            : error instanceof z.ZodError || error instanceof SyntaxError
-              ? new Failure("invalid_response", "Nodestone returned an invalid response.")
-              : new Failure("unavailable", "Nodestone is unavailable.");
+            : new Failure("unavailable", "The Lodestone request timed out or failed.");
         if (!RETRYABLE.has(failure.code) || attempt === this.limits.LODESTONE_ATTEMPTS - 1)
           throw failure;
         try {
@@ -428,9 +592,9 @@ export class Nodestone {
         }
       }
     }
-    throw new Failure("unavailable", "Nodestone is unavailable.");
+    throw new Failure("unavailable", "The Lodestone is unavailable.");
   }
-  /** Biography requests always reach the sidecar afresh after any in-flight request has settled. */
+  /** Biography requests always reach the Lodestone afresh after any in-flight request has settled. */
   async profile(characterId: string, biography = false): Promise<CharacterIdentity> {
     const key = `${characterId}:${biography}`;
     const existing = this.profiles.get(key);

@@ -21,6 +21,37 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.21.0** (the Lodestone parser inside the bot; the sidecar and App Platform retired) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.21.0 above 2.19.0). Tests:
+- **The in-process runner** (`tests/contract/lodestone-runner.test.ts`, formerly the sidecar's):
+  - request starts at least 1,000 ms apart through the real gate;
+  - six simultaneous requests peaking at two parses, every one of them run and none refused;
+  - a request waiting for a slot giving up at its deadline;
+  - transport cancellation;
+  - a spinning worker terminated at a 200 ms deadline;
+  - private profiles, other 403s, 404 and 503;
+  - the 429 gate;
+  - a newly activated selector set reaching the parser.
+- **The adapter over scripted parse results** (formerly fake sidecar servers):
+  - failure naming;
+  - retries (an outage retried; throttling and private profiles not);
+  - a deadline during a backoff;
+  - roster invariants;
+  - shutdown cancelling an outstanding request.
+- **Unit tests:**
+  - the in-memory selector store, including the bundled set covering every parsed file and validating against itself;
+  - the recorded selector commit matching `bun.lock` (formerly a build check);
+  - no sidecar settings in any deployment file;
+  - the Compose image path matching the repository.
+
+`bun run test:unit` passed **1,135 tests** and `bun run test:contract` **26**. The App Platform tests were retired with the spec, which lowered the unit count. The full container run passed **1,259 tests / 37,239 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+The compiled adapter, run on this machine against the live Lodestone:
+- checked the selector repository's HEAD in 223 ms;
+- parsed a profile with its FC in 400 ms;
+- read the Woven Souls FC (105 members) and member page 1 (50 entries, page 1 of 3), with the gate's one-second spacing between requests.
+
+`docker build --target tarubot` built with its tests inside. The production install holds `linkedom` and `lodestone-css-selectors` but no TypeScript or Biome. In the container, the adapter checked HEAD (current) and parsed a live profile and the FC (105 members).
+
 **2.20.0** (the first-party parser; Nodestone removed) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/lodestone-parser.test.ts`:
 - column names and Python-group translation;
 - each operation's URL, with values encoded once;

@@ -98,7 +98,7 @@ The cutover went live on App Platform, and then every profile refresh failed the
 - a deploy workflow over SSH from GitHub Actions;
 - confirmed managed-database backup retention and point-in-time recovery, with scheduled off-site encrypted dumps.
 
-**App Platform.** The App Platform spec, its phases and their CI validation stay in the repository as the record and as a fallback, in case DigitalOcean's addresses are admitted again. DEPLOY-DO-01 remains satisfied, but it no longer describes production. The approved GitHub deploy-workflow proposal targeted App Platform. It is on hold until it is re-planned for the Compose host.
+**App Platform.** *(Superseded by the 2026-09-25 retirement below.)* The App Platform spec, its phases and their CI validation stay in the repository as the record and as a fallback, in case DigitalOcean's addresses are admitted again. DEPLOY-DO-01 remains satisfied, but it no longer describes production. The approved GitHub deploy-workflow proposal targeted App Platform. It is on hold until it is re-planned for the Compose host.
 
 ### Approved Lodestone amendments (2026-09-24)
 
@@ -128,6 +128,10 @@ Any sighting in between voids the first 404: a profile read, a private profile, 
 Release 2.19.0 implements this.
 
 **No Nodestone (owner decision, 2026-09-25).** "Get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing internally." In 2.20.0 the sidecar parses pages with TaruBot's own parser, which applies the selector definitions directly. It keeps the sidecar's HTTP contract, isolation, gate and bounds. The Nodestone submodule, its source patches and its dependencies are removed. Before the switch, both parsers produced identical output on live pages. Where NODE requirements name Nodestone, they now apply to this parser.
+
+**No sidecar (owner decision, 2026-09-25).** Asked what the sidecar still bought once the parser was TaruBot's own, the owner decided: "Remove the sidecar. I would rather reduce complexity and places where things can break." In 2.21.0 the bot runs the Lodestone adapter in process. The bot fetches each page under the same network policy (region, start spacing, the 429 gate, deadlines, body bounds, private-profile detection) and parses it in a fresh isolated worker that it terminates at the deadline, which satisfies NODE-09's worker isolation. Parse slots wait for capacity instead of refusing. The live selector set (2.19.0) is held in memory. Where NODE and OPS requirements name the sidecar, its HTTP envelope or `PAGE_REGION`, they now apply to this in-process adapter, its parse results and `LODESTONE_REGION`.
+
+**App Platform retired (owner decision, 2026-09-25).** Without a separate parser service, App Platform cannot serve even as a fallback: the bot itself would fetch the Lodestone from DigitalOcean's refused addresses. The owner chose to retire it. 2.21.0 removes the spec, its phase tool, their tests and CI's doctl validation; DEPLOY-DO-01 no longer applies, and docs/APP_PLATFORM.md stays as the record.
 
 ### Approved issue-reporting amendments (2026-09-24)
 
@@ -205,7 +209,7 @@ Synchronization combines Lodestone observations with PostgreSQL policy state to 
 
 **SCOPE-02.** Channel functionality consists of metadata queries through `/channel` and configured destinations for application messages. Voice-channel conversation controls and color/status workflows are outside the application scope.
 
-**SCOPE-03.** The Lodestone sidecar owns Lodestone page acquisition and parsing (with TaruBot's own selector-driven parser since 2.20.0; Nodestone before). TaruBot accesses its results through the typed adapter defined in Section 9, which owns normalization, validation, and application-facing error handling.
+**SCOPE-03.** The Lodestone adapter owns Lodestone page acquisition and parsing (with TaruBot's own selector-driven parser since 2.20.0, in the bot process since 2.21.0; a Nodestone sidecar before). TaruBot accesses its results through the typed adapter defined in Section 9, which owns normalization, validation, and application-facing error handling.
 
 **SCOPE-04.** Support independently configured Discord guilds. Each guild may link to at most one FC at a time. Guilds observing the same FC maintain independent permissions, character links, guest grants, and ledger accounts.
 
@@ -589,7 +593,7 @@ Contract fixtures must cover every normalization rule used for roster completene
 
 ### Database and durable work
 
-**DEPLOY-DO-01.** (Not the production target since the 2026-09-24 hosting amendment; still maintained and validated.) Supply an App Platform spec that uses matching published GHCR images for a single bot worker, an internal-only Nodestone service, and a pre-deploy migration job. Attach it to the owner-provisioned DigitalOcean Managed PostgreSQL cluster named in the spec (`production: true`, a dedicated non-admin database and user), through provider-bound runtime credentials and verified TLS with the cluster's CA. Never bind a connection pool. Creating the app must not start a bot writer: the first deployment omits the worker, which is introduced only at activation. A bot process holds a PostgreSQL writer lease on its direct connection before it starts work, so an overlapping deployment waits for the previous writer instead of running beside it (MIG-13). Document the provider prerequisites, the backup/PITR window and independent exports, trusted-source access for maintenance tools, and an update procedure that retains database identity and stops the previous writer before migrations or replacement startup. Validate every deployment phase's configuration without creating cloud resources in tests or CI.
+**DEPLOY-DO-01.** (Not the production target since the 2026-09-24 hosting amendment; retired in 2.21.0 with the App Platform spec and tooling, and kept here as the record.) Supply an App Platform spec that uses matching published GHCR images for a single bot worker, an internal-only Nodestone service, and a pre-deploy migration job. Attach it to the owner-provisioned DigitalOcean Managed PostgreSQL cluster named in the spec (`production: true`, a dedicated non-admin database and user), through provider-bound runtime credentials and verified TLS with the cluster's CA. Never bind a connection pool. Creating the app must not start a bot writer: the first deployment omits the worker, which is introduced only at activation. A bot process holds a PostgreSQL writer lease on its direct connection before it starts work, so an overlapping deployment waits for the previous writer instead of running beside it (MIG-13). Document the provider prerequisites, the backup/PITR window and independent exports, trusted-source access for maintenance tools, and an update procedure that retains database identity and stops the previous writer before migrations or replacement startup. Validate every deployment phase's configuration without creating cloud resources in tests or CI.
 
 **DB-01.** PostgreSQL is the runtime database. Use Drizzle ORM for typed application persistence over the node-postgres driver, with table mappings and inferred record types maintained alongside explicit versioned SQL migrations. The migrations own foreign keys, unique constraints, indexes, domains, and triggers; already-applied migrations are immutable. Bind ORM work inside an application transaction to its exact checked-out client. Retain narrowly scoped parameterized PostgreSQL control/locking SQL and catalog-based restore verification. Application startup checks the required schema version and checksum.
 
@@ -625,7 +629,7 @@ The physical schema may use different names, but it must represent these logical
 
 ## 11. Containers, configuration, and operations
 
-**OPS-01.** Provide a project-root multi-target `Dockerfile` and `docker-compose.yml`. The normal long-running services are `tarubot`, `nodestone`, and `postgres`; the source-built Nodestone sidecar has a private HTTP endpoint.
+**OPS-01.** Provide a project-root multi-target `Dockerfile` and `docker-compose.yml`. The normal long-running services are `tarubot` and `postgres`. (Until 2.21.0 a `nodestone` parser sidecar with a private HTTP endpoint ran beside them; the parser now runs in the bot.)
 
 **OPS-02.** The bot image must use a multi-stage reproducible build, run as a non-root user, contain compiled application code and required runtime dependencies/assets, and execute Bun directly with proper signal handling. Install runtime dependencies from the committed lockfile during image construction and retain their required package assets in the final image.
 

@@ -94,7 +94,7 @@ pg psql -d tarubot -At -c "SELECT l.pid FROM pg_locks l WHERE l.locktype='adviso
   AND l.classid=0 AND l.objid=714882494 AND l.objsubid=1"
 ```
 
-**Sidecar.** Run an isolated Nodestone on loopback port 18080, matching `NODESTONE_URL` in both files:
+**Sidecar.** *(Until 2.21.0. Since 2.21.0 tools that read the Lodestone parse in their own process, and this step is not needed.)* Run an isolated Nodestone on loopback port 18080, matching `NODESTONE_URL` in both files:
 
 ```sh
 docker run -d --rm --name tarubot-cutover-nodestone -p 127.0.0.1:18080:8080 ghcr.io/deconfined/tarubot-nodestone:X.Y.Z

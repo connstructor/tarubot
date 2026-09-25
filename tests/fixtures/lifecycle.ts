@@ -80,7 +80,6 @@ export function lifecycleHarness(
     DATABASE_URL: "postgresql://unused/unused",
     DISCORD_TOKEN: "test-only",
     DISCORD_APPLICATION_ID: APPLICATION_ID,
-    NODESTONE_URL: "http://unused",
     LOG_LEVEL: "info",
     ENABLE_EFFECTS: false,
     TEST_GUILD_ID: "",
@@ -105,7 +104,14 @@ export function lifecycleHarness(
       id,
       Object.assign(Object.create(Guild.prototype) as Guild, { id }),
     );
-  const app = instance(Service, { lodestone: { stop: () => {} } });
+  // The Lodestone adapter's lifecycle surface: started by the writer, stopped at shutdown.
+  const app = instance(Service, {
+    lodestone: {
+      start: () => {},
+      stop: () => {},
+      status: () => ({ parsing: 0, waiting: 0, cooldownSeconds: 0, strikes: 0 }),
+    },
+  });
   const sync = instance(Synchronization, { schedule: async () => {} });
   const queue = instance(Queue, {
     start: () => {

@@ -1,13 +1,13 @@
-/** Controlled HTTP fixtures test semantic validation and actual request cancellation. */
+/** Scripted parse results test semantic validation and actual request cancellation. */
 import { expect, test } from "bun:test";
 import {
   character,
   company as companyIdentity,
   count,
-  Nodestone,
+  Lodestone,
   page,
-} from "../../src/infrastructure/nodestone/client.js";
-import { requestSchema } from "../../src/infrastructure/nodestone/protocol.js";
+} from "../../src/infrastructure/lodestone/client.js";
+import type { ParseResponse } from "../../src/infrastructure/lodestone/protocol.js";
 
 const fcId = "9232097761132958152";
 const company = {
@@ -39,8 +39,8 @@ test("normalization preserves Unicode and distinguishes unknown, invalid and exp
   expect(() => character({ ...identity("123"), ID: Number(fcId) })).toThrow();
   expect(() => character(identity("123"), "456")).toThrow();
 });
-test("a malformed ID from the sidecar is an unreadable Lodestone response, not user input", () => {
-  // id()'s input failure advises the user to pick a suggestion; sidecar data is never theirs, so
+test("a malformed ID in parsed output is an unreadable Lodestone response, not user input", () => {
+  // id()'s input failure advises the user to pick a suggestion; parsed data is never theirs, so
   // it must present as 'Unexpected Lodestone page' (invalid_response, warn level) instead.
   const { ID: _omitted, ...nameless } = identity("123");
   const pager = { Page: 1, PageTotal: 1, PageNext: null, PagePrev: 0 };
@@ -55,35 +55,37 @@ test("a malformed ID from the sidecar is an unreadable Lodestone response, not u
   );
 });
 test("roster acquisition checks distinct IDs, page progression, and boundary counts", async () => {
-  // Each mode changes a different completeness invariant while retaining valid HTTP envelopes.
+  // Each mode changes a different completeness invariant while keeping valid parse results.
   let mode: "valid" | "duplicate" | "changing" = "valid";
   let metadataCalls = 0;
-  const server = Bun.serve({
-    port: 0,
-    async fetch(request) {
-      const input = requestSchema.parse(await request.json());
-      let data: unknown;
+  const adapter = new Lodestone({
+    run: async (input): Promise<ParseResponse> => {
       if (input.operation === "fc") {
         metadataCalls++;
-        data = {
-          ...company,
-          ActiveMemberCount: mode === "changing" && metadataCalls % 2 === 0 ? "3" : "2",
-        };
-      } else if (input.operation === "members")
-        data = {
-          List: [identity(input.page === 1 || mode === "duplicate" ? "123" : "456")],
-          Pagination: {
-            Page: input.page,
-            PageTotal: 2,
-            PageNext: input.page === 1 ? 2 : null,
-            PagePrev: input.page === 1 ? null : 1,
+        return {
+          ok: true,
+          data: {
+            ...company,
+            ActiveMemberCount: mode === "changing" && metadataCalls % 2 === 0 ? "3" : "2",
           },
         };
-      else return Response.json({ ok: false, code: "invalid_response", retryAfter: 0 });
-      return Response.json({ ok: true, data });
+      }
+      if (input.operation === "members")
+        return {
+          ok: true,
+          data: {
+            List: [identity(input.page === 1 || mode === "duplicate" ? "123" : "456")],
+            Pagination: {
+              Page: input.page,
+              PageTotal: 2,
+              PageNext: input.page === 1 ? 2 : null,
+              PagePrev: input.page === 1 ? null : 1,
+            },
+          },
+        };
+      return { ok: false, code: "invalid_response", retryAfter: 0 };
     },
   });
-  const adapter = new Nodestone(`http://localhost:${server.port}`);
   try {
     expect((await adapter.roster(fcId)).members.map((member) => member.id)).toEqual(["123", "456"]);
     mode = "duplicate";
@@ -93,23 +95,21 @@ test("roster acquisition checks distinct IDs, page progression, and boundary cou
     await expect(adapter.roster(fcId)).rejects.toMatchObject({ code: "incomplete" });
   } finally {
     adapter.stop();
-    await server.stop(true);
   }
 });
-test("shutdown cancels an actual outstanding HTTP request", async () => {
-  const server = Bun.serve({
-    port: 0,
-    async fetch() {
-      await Bun.sleep(200);
-      return Response.json({ ok: true, data: company });
-    },
+test("shutdown cancels an outstanding request", async () => {
+  // The scripted parse ends only when its signal aborts, as the runner's fetch and worker do.
+  const adapter = new Lodestone({
+    run: (_input, signal) =>
+      new Promise<ParseResponse>((resolve) => {
+        signal.addEventListener(
+          "abort",
+          () => resolve({ ok: false, code: "unavailable", retryAfter: 0 }),
+          { once: true },
+        );
+      }),
   });
-  const adapter = new Nodestone(`http://localhost:${server.port}`);
-  try {
-    const pending = adapter.company(fcId);
-    setTimeout(() => adapter.stop(), 20);
-    await expect(pending).rejects.toMatchObject({ code: "unavailable" });
-  } finally {
-    await server.stop(true);
-  }
+  const pending = adapter.company(fcId);
+  setTimeout(() => adapter.stop(), 20);
+  await expect(pending).rejects.toMatchObject({ code: "unavailable" });
 });

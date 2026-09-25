@@ -1,6 +1,7 @@
-# Production host: the bot and its Nodestone sidecar against the external managed PostgreSQL.
-# Self-contained (no bundled postgres service). Pin the release and start both services with:
-#   TARUBOT_IMAGE_TAG=X.Y.Z docker compose -f docker-compose.production.yml up -d --wait
+# Production host: the bot, with its in-process Lodestone parser (2.21.0), against the external
+# managed PostgreSQL. Self-contained (no bundled postgres service). Pin the release and start with:
+#   TARUBOT_IMAGE_TAG=X.Y.Z docker compose -f docker-compose.production.yml up -d --wait --remove-orphans
+# (--remove-orphans removes the parser sidecar container that releases before 2.21.0 ran.)
 # The project directory's .env (mode 600, never committed) supplies the token, DATABASE_URL and CA;
 # see docs/HOSTING.md. Exactly one bot process may write to the database: the writer lease
 # makes any second one wait, and migrate.js refuses pending migrations while this bot runs.
@@ -12,25 +13,6 @@ x-logging: &logging
     max-file: "5"
 
 services:
-  nodestone:
-    image: ${NODESTONE_IMAGE:-ghcr.io/deconfined/tarubot-nodestone:${TARUBOT_IMAGE_TAG:?Set TARUBOT_IMAGE_TAG to the release}}
-    environment:
-      PORT: "8080"
-      PAGE_REGION: ${PAGE_REGION:-na}
-      LODESTONE_CONCURRENCY: ${LODESTONE_CONCURRENCY:-2}
-      LODESTONE_START_MS: ${LODESTONE_START_MS:-1000}
-      LODESTONE_TIMEOUT_MS: ${LODESTONE_TIMEOUT_MS:-15000}
-      LODESTONE_BODY_BYTES: ${LODESTONE_BODY_BYTES:-2000000}
-      NODESTONE_UPSTREAM_CHECK_SECONDS: ${NODESTONE_UPSTREAM_CHECK_SECONDS:-900}
-    healthcheck:
-      test: [CMD, bun, -e, "const r=await fetch('http://localhost:8080/health');process.exit(r.ok?0:1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
-    stop_grace_period: 30s
-    logging: *logging
-
   tarubot:
     image: ${TARUBOT_IMAGE:-ghcr.io/deconfined/tarubot:${TARUBOT_IMAGE_TAG:?Set TARUBOT_IMAGE_TAG to the release}}
     environment:
@@ -41,7 +23,6 @@ services:
       DISCORD_APPLICATION_ID: "965294750741692416"
       # Tools run inside this container (docker compose run) resolve the production profile.
       TARUBOT_ENVIRONMENT: production
-      NODESTONE_URL: http://nodestone:8080
       LOG_LEVEL: ${LOG_LEVEL:-info}
       HEALTH_PORT: "3000"
       ENABLE_EFFECTS: "true"
@@ -53,17 +34,20 @@ services:
       PROFILE_INTERVAL_SECONDS: ${PROFILE_INTERVAL_SECONDS:-86400}
       VERIFICATION_SECONDS: ${VERIFICATION_SECONDS:-1800}
       GUEST_COOLDOWN_SECONDS: ${GUEST_COOLDOWN_SECONDS:-86400}
+      # The Lodestone parser runs in the bot (2.21.0: no sidecar).
+      LODESTONE_REGION: ${LODESTONE_REGION:-na}
+      LODESTONE_CONCURRENCY: ${LODESTONE_CONCURRENCY:-2}
+      LODESTONE_START_MS: ${LODESTONE_START_MS:-1000}
+      LODESTONE_TIMEOUT_MS: ${LODESTONE_TIMEOUT_MS:-15000}
+      LODESTONE_BODY_BYTES: ${LODESTONE_BODY_BYTES:-2000000}
       LODESTONE_REQUEST_TIMEOUT_MS: ${LODESTONE_REQUEST_TIMEOUT_MS:-35000}
       LODESTONE_JOB_TIMEOUT_MS: ${LODESTONE_JOB_TIMEOUT_MS:-300000}
       LODESTONE_ATTEMPTS: ${LODESTONE_ATTEMPTS:-3}
       LODESTONE_MAX_PAGES: ${LODESTONE_MAX_PAGES:-100}
-      NODESTONE_RESPONSE_BYTES: ${NODESTONE_RESPONSE_BYTES:-8000000}
+      LODESTONE_SELECTOR_CHECK_SECONDS: ${LODESTONE_SELECTOR_CHECK_SECONDS:-900}
       # Issue reports (2.18.0): the token lives in the host's .env; empty saves reports unsent.
       GITHUB_REPORTS_TOKEN: ${GITHUB_REPORTS_TOKEN:-}
       GITHUB_REPORTS_REPO: ${GITHUB_REPORTS_REPO:-deconfined/tarubot-reports}
-    depends_on:
-      nodestone:
-        condition: service_started
     healthcheck:
       test: [CMD, bun, -e, "const r=await fetch('http://localhost:3000/health/ready');process.exit(r.ok?0:1)"]
       interval: 15s

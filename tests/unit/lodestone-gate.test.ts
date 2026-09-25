@@ -1,5 +1,5 @@
 /**
- * The sidecar's Lodestone gate (2.17.0): start spacing, and one shared cooldown after a Lodestone
+ * The Lodestone gate (2.17.0; in the bot since 2.21.0): start spacing, and one shared cooldown after a Lodestone
  * 429 that refuses every start locally until it runs out, doubling on consecutive 429s.
  */
 import { expect, test } from "bun:test";
@@ -8,7 +8,7 @@ import {
   COOLDOWN_MAX_MS,
   LodestoneGate,
   RETRY_AFTER_MAX_MS,
-} from "../../sidecar/gate.js";
+} from "../../src/infrastructure/lodestone/gate.js";
 
 /** A controllable monotonic clock whose sleeps advance time instead of waiting. */
 function manualClock() {
@@ -68,7 +68,7 @@ test("a longer Retry-After wins, within its own bound", () => {
   const gate = new LodestoneGate(1000, time.clock, time.sleep);
   expect(gate.throttled(120)).toBe(120);
   time.advance(RETRY_AFTER_MAX_MS);
-  // An absurd Retry-After is capped rather than parking the sidecar indefinitely.
+  // An absurd Retry-After is capped rather than parking Lodestone work indefinitely.
   expect(gate.throttled(86_400)).toBe(RETRY_AFTER_MAX_MS / 1000);
 });
 

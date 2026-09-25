@@ -2,7 +2,7 @@
  * TaruBot's own Lodestone parser (2.20.0), replacing the xivapi/nodestone library: the owner asked to
  * "get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing
  * internally". It applies the selector definitions from lodestone-css-selectors directly, with the
- * semantics TaruBot relied on from Nodestone plus the compatibility fixes the sidecar used to patch
+ * semantics TaruBot relied on from Nodestone plus the compatibility fixes the old sidecar patched
  * into it:
  *
  * - a definition selects one element (or all, with `multiple`) and yields its innerHTML or an
@@ -14,15 +14,13 @@
  * - the top-level ROOT column narrows the page (a page without it is invalid), and ENTRY's list and
  *   PAGE_INFO's regex groups spread into the result, which paginated pages turn into `Pagination`.
  *
- * Pure: no network or workers. The sidecar worker fetches the page and supplies the active selectors;
- * which page and keys each operation reads is in sidecar/pages.ts.
+ * Pure: no network. It runs inside a parser worker (worker.ts), which receives the page and the active
+ * selector files from the bot; which page and keys each operation reads is in pages.ts.
  */
 import { parseHTML } from "linkedom";
-import type { ParseRequest } from "../src/infrastructure/nodestone/protocol.js";
+import type { SelectorRegistry } from "./bundled.js";
 import { pagePlan } from "./pages.js";
-
-/** A selector file or group, as lodestone-css-selectors publishes it. */
-export type SelectorRegistry = Record<string, unknown>;
+import type { ParseRequest } from "./protocol.js";
 
 /** One selector definition. */
 interface Definition {
@@ -123,7 +121,7 @@ function list(registry: SelectorRegistry, scope: Scope): { List: unknown[] } | n
 
 /**
  * Parse one page. `files` are the operation's selector files (pagePlan), read from the active set.
- * Throws when a paginated page has no ROOT, which the sidecar reports as an invalid response.
+ * Throws when a paginated page has no ROOT, which the worker reports as an invalid response.
  */
 export function parsePage(
   input: ParseRequest,

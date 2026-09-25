@@ -7,7 +7,6 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_APPLICATION_ID: idSchema,
-  NODESTONE_URL: z.string().url().default("http://nodestone:8080"),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   ENABLE_EFFECTS: z
     .enum(["true", "false"])

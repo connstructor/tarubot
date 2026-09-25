@@ -77,7 +77,7 @@ const MANAGER: Actor = { ...MEMBER, officer: true, manageRoles: true, serverMana
 /** The first interaction ID a fresh fixture assigns: /ledger's idempotency key. */
 const INTERACTION_ID = "10001";
 
-/** The Lodestone profile the stubbed sidecar returns for any character selector. */
+/** The Lodestone profile the stubbed adapter returns for any character selector. */
 const IDENTITY = { ...CHARACTER, dc: "Crystal", fcId: null };
 
 const S = ApplicationCommandOptionType;

@@ -1,11 +1,13 @@
 /**
- * The production host's Compose file (docker-compose.production.yml): the bot and its sidecar only,
- * pinned to an explicit release, against the external managed PostgreSQL, with production scoping
- * and bounded logs. Its settings must not drift from the registry deployment's docker-compose.yml.
+ * The production host's Compose file (docker-compose.production.yml): the bot only (2.21.0: the
+ * Lodestone parser runs inside it), pinned to an explicit release, against the external managed
+ * PostgreSQL, with production scoping and bounded logs. Its settings must not drift from the
+ * registry deployment's docker-compose.yml.
  */
 import { expect, test } from "bun:test";
 import { YAML } from "bun";
 import { z } from "zod";
+import manifest from "../../package.json" with { type: "json" };
 
 /** Read a repository file relative to this test. */
 const read = (path: string) => Bun.file(new URL(`../../${path}`, import.meta.url)).text();
@@ -20,10 +22,10 @@ const service = z
   .passthrough();
 const composeFile = z.object({ services: z.record(z.string(), service) }).passthrough();
 
-test("production runs only the bot and Nodestone, pinned to an explicit release", async () => {
+test("production runs only the bot, pinned to an explicit release", async () => {
   const production = composeFile.parse(YAML.parse(await read("docker-compose.production.yml")));
-  // No bundled PostgreSQL: production data lives in the managed cluster.
-  expect(Object.keys(production.services).sort()).toEqual(["nodestone", "tarubot"]);
+  // No bundled PostgreSQL (production data lives in the managed cluster), and no parser sidecar.
+  expect(Object.keys(production.services)).toEqual(["tarubot"]);
   for (const { image, restart, logging } of Object.values(production.services)) {
     // `latest` is never deployed: an unset tag refuses to interpolate.
     expect(image).toContain("${TARUBOT_IMAGE_TAG:?");
@@ -49,7 +51,6 @@ test("the production bot uses the managed database, production scoping, and effe
   expect(env).toMatchObject({
     DISCORD_APPLICATION_ID: "965294750741692416",
     TARUBOT_ENVIRONMENT: "production",
-    NODESTONE_URL: "http://nodestone:8080",
     ENABLE_EFFECTS: "true",
     TEST_GUILD_ID: "",
     PUBLIC_TEST_RESPONSES: "false",
@@ -63,11 +64,49 @@ test("the production file carries every setting the registry deployment passes",
   const production = composeFile.parse(
     YAML.parse(await read("docker-compose.production.yml")),
   ).services;
-  for (const name of ["tarubot", "nodestone"]) {
-    const missing = Object.keys(base[name]?.environment ?? {}).filter(
-      // The startup plan is development-only; production has no test guild to post it in.
-      (key) => key !== "TEST_PLAN_FILE" && !(key in (production[name]?.environment ?? {})),
-    );
-    expect(missing, name).toEqual([]);
+  const missing = Object.keys(base.tarubot?.environment ?? {}).filter(
+    // The startup plan is development-only; production has no test guild to post it in.
+    (key) => key !== "TEST_PLAN_FILE" && !(key in (production.tarubot?.environment ?? {})),
+  );
+  expect(missing).toEqual([]);
+});
+
+test("no deployment file keeps the retired sidecar or its settings (2.21.0)", async () => {
+  for (const path of [
+    "docker-compose.yml",
+    "docker-compose.production.yml",
+    "docker-compose.build.yml",
+    "docker-compose.tools.yml",
+    "docker-compose.devbot.yml",
+    ".env.example",
+    "production.env.example",
+    "Dockerfile",
+  ]) {
+    const text = await read(path);
+    // The parser's settings are LODESTONE_*; NODESTONE_* and PAGE_REGION were the sidecar's.
+    expect(text, path).not.toMatch(/nodestone|PAGE_REGION/iu);
   }
+});
+
+test("Compose pulls the image this repository publishes", async () => {
+  // publish.yml pushes ghcr.io/${GITHUB_REPOSITORY,,}. GHCR paths follow the GitHub account and
+  // never redirect after a rename (the account was renamed from connstructor on 2026-09-24), so the
+  // pull sites must agree with package.json's repository.
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\.git$/.exec(manifest.repository.url);
+  if (!match?.[1] || !match[2]) throw new Error("package.json repository.url is not a GitHub URL");
+  const [owner, name] = [match[1].toLowerCase(), match[2].toLowerCase()];
+  // Under GitHub Actions the running repository is authoritative: a rename or transfer leaves
+  // package.json and Compose stale together, which the agreement checks cannot see.
+  const running = process.env.GITHUB_REPOSITORY;
+  if (running) expect(`${owner}/${name}`).toBe(running.toLowerCase());
+  const base = composeFile.parse(YAML.parse(await read("docker-compose.yml"))).services;
+  expect(base.tarubot?.image).toBe(
+    `\${TARUBOT_IMAGE:-ghcr.io/${owner}/${name}:\${TARUBOT_IMAGE_TAG:-latest}}`,
+  );
+  const production = composeFile.parse(
+    YAML.parse(await read("docker-compose.production.yml")),
+  ).services;
+  expect(production.tarubot?.image).toStartWith(`\${TARUBOT_IMAGE:-ghcr.io/${owner}/${name}:`);
+  // One published image: the workflow no longer builds a -nodestone sibling.
+  expect(await read(".github/workflows/publish.yml")).not.toContain("-nodestone");
 });

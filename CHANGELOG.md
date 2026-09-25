@@ -1,6 +1,48 @@
 # Version history
 
-The current application version is **2.20.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.21.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.21.0 — The Lodestone parser inside the bot, without the sidecar
+
+With the parser TaruBot's own, the owner asked what the sidecar still bought, then decided: "Remove the sidecar. I would rather reduce complexity and places where things can break." There is no migration and no command change. Deploying 2.21.0 also brings 2.19.0 and 2.20.0.
+
+- **In process (`src/infrastructure/lodestone/`).** The `Lodestone` adapter takes a parse slot, and `runner.ts` fetches the page under the same network policy as the sidecar:
+  - only the configured region's Lodestone;
+  - the gate's start spacing and 429 cooldown;
+  - a fetch deadline and no redirects;
+  - a body bound;
+  - private-profile detection.
+
+  It then hands a fresh worker the page and the operation's selector files. The worker only parses, and is terminated when the request's deadline or shutdown aborts it. The adapter's validation, retries and reachability are unchanged.
+- **Simpler.**
+  - No HTTP API or wire envelope, and no fetch bridge between worker and server.
+  - Parse slots wait for capacity within the deadline instead of refusing as `busy`.
+  - The live selector set is held in memory, so the pointer file, restore and cleanup are gone. After a restart the bundled set runs until the first check, moments later.
+  - `linkedom` and `lodestone-css-selectors` are runtime dependencies. `bundled.ts` imports the selector files directly, so the worker build step and the generated fallback file are gone. A unit test checks the recorded commit against `bun.lock`, formerly a build check.
+- **Settings.** The sidecar's settings joined the bot's, under `LODESTONE_*`:
+  - `LODESTONE_REGION` replaces `PAGE_REGION`;
+  - `LODESTONE_SELECTOR_CHECK_SECONDS` replaces `NODESTONE_UPSTREAM_CHECK_SECONDS`;
+  - `LODESTONE_CONCURRENCY`, `_START_MS`, `_TIMEOUT_MS` and `_BODY_BYTES` move to the bot;
+  - `NODESTONE_URL`, `NODESTONE_RESPONSE_BYTES` and `NODESTONE_SELECTORS_DIR` are removed. Leftover values are ignored.
+- **Status.** `/health/ready` carries an informational `lodestone` object (gate, parse slots, selectors, upstream), replacing the sidecar's `/health`. Issue reports read it directly. The adapter's events are bot log lines: the gate closing, selector updates and rejections, and upstream status.
+- **Deployment.**
+  - The `nodestone` Compose service and image target are gone from every Compose file and the Dockerfile. CI builds and publishes only `ghcr.io/deconfined/tarubot`.
+  - Deploy with `up -d --wait --remove-orphans`, which removes the old sidecar container.
+  - Rolling back past 2.21.0 needs the older Compose file.
+- **App Platform retired (owner decision).** It could no longer serve as a fallback. `.do/app.yaml`, `scripts/app-spec.ts`, their tests, CI's doctl validation and the `app:spec` script were removed. The Compose image-path check moved to the Compose tests. docs/APP_PLATFORM.md stays as the record.
+- **Tests.**
+  - The contract suites now drive the in-process runner:
+    - spacing, and slots that wait;
+    - a request abandoned at its deadline while waiting;
+    - transport cancellation, and a spinning worker terminated at its deadline;
+    - private profiles and the 429 gate;
+    - a newly activated selector set reaching the parser.
+  - The adapter tests use scripted parse results instead of fake HTTP servers.
+  - A new check keeps sidecar settings out of every deployment file.
+- **Docs.**
+  - NODESTONE.md became LODESTONE.md ("Lodestone adapter").
+  - REQUIREMENTS.md records both decisions.
+  - HOSTING, OPERATIONS, CONFIGURATION, CI_CD, README, AGENTS, CLAUDE and the handoff follow.
 
 ## 2.20.0 — TaruBot's own Lodestone parser, without Nodestone
 

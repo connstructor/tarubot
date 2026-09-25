@@ -1,21 +1,18 @@
 /**
- * The bundled selector fallback (2.20.0). The running sidecar follows xivapi/lodestone-css-selectors
- * HEAD live, so this only refreshes the copy baked into the image: `--check` compares bun.lock's
+ * The bundled selector fallback (2.20.0). The running bot follows xivapi/lodestone-css-selectors
+ * HEAD live, so this only refreshes the set shipped with a release: `--check` compares bun.lock's
  * commit with upstream HEAD (nonzero when behind); `--update` advances the lockfile, records the
- * commit in sidecar/upstream-revisions.json, and rebuilds and tests; `--deploy` also rebuilds and
- * restarts the local sidecar through the Compose build override.
+ * commit in src/infrastructure/lodestone/upstream-revisions.json, and rebuilds and tests.
  */
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
-import { latestRevision, lockedRevisions } from "../sidecar/upstreams.js";
+import { latestRevision, lockedRevisions } from "../src/infrastructure/lodestone/upstreams.js";
 import { json } from "../src/domain/values.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 if (args.includes("--check") === args.includes("--update"))
-  throw new Error("Choose --check or --update; --deploy may accompany --update.");
-if (args.includes("--deploy") && !args.includes("--update"))
-  throw new Error("--deploy requires --update.");
+  throw new Error("Choose --check or --update.");
 
 /** Run only explicit project-local tooling; inherited credentials are never printed. */
 async function run(command: string[]): Promise<void> {
@@ -52,23 +49,11 @@ if (!current) {
     throw new Error("The selector lockfile did not resolve upstream HEAD. Retry before deploying.");
 } else if (args.includes("--update")) {
   await Bun.write(
-    new URL("../sidecar/upstream-revisions.json", import.meta.url),
+    new URL("../src/infrastructure/lodestone/upstream-revisions.json", import.meta.url),
     `${json({ "lodestone-css-selectors": { repository, revision: latest } }, 2)}\n`,
   );
   await run([process.execPath, "run", "build"]);
   await run([process.execPath, "run", "typecheck"]);
   await run([process.execPath, "run", "test:unit"]);
   await run([process.execPath, "run", "test:contract"]);
-  if (args.includes("--deploy")) {
-    const compose = [
-      "docker",
-      "compose",
-      "-f",
-      "docker-compose.yml",
-      "-f",
-      "docker-compose.build.yml",
-    ];
-    await run([...compose, "build", "nodestone"]);
-    await run([...compose, "up", "-d", "--no-deps", "--wait", "nodestone"]);
-  }
 }

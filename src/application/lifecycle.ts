@@ -4,6 +4,7 @@ import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
 import type { Configuration } from "../config/env.js";
 import type { DiscordGateway } from "../discord/gateway.js";
 import { Failure } from "../domain/values.js";
+import type { LodestoneStatus } from "../infrastructure/lodestone/client.js";
 import {
   orm,
   type Database,
@@ -368,6 +369,9 @@ export class ApplicationLifecycle {
           { requeued: resumed.length },
           "Requeued work held while Discord changes were off",
         );
+      // The writer follows the selector repository's HEAD (2.21.0: in the bot, no sidecar); the
+      // first check runs in the background, so readiness never waits for GitHub.
+      this.app.lodestone.start();
       this.queue.start();
       this.monitor = setInterval(() => {
         void this.observe().catch((error: unknown) => this.report(error, "scheduler"));
@@ -409,6 +413,7 @@ export class ApplicationLifecycle {
     effects: boolean;
     publicTestResponses: boolean;
     capabilities: unknown;
+    lodestone: LodestoneStatus;
   } {
     const available =
       !this.stopping &&
@@ -427,6 +432,8 @@ export class ApplicationLifecycle {
       effects: this.config.ENABLE_EFFECTS,
       publicTestResponses: Boolean(this.config.TEST_GUILD_ID) && this.config.PUBLIC_TEST_RESPONSES,
       capabilities: this.capabilities,
+      // Informational (the sidecar's /health until 2.21.0): a Lodestone outage never fails readiness.
+      lodestone: this.app.lodestone.status(),
     };
   }
 

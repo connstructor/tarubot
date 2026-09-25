@@ -1,16 +1,18 @@
 /**
  * Live Lodestone selectors (2.19.0, owner decision of 2026-09-25: "xivapi/lodestone-css-selectors
  * should ALWAYS be the latest version available"). When the upstream monitor sees a new HEAD, the
- * store downloads the files the parsers load, pinned to that commit, validates them, and activates
- * them by rewriting a pointer file that every new parser worker reads (sidecar/selector-runtime.ts).
- * A download or validation failure keeps the active set and is reported; the set bundled at build
- * time remains the fallback. Parser code stays release-managed: selectors are data, the parser is code.
- * Since 2.20.0 the parser is TaruBot's own (sidecar/lodestone.ts), and a new set only has to keep the
- * columns it reads (sidecar/pages.ts).
+ * store downloads the files the parser reads, pinned to that commit, validates them, and makes them
+ * the set every later parse uses. A download or validation failure keeps the active set and is
+ * reported; the set bundled with the release (bundled.ts) is the fallback. Parser code stays
+ * release-managed: selectors are data, the parser is code. Since 2.20.0 the parser is TaruBot's own
+ * (parser.ts), and a new set only has to keep the columns it reads (pages.ts).
+ *
+ * Since 2.21.0 the set lives in memory in the bot, which hands each parser worker the files its
+ * operation reads. Nothing is written to disk: after a restart the bundled set runs until the first
+ * check, moments later, brings HEAD back.
  */
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { BUNDLED_SELECTORS, type SelectorRegistry, type SelectorSet } from "./bundled.js";
 import { PARSED_KEYS } from "./pages.js";
 
 /** Each downloaded file is small; anything larger is not a selector file. */
@@ -31,7 +33,7 @@ const definitionSchema = z
   })
   .passthrough();
 
-/** Where the active set came from: downloaded from upstream, or bundled at build time. */
+/** Where the active set came from: downloaded from upstream, or bundled with the release. */
 export interface SelectorStatus {
   readonly repository: string;
   readonly revision: string;
@@ -39,13 +41,6 @@ export interface SelectorStatus {
   readonly activatedAt: string | null;
   /** The bundled fallback's revision, for comparison. */
   readonly bundled: string;
-}
-
-/** The bundled fallback written by the build (scripts/build-sidecar.ts). */
-interface Baseline {
-  readonly repository: string;
-  readonly revision: string;
-  readonly files: Record<string, Record<string, unknown>>;
 }
 
 /**
@@ -132,99 +127,56 @@ export function validateSelectorFile(
 }
 
 export class SelectorStore {
-  private readonly baseline: Baseline;
   private active: SelectorStatus;
+  private files: SelectorSet["files"];
 
   constructor(
-    private readonly directory: string,
-    baselineUrl: URL = new URL("./selectors-baseline.json", import.meta.url),
+    private readonly bundled: SelectorSet = BUNDLED_SELECTORS,
     private readonly fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch,
   ) {
-    this.baseline = JSON.parse(readFileSync(baselineUrl, "utf8")) as Baseline;
+    this.files = bundled.files;
     this.active = {
-      repository: this.baseline.repository,
-      revision: this.baseline.revision,
+      repository: bundled.repository,
+      revision: bundled.revision,
       source: "bundled",
       activatedAt: null,
-      bundled: this.baseline.revision,
+      bundled: bundled.revision,
     };
   }
 
   /** The repository whose HEAD the monitor follows for this store. */
   get repository(): string {
-    return this.baseline.repository;
+    return this.bundled.repository;
   }
 
-  /** The active set: what new parser workers load. */
+  /** The active set: what the next parse uses. */
   status(): SelectorStatus {
     return { ...this.active };
   }
 
-  /**
-   * Adopt a set a previous run of this container already activated (a restart keeps /tmp), so the
-   * sidecar doesn't fall back to the bundled selectors until the next check. The set the pointer
-   * names must still be there and pass the same validation as a download: adopting a missing or
-   * damaged one would report it live while workers quietly used the bundled copy, and activate()
-   * would never fetch it again. A rejected pointer is removed, because workers read it without these
-   * checks: without it they load the bundled copy the store then reports. Returns why a pointer was
-   * not adopted, or undefined.
-   */
-  async restore(): Promise<string | undefined> {
-    let pointer: { file?: unknown; revision?: unknown; activatedAt?: unknown };
-    try {
-      pointer = JSON.parse(readFileSync(`${this.directory}/active.json`, "utf8"));
-    } catch {
-      // No previous set: the bundled selectors stay active until the first check.
-      return undefined;
-    }
-    try {
-      const revision = pointer.revision;
-      if (typeof revision !== "string" || !/^[0-9a-f]{40}$/u.test(revision))
-        throw new Error("The pointer names no revision.");
-      const file = `selectors-${revision}.json`;
-      if (pointer.file !== file) throw new Error("The pointer names another set.");
-      const set = JSON.parse(readFileSync(`${this.directory}/${file}`, "utf8")) as {
-        revision?: unknown;
-        files?: Record<string, unknown>;
-      };
-      if (set.revision !== revision || !set.files) throw new Error(`${file} is not that set.`);
-      for (const [path, bundled] of Object.entries(this.baseline.files))
-        validateSelectorFile(path, set.files[path], bundled);
-      this.active = {
-        ...this.active,
-        revision,
-        source: "upstream",
-        activatedAt: typeof pointer.activatedAt === "string" ? pointer.activatedAt : null,
-      };
-      return undefined;
-    } catch (error) {
-      // The bundled selectors stay active, for workers too; the first check downloads HEAD again.
-      // A pointer that can't be removed is reported rather than stopping the sidecar from starting.
-      const reason = error instanceof Error ? error.message : "unreadable";
-      return rm(`${this.directory}/active.json`, { force: true }).then(
-        () => reason,
-        () => `${reason} The pointer could not be removed.`,
-      );
-    }
+  /** The active files an operation reads, in its merge order (pagePlan). */
+  selectorFiles(paths: readonly string[]): SelectorRegistry[] {
+    return paths.map((path) => {
+      const file = this.files[path];
+      if (!file) throw new Error(`Missing selector file ${path}.`);
+      return file;
+    });
   }
 
   /**
-   * Make `revision` active: download every file the parsers load at that commit, validate each,
-   * write the set, then switch the pointer atomically. Returns the active revision afterwards; a
-   * failure throws with the reason and leaves the active set unchanged.
+   * Make `revision` active: download every file the parser reads at that commit and validate each,
+   * then switch to the new set in one assignment. Returns the active revision afterwards; a failure
+   * throws with the reason and leaves the active set unchanged.
    */
   async activate(revision: string, signal?: AbortSignal): Promise<string> {
     if (!/^[0-9a-f]{40}$/u.test(revision)) throw new Error("Invalid selector revision.");
     if (revision === this.active.revision) return revision;
-    const files: Record<string, Record<string, unknown>> = {};
-    for (const [path, bundled] of Object.entries(this.baseline.files)) {
-      const response = await this.fetcher(
-        `${RAW}/${this.baseline.repository}/${revision}/${path}`,
-        {
-          headers: { "user-agent": "TaruBot-selector-updater" },
-          signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15000)]),
-        },
-      );
+    const files: Record<string, SelectorRegistry> = {};
+    for (const [path, bundled] of Object.entries(this.bundled.files)) {
+      const response = await this.fetcher(`${RAW}/${this.bundled.repository}/${revision}/${path}`, {
+        headers: { "user-agent": "TaruBot-selector-updater" },
+        signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15000)]),
+      });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`Downloading ${path} failed (${response.status}).`);
@@ -238,31 +190,14 @@ export class SelectorStore {
       }
       files[path] = validateSelectorFile(path, parsed, bundled);
     }
-    await mkdir(this.directory, { recursive: true });
-    const file = `selectors-${revision}.json`;
-    const activatedAt = new Date().toISOString();
-    await writeFile(`${this.directory}/${file}`, JSON.stringify({ revision, files }));
-    // Workers read active.json whole; a rename replaces it atomically.
-    const pointer = `${this.directory}/active.json.${process.pid}.tmp`;
-    await writeFile(pointer, JSON.stringify({ file, revision, activatedAt }));
-    const replaced =
-      this.active.source === "upstream" ? `selectors-${this.active.revision}.json` : undefined;
-    await rename(pointer, `${this.directory}/active.json`);
-    // The rename made the set live for new workers, so it is the active one from here on, whatever
-    // the cleanup below does.
-    this.active = { ...this.active, revision, source: "upstream", activatedAt };
-    // Keep the new set and the one it replaced: a worker reads the pointer, then the set it names,
-    // so one that read the old pointer just before the rename must still find the old set. Older
-    // sets go: activations are at least one check interval (five minutes or more) apart, and a
-    // worker lives no longer than its request deadline. Cleanup is best effort: a leftover set is
-    // harmless, and the next activation tries again.
-    try {
-      for (const name of await readdir(this.directory))
-        if (name.startsWith("selectors-") && name !== file && name !== replaced)
-          await rm(`${this.directory}/${name}`, { force: true });
-    } catch {
-      // Unremovable old sets stay until the next activation.
-    }
+    // Every bundled path was downloaded and validated, so this is a complete set.
+    this.files = files;
+    this.active = {
+      ...this.active,
+      revision,
+      source: "upstream",
+      activatedAt: new Date().toISOString(),
+    };
     return revision;
   }
 }

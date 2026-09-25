@@ -213,8 +213,8 @@ describe("profiles", () => {
       refused(() => assertToolScope(env, scope.preview(guild), direct), "managed deployment");
     expect(assertToolScope(env, scope.preview("4242"), direct).name).toBe("unmanaged");
     // A DB-only environment (no marker, no application ID) is unmanaged even against a managed URL.
-    // The App Platform pre-deploy job sets TARUBOT_ENVIRONMENT=production; app-platform.test.ts
-    // covers that job's production profile.
+    // The production host's container sets TARUBOT_ENVIRONMENT=production
+    // (production-compose.test.ts), which selects the production profile instead.
     expect(
       assertToolScope({ DATABASE_URL: managedUrl("tarubot") }, scope.migrate, {
         execArgv: [],
@@ -538,7 +538,7 @@ describe("launch and identity", () => {
       expect(
         assertToolScope(productionEnv(), scope.migrate, { execArgv, envFiles: [".env"] }).name,
       ).toBe("production");
-    // Containers and the App Platform console have no env files in their working directory.
+    // Containers have no env files in their working directory.
     expect(assertToolScope(productionEnv(), scope.migrate, plain([])).name).toBe("production");
     // DevBot and unmanaged tools are expected to read the checkout's .env.
     expect(assertToolScope(devbotEnv(), scope.migrate, plain([".env"])).name).toBe("devbot");
@@ -627,7 +627,6 @@ describe("templates", () => {
       PUBLIC_TEST_RESPONSES: "false",
       TEST_PLAN_CHANNEL_ID: "",
       ENABLE_EFFECTS: "false",
-      NODESTONE_URL: "http://127.0.0.1:18080",
       DISCORD_TOKEN: "",
       RESTORE_DATABASE_CA_CERT: "",
     });

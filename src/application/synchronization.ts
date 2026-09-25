@@ -347,9 +347,9 @@ export class Synchronization {
           .update(t.freeCompanies)
           .set({ last_error: error instanceof Failure ? error.code : "acquisition_failed" })
           .where(eq(t.freeCompanies.id, fcId));
-        // Lodestone throttling and a full sidecar are waits since 2.17.0: the job retries after the
-        // cooldown without spending attempts, so a notice per wait would repeat for as long as the
-        // throttling lasts. /sync status still shows the FC's last_error.
+        // Lodestone throttling and busy waits (a full sidecar until 2.21.0) are waits since 2.17.0:
+        // the job retries after the cooldown without spending attempts, so a notice per wait would
+        // repeat for as long as the throttling lasts. /sync status still shows the FC's last_error.
         const throttled = error instanceof Failure && ["rate_limited", "busy"].includes(error.code);
         const guilds = throttled
           ? []

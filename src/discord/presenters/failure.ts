@@ -971,7 +971,7 @@ function waitView(s: Situation): FailureView {
 
 // upstream ------------------------------------------------------------------------------------
 
-/** The Lodestone, its sidecar, or Discord's API failed or returned something unusable. */
+/** The Lodestone or Discord's API failed or returned something unusable. */
 function upstreamView(s: Situation): FailureView {
   const discord = s.detail?.kind === "discord" ? s.detail.what : undefined;
   if (discord === "member_list")

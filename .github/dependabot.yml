@@ -7,9 +7,10 @@
 # low pull-request limits keep the number of those version commits small.
 #
 # Deliberately not managed here:
-# - lodestone-css-selectors: the sidecar follows its HEAD live, and only `bun run selectors:update`
-#   advances the bundled fallback, because it also rewrites sidecar/upstream-revisions.json and runs
-#   the contract suite. (Nodestone, and its submodule, were removed in 2.20.0.)
+# - lodestone-css-selectors: the bot follows its HEAD live, and only `bun run selectors:update`
+#   advances the bundled fallback, because it also rewrites
+#   src/infrastructure/lodestone/upstream-revisions.json and runs the contract suite. (Nodestone and
+#   its submodule were removed in 2.20.0, and the sidecar in 2.21.0.)
 # - The CI PostgreSQL service image and the digest-pinned doctl image in .github/workflows/ci.yml:
 #   Dependabot reads only `uses:` in workflows. tests/unit/runtime-pins.test.ts keeps the service
 #   image equal to docker-compose.yml.
@@ -62,7 +63,7 @@ updates:
       default-days: 7
     ignore:
       # A new major image initializes an empty cluster instead of opening existing data. Plan
-      # majors as a migration (dump/restore or pg_upgrade, plus the App Platform database version).
+      # majors as a migration (dump/restore or pg_upgrade, plus the managed cluster's version).
       - dependency-name: "postgres"
         update-types: ["version-update:semver-major"]
 

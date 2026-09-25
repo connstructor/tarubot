@@ -1,5 +1,7 @@
 # DigitalOcean App Platform
 
+> **Retired in 2.21.0 (2026-09-25).** Production ran here only briefly: the Lodestone refuses DigitalOcean's addresses (HTTP 403), so the parser could not refresh profiles, and production moved the same evening to a Linode Docker host with Linode managed PostgreSQL ([HOSTING.md](HOSTING.md)). In 2.21.0 the parser moved into the bot, so App Platform could not even serve as a fallback, and the owner retired it: `.do/app.yaml`, `scripts/app-spec.ts`, their tests and CI's doctl check were removed, and the `tarubot-nodestone` image is no longer published. This page is the record of the setup as it was, at 2.20.0; its links to removed files point to the repository's history.
+
 > **Superseded 2026-09-24.** Production ran here only briefly. The Lodestone refuses DigitalOcean's addresses (HTTP 403), so Nodestone could not refresh profiles, and production moved the same evening to a Linode Docker host with Linode managed PostgreSQL. See [HOSTING.md](HOSTING.md). This page, `.do/app.yaml` and `scripts/app-spec.ts` stay as the record, and as a fallback if the block is lifted. Keeping them validated in CI costs nothing.
 
 [`.do/app.yaml`](../.do/app.yaml) is the production spec. It **attaches the owner-provisioned DigitalOcean Managed PostgreSQL cluster `tarubot-pg`** (PostgreSQL 18, database and user `tarubot`) with `production: true`. App Platform neither creates nor resizes that cluster, and the spec runs no PostgreSQL container.
