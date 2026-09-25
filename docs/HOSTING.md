@@ -100,7 +100,7 @@ The cluster's weekly maintenance runs Tuesdays from 19:00 UTC for up to 4 hours.
 ### Daily dumps
 
 `ops/backup.sh` runs at 04:30 UTC from the `tarubot` user's crontab on the host:
-1. `pg_dump` runs in the pinned PostgreSQL 18 image, through the production Compose file's `backup` service. The service sits behind a profile, so `up` never starts it. It uses the bot's database URL and CA.
+1. `pg_dump` runs in the pinned PostgreSQL 18 image, through the production Compose file's `backup` service. The service sits behind a profile, so `up` never starts it. It uses the bot's database URL and CA. Its logging is off, because a logging driver would copy the unencrypted dump on stdout to disk.
 2. The dump streams straight into `age`, encrypted for [`ops/age-recipients.txt`](../ops/age-recipients.txt). No unencrypted dump touches the disk, and the host can't decrypt what it wrote.
 3. `curl` uploads it with SigV4 signing to `daily/`, and also to `monthly/` on the 1st.
 4. The host's `.env` goes to `env/` the same way, so the settings copy stays current without the operator machine.

@@ -70,6 +70,7 @@ test("a .env missing a setting production needs is refused by name", () => {
     "BACKUP_STORAGE_ENDPOINT",
     "BACKUP_STORAGE_ACCESS_KEY",
     "BACKUP_STORAGE_SECRET_KEY",
+    "BACKUP_STORAGE_REGION",
     "HEALTHCHECKS_BACKUP_URL",
   ];
   // Absent expected settings are reported, not refused.

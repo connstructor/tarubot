@@ -12,8 +12,9 @@ The robust, disposable host's backup layer. Linode's point-in-time recovery reac
   - `curl` signs the uploads itself (SigV4): `daily/` every day and `monthly/` on the 1st. An encrypted copy of the host's `.env` goes to `env/`, keeping the settings copy current without the operator machine.
   - healthchecks.io's "TaruBot backups" check hears the start, then success with the sizes, or a failure naming the step.
   - Strict bash (`set -Eeuo pipefail`, `umask 077`). Credentials and ping URLs reach curl on stdin, never in its arguments.
+  - **Review fix.** The `backup` service's logging is off (`driver: none`). Its stdout is the unencrypted dump, and Docker's logging driver copies a container's stdout to disk even while `docker compose run` pipes it. The first test run's plaintext stayed in that container's log file until `--rm` removed it.
 - **Retention.** `ops/bucket-lifecycle.xml` keeps `daily/` and `env/` for 30 days and `monthly/` for a year. It is applied to the bucket and was read back.
-- **Settings.** The host's `.env` holds `BACKUP_STORAGE_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION` and `HEALTHCHECKS_BACKUP_URL`. The bot never sees them, because Compose passes it only its own settings. `host-env-backup` now expects them.
+- **Settings.** The host's `.env` holds `BACKUP_STORAGE_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION` and `HEALTHCHECKS_BACKUP_URL`. The bot never sees them, because Compose passes it only its own settings. `host-env-backup` now expects all five.
 - **Docs.** HOSTING.md's "Backups and recovery" covers the three layers, the weekly maintenance window, the bucket and its limits (Linode has no write-only keys), setup, retention and restore. Rebuild step 10 points to it.
 - **Tests.** `tests/unit/backup-job.test.ts`:
   - the script's syntax and strict mode;

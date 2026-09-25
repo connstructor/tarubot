@@ -46,6 +46,11 @@ The production Compose test now expects `backup` beside `tarubot`, and `host-env
   - All 27 tables' row counts matched production exactly (8,776 rows, read over a read-only connection). The settings copy decrypted to 11 settings.
   - The throwaway database and the scratch files were removed.
 - **Settings copy.** A fresh operator copy after the change (`tarubot-env-20260925T131612Z.age`) was verified, with no expected setting missing.
+- **Review round.**
+  - The review found that the `backup` service used the `json-file` logging driver, which copies stdout, and so the unencrypted dump, to disk even while it is piped. The first test run's plaintext therefore sat in that container's log file until `--rm` removed it.
+  - With `logging: driver: none`, a `run` of the service on the host showed log driver `none` with no log path, and `docker logs` could not read it. stdout still streamed.
+  - A second real run then uploaded `tarubot-20260925T133159Z` (391,244 bytes).
+  - `host-env-backup` now also expects `BACKUP_STORAGE_REGION`.
 
 **2.23.0** (the rebuild runbook and the off-host settings copy) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.23.0 above 2.22.0). New cases in `tests/unit/host-env-backup.test.ts`:
 - argument parsing;

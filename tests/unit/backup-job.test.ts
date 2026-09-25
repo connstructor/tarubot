@@ -53,6 +53,7 @@ test("the backup service is off by default and dumps with the bot's verified TLS
             environment: z.record(z.string(), z.string()).optional(),
             entrypoint: z.array(z.string()).optional(),
             ports: z.unknown().optional(),
+            logging: z.unknown().optional(),
           })
           .passthrough(),
       ),
@@ -63,6 +64,8 @@ test("the backup service is off by default and dumps with the bot's verified TLS
   // Behind a profile, `up` never starts it; `docker compose run backup` does.
   expect(backup.profiles).toEqual(["backup"]);
   expect(backup.ports).toBeUndefined();
+  // Its stdout is the unencrypted dump: a logging driver would copy it to disk even while piped.
+  expect(backup.logging).toEqual({ driver: "none" });
   // The same PostgreSQL image as the registry deployment, so pg_dump matches the server's major.
   const base = YAML.parse(await read("docker-compose.yml")) as {
     services: { postgres: { image: string } };

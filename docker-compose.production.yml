@@ -65,7 +65,9 @@ services:
   # The daily database dump (2.24.0): ops/backup.sh runs it with `docker compose run -T backup`,
   # encrypts its output with age as it streams, and uploads it. The profile keeps `up` from ever
   # starting it. pg_dump reads the bot's own connection settings; $$ defers expansion to the
-  # container's shell, so Compose doesn't splice the multi-line CA into the command.
+  # container's shell, so Compose doesn't splice the multi-line CA into the command. Its stdout is
+  # the unencrypted dump, and a logging driver would copy it to disk even while it is piped, so
+  # logging is off; `docker compose run` still streams stdout to the pipe.
   backup:
     image: postgres:18.4-alpine
     profiles: [backup]
@@ -78,4 +80,5 @@ services:
       - sh
       - -c
       - umask 077 && printf '%s\n' "$$DATABASE_CA_CERT" > /tmp/ca.crt && exec pg_dump --format=custom --no-owner --no-privileges "$$DATABASE_URL"
-    logging: *logging
+    logging:
+      driver: none
