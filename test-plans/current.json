@@ -1,19 +1,20 @@
 {
-  "title": "Session: 2.24.3 quieter officer notices",
-  "objective": "2.24.3 makes the officer Lodestone notices quieter (#29): 'FC roster accepted' posts only on DevBot, and a degraded notice waits 5 minutes, repeats at most daily, and is followed by one recovery line once it has posted. No migration and no command change.",
+  "title": "Session: 2.25.0 update posts",
+  "objective": "2.25.0 posts what's new for members in a channel officers choose with /config changelog, when the bot starts on a newer version. Setting a channel posts nothing at once, and an update with nothing for members posts nothing. Migration 009 and one new command path.",
   "user": [
-    "On DevBot, run /refresh force:true: the officer notifications channel still gets 'FC roster accepted: …'.",
-    "In production, after the next scheduled roster read, confirm the officer channel got no roster line and /config validate shows a recent 'Roster read' time.",
-    "Nothing to set up: no new settings, secrets or channels."
+    "/config changelog channel:#<plain members channel> (not officer-chat, the lobby or community-updates): a success receipt, and /config validate shows an OK Changelog line.",
+    "/config changelog channel:#officer-chat: the warning receipt, and a [WARN] Changelog line in /config validate. The same command again: the no-change card, still with a Visibility warning. Then set it back to the plain channel.",
+    "After the assistant's first restart: exactly one post in that channel, 'TaruBot updated to v2.25.0' with one field. After the second restart: no new post."
   ],
   "assistant": [
-    "Deploy 2.24.3 to DevBot and production with the owner's go-ahead (restarts, no migration, no registration).",
-    "After the next production roster read, check SELECT dedupe_key,status,message_id FROM jobs WHERE kind='officer.notify' ORDER BY created_at DESC LIMIT 5.",
-    "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "With the owner's go-ahead: stop, back up, restore-check at 008, rehearse migration 009 on the copy, migrate tarubot_dev, then up (ENABLE_EFFECTS=true).",
+    "Register the guild commands; commands.js list is clean with /config changelog (20 roots, 45 paths).",
+    "With the owner's OK, set changelog_version to the release just below 2.25.0 and restart; once the job succeeded and the version advanced, restart again.",
+    "Record the rollout in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.24.3 on schema 008.",
-    "Hold, rate-limit and recover the Lodestone degraded notice; close a waiting one on FC unlink.",
-    "Post the roster line only in the test guild, and this responsibility-separated session plan in #chat."
+    "Run compiled 2.25.0 on schema 009.",
+    "Queue one update post for each server behind the running version, and post it in its changelog channel.",
+    "Post this responsibility-separated session plan in #chat."
   ]
 }

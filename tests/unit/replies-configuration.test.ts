@@ -3,8 +3,9 @@
  * (configuration#4, #7, #8, #9, #34, #37 and #41, with the gen.py title overrides) are reproduced
  * exactly and #18 as far as owner decision O2 allows; the health checklist's tokens, verdicts and
  * budgets; /config show's collapses and its documented field exemption (C3); every change receipt
- * and its three effects modes (C5); /setup and /officer; and the configuration failures render as
- * their approved concepts.
+ * and its three effects modes (C5); /setup and /officer; the changelog channel's receipts, show
+ * field and checklist lines (2.25.0); and the configuration failures render as their approved
+ * concepts. The approved cards predate the changelog channel, which they show unset.
  */
 import { describe, expect, test } from "bun:test";
 import type { EffectsMode } from "../../src/application/results.js";
@@ -107,6 +108,8 @@ describe("approved cards are reproduced exactly", () => {
         { name: "Ledger channel", value: "<#323456789012345601>", inline: true },
         { name: "Officer notifications", value: "<#323456789012345602>", inline: true },
         { name: "Guest applications", value: "Open · <#323456789012345603>", inline: true },
+        // 2.25.0: the changelog channel, unset until officers choose one.
+        { name: "Changelog", value: "Not set", inline: true },
         {
           name: "Onboarding",
           value: "On · lobby <#323456789012345604> · officer room <#323456789012345605>",
@@ -147,7 +150,7 @@ describe("approved cards are reproduced exactly", () => {
         {
           name: "Channels",
           value:
-            "[OK] Ledger <#323456789012345601>\n[OK] Officer notifications <#323456789012345602>\n[OK] Guest applications <#323456789012345603>",
+            "[OK] Ledger <#323456789012345601>\n[OK] Officer notifications <#323456789012345602>\n[OFF] Changelog: not set, so update posts are skipped\n[OK] Guest applications <#323456789012345603>",
         },
         {
           name: "Onboarding",
@@ -184,7 +187,7 @@ describe("approved cards are reproduced exactly", () => {
         {
           name: "Channels",
           value:
-            "[OK] Ledger <#323456789012345601>\n[FAIL] Officer notifications <#323456789012345602>: Choose a text channel in this guild where the bot can view, send, embed links, and read message history.\n[OFF] Guest applications: not set, so /apply is closed",
+            "[OK] Ledger <#323456789012345601>\n[FAIL] Officer notifications <#323456789012345602>: Choose a text channel in this guild where the bot can view, send, embed links, and read message history.\n[OFF] Changelog: not set, so update posts are skipped\n[OFF] Guest applications: not set, so /apply is closed",
         },
         { name: "Onboarding", value: "[OFF] Onboarding is off" },
         {
@@ -218,7 +221,7 @@ describe("approved cards are reproduced exactly", () => {
         {
           name: "Channels",
           value:
-            "[OK] Ledger <#323456789012345601>\n[OK] Officer notifications <#323456789012345602>\n[OFF] Guest applications: closed, so /apply refuses",
+            "[OK] Ledger <#323456789012345601>\n[OK] Officer notifications <#323456789012345602>\n[OFF] Changelog: not set, so update posts are skipped\n[OFF] Guest applications: closed, so /apply refuses",
         },
         { name: "Onboarding", value: "[OFF] Onboarding is off" },
         { name: "Discord changes", value: "[WAIT] Paused until activation", inline: true },
@@ -427,7 +430,7 @@ describe("/config validate", () => {
     ).toBe("[WARN] Paused: this server has not been activated");
   });
 
-  test("with all nine capabilities failing, fields stay within 1,024 and the embed within 6,000", () => {
+  test("with all ten capabilities failing, fields stay within 1,024 and the embed within 6,000", () => {
     // The gateway's rewritten messages name the resource; its mention survives the escaping.
     const rewritten = configReport({
       capabilities: {
@@ -449,20 +452,27 @@ describe("/config validate", () => {
       "guest_application_channel_id",
       "lobby_channel_id",
       "officer_channel_id",
+      "changelog_channel_id",
     ])
       capabilities[column] = stress.text(900);
     const presented = healthReply(
       configReport({
-        guild: configGuild({ revision: 9_007_199_254_740_993n }),
+        // Four failing channels share the Channels field, the changelog's hidden audience too.
+        guild: configGuild({
+          revision: 9_007_199_254_740_993n,
+          changelog_channel_id: CHANNEL.changelog,
+          changelog_version: "2.25.0",
+        }),
         effectsMode: "deployment_disabled",
         capabilities,
+        changelogAudience: "hidden",
       }),
       officer,
       { now },
     );
     const embed = expectHouseStyle(presented, {
       tone: "error",
-      title: "Configuration health · 9 problems, 1 warning",
+      title: "Configuration health · 10 problems, 1 warning",
     });
     for (const field of embed.fields ?? [])
       expect(field.value.length).toBeLessThanOrEqual(DISCORD_LIMITS.fieldValue);
@@ -491,7 +501,7 @@ describe("/config show", () => {
       "Next steps",
     ]);
     expect(fieldOf(embed, "Channels")).toBe(
-      "Ledger: not set\nOfficer notifications: not set\nGuest applications: closed",
+      "Ledger: not set\nOfficer notifications: not set\nGuest applications: closed\nChangelog: not set",
     );
     expect(fieldOf(embed, "Next steps")).toBe(
       "1. Create or bind the access roles.\n2. Choose a ledger channel with /config ledger.\n3. Run /config validate.",
@@ -578,7 +588,8 @@ describe("/config show", () => {
   });
 
   test("the widest layout uses more than ten fields and stays within its exemption (C3)", () => {
-    // Every role and two channels set, the ledger unset, grandfathering completed: 14 fields.
+    // Every role and three channels set, the ledger unset, grandfathering completed: 15 fields,
+    // with the changelog channel's field (2.25.0).
     const widest = showReply(
       configReport({
         guild: configGuild({
@@ -592,7 +603,9 @@ describe("/config show", () => {
       { now },
     );
     const embed = expectHouseStyle(widest, { maxFields: HOUSE_LIMITS.configShowFields });
-    expect(embed.fields?.length).toBe(14);
+    expect(embed.fields?.length).toBe(15);
+    // The cap is exactly the widest layout: a fifth channel field would fail here, loudly.
+    expect(embed.fields?.length).toBe(HOUSE_LIMITS.configShowFields);
     expect(embed.fields?.length).toBeGreaterThan(HOUSE_LIMITS.fields);
     expect(embed.footer?.text).toStartWith("Configuration revision 9007199254740993 · ");
     expect(visibleText(widest)).not.toContain("```json");
@@ -832,6 +845,192 @@ describe("configuration changes", () => {
         ),
       ).title,
     ).toBe("Role layout is already off");
+  });
+});
+
+describe("/config changelog (2.25.0)", () => {
+  /** The changelog channel's mention, as receipts and checklists write it. */
+  const mention = `<#${CHANNEL.changelog}>`;
+  /** A guild with a changelog channel set (and its baseline), otherwise the configured guild. */
+  const withChangelog = (overrides: Parameters<typeof configGuild>[0] = {}) =>
+    configGuild({
+      changelog_channel_id: CHANNEL.changelog,
+      changelog_version: "2.25.0",
+      ...overrides,
+    });
+  /** The Channels checklist section for a report. */
+  const channels = (report: ReturnType<typeof configReport>) =>
+    fieldOf(onlyEmbed(healthReply(report, officer, { now })), "Channels") ?? "";
+
+  test("setting a channel promises the next update, never a post now, and asks for readers", () => {
+    expect(embedOf("channel.changelog")).toEqual({
+      color: 0x57f287,
+      title: "Changelog channel set",
+      description: `From the next update on, TaruBot posts what's new for members in ${mention}. Members and guests need to be able to read this channel.`,
+      footer: { text: "Audited · configuration revision 43" },
+      timestamp: NOW.toISOString(),
+    });
+  });
+
+  test("a channel onboarding hides is a two-sentence warning; an unmanaged one gets Visibility", () => {
+    const hidden = embedOf("channel.changelog_hidden");
+    expect(hidden.description).toBe(
+      `Onboarding keeps <#${CHANNEL.officers}> hidden from members and guests, so they won't see update posts there. Choose a channel they can read.`,
+    );
+    expect(hidden.fields ?? []).toEqual([]);
+    const unmanaged = expectHouseStyle(
+      changeReply({ ...R.changelogSet, audience: "unmanaged" }, officer, { now }),
+      { tone: "success", title: "Changelog channel set" },
+    );
+    expect(fieldOf(unmanaged, "Visibility")).toBe(
+      "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
+    );
+    // With onboarding off there is no audience, so no Visibility field: admins own permissions.
+    const plainGuild = onlyEmbed(
+      changeReply(
+        configChange("changelog_channel_id", CHANNEL.changelog, {
+          guild: withChangelog({ access_policy_enabled: false }),
+        }),
+        officer,
+        { now },
+      ),
+    );
+    expect(fieldOf(plainGuild, "Visibility")).toBeUndefined();
+  });
+
+  test("unsetting turns posts off and says missed updates aren't posted later", () => {
+    expect(embedOf("channel.changelog_cleared")).toMatchObject({
+      title: "Changelog posts turned off",
+      description:
+        "Updates released while no channel is set aren't posted later. Set a channel again to resume posts.",
+    });
+  });
+
+  test("repeats are the no-op card, and a paused save is the #26 card with the receipt's sentence", () => {
+    const again = expectHouseStyle(
+      changeReply(
+        configChange("changelog_channel_id", CHANNEL.changelog, {
+          previous: CHANNEL.changelog,
+          rebound: true,
+        }),
+        officer,
+        { now },
+      ),
+      { tone: "info", title: "Changelog channel already set", timestamp: false },
+    );
+    expect(again.description).toBe(`\`= NO CHANGE\` ${mention} was already the changelog channel.`);
+    // A channel onboarding shows to members (or a guild without onboarding) adds nothing.
+    expect(fieldOf(again, "Visibility")).toBeUndefined();
+    // Repeating a channel members may not read keeps the info no-op card, with the warning as a
+    // Visibility field: choosing it again (say, to release a blocked post) still says so.
+    const repeat = (audience: "hidden" | "unmanaged") =>
+      expectHouseStyle(
+        changeReply(
+          configChange("changelog_channel_id", CHANNEL.changelog, {
+            previous: CHANNEL.changelog,
+            rebound: true,
+            audience,
+            guild: withChangelog(),
+          }),
+          officer,
+          { now },
+        ),
+        { tone: "info", title: "Changelog channel already set", timestamp: false },
+      );
+    const hiddenAgain = repeat("hidden");
+    expect(hiddenAgain.description).toBe(
+      `\`= NO CHANGE\` ${mention} was already the changelog channel.`,
+    );
+    expect(fieldOf(hiddenAgain, "Visibility")).toBe(
+      "Onboarding keeps this channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read.",
+    );
+    expect(fieldOf(repeat("unmanaged"), "Visibility")).toBe(
+      "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
+    );
+    const unset = onlyEmbed(
+      changeReply(configChange("changelog_channel_id", null, { rebound: true }), officer, { now }),
+    );
+    expect(unset).toMatchObject({
+      title: "Changelog channel already unset",
+      description: "`= NO CHANGE` No changelog channel was set.",
+    });
+    for (const mode of PAUSED_MODES) {
+      const paused = expectHouseStyle(
+        changeReply({ ...R.changelogSet, effectsMode: mode }, officer, { now }),
+        { tone: "pending", title: "Saved, Discord changes paused", timestamp: false },
+      );
+      expect(paused.description).toStartWith(
+        `From the next update on, TaruBot posts what's new for members in ${mention}.`,
+      );
+    }
+  });
+
+  test("validate: [OK], [FAIL], [OFF], and [WARN] for a hidden or unmanaged channel", () => {
+    // Unset is [OFF] and no resource, so the approved counts don't change.
+    expect(channels(configReport())).toContain(
+      "[OFF] Changelog: not set, so update posts are skipped",
+    );
+    const ok = configReport({ guild: withChangelog(), changelogAudience: "members" });
+    expect(channels(ok)).toContain(`[OK] Changelog ${mention}`);
+    expect(configurationChecks(ok).filter((row) => row.resource)).toHaveLength(10);
+    expect(onlyEmbed(healthReply(ok, officer, { now })).title).toBe(
+      "Configuration health · all checks passed",
+    );
+    const hidden = configReport({ guild: withChangelog(), changelogAudience: "hidden" });
+    expect(channels(hidden)).toContain(
+      `[WARN] Changelog ${mention}: hidden from members and guests by onboarding`,
+    );
+    expect(onlyEmbed(healthReply(hidden, officer, { now })).title).toBe(
+      "Configuration health · 1 warning",
+    );
+    expect(
+      channels(configReport({ guild: withChangelog(), changelogAudience: "unmanaged" })),
+    ).toContain(
+      `[WARN] Changelog ${mention}: not managed by onboarding, so check that members and guests can read it`,
+    );
+    // A failing check outranks the audience: one [FAIL] line, no warning beside it.
+    const failing = channels(
+      configReport({
+        guild: withChangelog(),
+        changelogAudience: "hidden",
+        capabilities: { changelog_channel_id: "TaruBot can't post there." },
+      }),
+    );
+    expect(failing).toContain(`[FAIL] Changelog ${mention}: TaruBot can't post there.`);
+    expect(failing).not.toContain("[WARN] Changelog");
+    // Onboarding off: no audience is reported, and the channel is simply checked.
+    expect(
+      channels(configReport({ guild: withChangelog({ access_policy_enabled: false }) })),
+    ).toContain(`[OK] Changelog ${mention}`);
+  });
+
+  test("show lists the changelog channel beside the other channels", () => {
+    const set = onlyEmbed(showReply(configReport({ guild: withChangelog() }), officer, { now }));
+    expect(fieldOf(set, "Changelog")).toBe(mention);
+    expect(namesOf(set).slice(6, 10)).toEqual([
+      "Ledger channel",
+      "Officer notifications",
+      "Guest applications",
+      "Changelog",
+    ]);
+    // Only the changelog set: the channels are listed one by one, not collapsed.
+    const alone = onlyEmbed(showReply(R.partial, officer, { now }));
+    expect(fieldOf(alone, "Changelog")).toBeUndefined();
+    const only = onlyEmbed(
+      showReply(
+        configReport({
+          guild: {
+            ...R.partial.configuration,
+            changelog_channel_id: CHANNEL.changelog,
+            changelog_version: "2.25.0",
+          },
+        }),
+        officer,
+        { now },
+      ),
+    );
+    expect(fieldOf(only, "Changelog")).toBe(mention);
+    expect(fieldOf(only, "Ledger channel")).toBe("Not set");
   });
 });
 

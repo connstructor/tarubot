@@ -17,10 +17,12 @@
  *
  * The health checklist uses the approved bracket tokens ([OK] [WARN] [FAIL] [OFF] [WAIT]), which
  * belong to health checks only. /config show keeps the approved field-per-setting layout, which
- * needs up to 14 fields: its documented exemption from the ten-field house limit (C3).
+ * needs up to 15 fields since the changelog channel (2.25.0): its documented exemption from the
+ * ten-field house limit (C3).
  */
 import type { GuildRecord } from "../../application/records.js";
 import type {
+  ChangelogAudience,
   ConfigChange,
   ConfigurationReport,
   EffectsMode,
@@ -90,6 +92,9 @@ const TIMESTAMP = {
   "channel.ledger_cleared": true,
   "channel.notifications": true,
   "channel.notifications_cleared": true,
+  "channel.changelog": true,
+  "channel.changelog_hidden": true,
+  "channel.changelog_cleared": true,
   "channel.unchanged": false,
   "channel.paused": false,
   "applications.open": true,
@@ -325,6 +330,12 @@ const ROSTER_ERROR: Readonly<Record<string, string>> = {
  */
 const CHECK_MESSAGE = 200;
 
+/** Why a changelog channel's checklist line warns, by its audience in an onboarding guild. */
+const AUDIENCE_WARNING: Readonly<Record<Exclude<ChangelogAudience, "members">, string>> = {
+  hidden: "hidden from members and guests by onboarding",
+  unmanaged: "not managed by onboarding, so check that members and guests can read it",
+};
+
 /** A resource check's stored state: available, unconfigured, or the check's failure message. */
 function capability(report: ConfigurationReport, column: string, value: string | null): string {
   if (value === null) return "unconfigured";
@@ -373,7 +384,8 @@ function attemptClause(fc: FcHealthRow): string {
  *   the failed-attempt clause when the latest attempt came after the last success.
  * - Access roles in layout order: [OK], [FAIL] with the check's message, [WARN] for an unset
  *   Member or Guest role, [OFF] 'not managed' for an unset Officer or FC Leader role.
- * - Channels: [OK], [FAIL], [OFF] when unset; a review channel without a Guest role is [WARN].
+ * - Channels: [OK], [FAIL], [OFF] when unset; a review channel without a Guest role is [WARN], and
+ *   so is a changelog channel onboarding hides from members or doesn't manage (2.25.0).
  * - Onboarding: the lobby and officer room, or [OFF] when onboarding is off.
  * - Discord changes: [OK] Live; [WARN] when disabled for the deployment; awaiting activation is
  *   [WAIT] 'Paused until activation' (configuration#9), except beside problems, where the approved
@@ -433,6 +445,24 @@ export function configurationChecks(report: ConfigurationReport): HealthCheck[] 
       ),
     );
   else add("Channels", "off", "Officer notifications: not set, so officer alerts are skipped");
+  const changelog = guild.changelog_channel_id;
+  if (changelog !== null) {
+    const check = resourceCheck(
+      "Channels",
+      "Changelog",
+      mentionChannel(changelog),
+      capability(report, "changelog_channel_id", changelog),
+    );
+    // Where onboarding decides visibility, a usable channel members can't read (or one onboarding
+    // doesn't manage) warns, as a review channel without a Guest role does. Warn only: the bot
+    // never makes it visible (owner decision 4, 2026-09-25).
+    const audience = report.changelogAudience;
+    rows.push(
+      check.check === "ok" && audience !== undefined && audience !== "members"
+        ? { ...check, check: "warn", text: `${check.text}: ${AUDIENCE_WARNING[audience]}` }
+        : check,
+    );
+  } else add("Channels", "off", "Changelog: not set, so update posts are skipped");
   const reviews = guild.guest_application_channel_id;
   // A channel is checked only while applications are on; switched off, it is just kept for later.
   const applicationsOn = guild.guest_applications_enabled;
@@ -635,11 +665,12 @@ function nextSteps(guild: GuildRecord): string | null {
  * /config show (approved configuration#4; spec #5 partially configured and #6 not activated). The
  * description gives the FC, a pause note while Discord changes are held, the three switches and
  * the health line. Fields show each setting: the four roles inline in layout order (one 'Access
- * roles' field when none is set), Officer access, the three channels (one 'Channels' field when
- * none is set), Onboarding, Discord changes, Role layout, Guest grandfathering while it applies,
- * and Next steps when something required is unset: up to 14 fields, the documented /config show
- * exemption (C3). Info, or pending while Discord changes are held (C4). Run health check replaces
- * this view with the checklist.
+ * roles' field when none is set), Officer access, the four channels (one 'Channels' field when
+ * none is set; the changelog channel since 2.25.0), Onboarding, Discord changes, Role layout,
+ * Guest grandfathering while it applies, and Next steps when something required is unset: up to
+ * 15 fields, the documented /config show exemption (C3), which leaves no room for another field.
+ * Info, or pending while Discord changes are held (C4). Run health check replaces this view with
+ * the checklist.
  */
 export function showReply(
   report: ConfigurationReport,
@@ -702,12 +733,14 @@ export function showReply(
   const channelsUnset =
     guild.ledger_channel_id === null &&
     guild.officer_notifications_channel_id === null &&
-    guild.guest_application_channel_id === null;
+    guild.guest_application_channel_id === null &&
+    guild.changelog_channel_id === null;
   const channels: FieldSpec[] = channelsUnset
     ? [
         {
           name: "Channels",
-          value: "Ledger: not set\nOfficer notifications: not set\nGuest applications: closed",
+          value:
+            "Ledger: not set\nOfficer notifications: not set\nGuest applications: closed\nChangelog: not set",
         },
       ]
     : [
@@ -724,6 +757,13 @@ export function showReply(
           inline: true,
         },
         { name: "Guest applications", value: guestApplications(guild), inline: true },
+        {
+          name: "Changelog",
+          value: guild.changelog_channel_id
+            ? mentionChannel(guild.changelog_channel_id)
+            : "Not set",
+          inline: true,
+        },
       ];
   const rooms = [
     guild.lobby_channel_id ? `lobby ${mentionChannel(guild.lobby_channel_id)}` : "lobby not set",
@@ -919,7 +959,33 @@ const CHANNEL_FIELDS = {
     label: "Officer notifications channel",
     noun: "officer notifications channel",
   },
+  changelog_channel_id: { label: "Changelog channel", noun: "changelog channel" },
 } as const;
+
+/**
+ * The Visibility field's text for a changelog channel members may not read, by its audience in an
+ * onboarding guild (2.25.0). The set receipt shows the unmanaged text (a hidden channel gets the
+ * warning description instead), and the no-op card for a repeat shows either, so choosing the
+ * same channel again still says what /config validate warns about.
+ */
+const CHANGELOG_VISIBILITY: Readonly<Record<Exclude<ChangelogAudience, "members">, string>> = {
+  hidden:
+    "Onboarding keeps this channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read.",
+  unmanaged:
+    "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
+};
+
+/**
+ * A changelog change's Visibility field: present only for a channel onboarding hides or doesn't
+ * manage. With onboarding off there is no audience, since server admins own the permissions.
+ */
+const changelogVisibility = (change: SavedChange): FieldSpec | null =>
+  change.field === "changelog_channel_id" &&
+  change.value !== null &&
+  change.audience !== undefined &&
+  change.audience !== "members"
+    ? { name: "Visibility", value: CHANGELOG_VISIBILITY[change.audience] }
+    : null;
 
 /** Whether a saved field is one of the role bindings. */
 const isRole = (field: string): field is keyof typeof ROLE_FIELDS =>
@@ -950,7 +1016,8 @@ const officerAccess = (rank: string | null): string =>
 /**
  * A repeated setting that changed nothing (C4 no-op, info): the same role or channel chosen again,
  * or a clear of something already unset. Rebinding the Officer role adopts nobody. It still
- * re-queues held work, which it reports.
+ * re-queues held work, which it reports. A repeated changelog channel onboarding hides or doesn't
+ * manage keeps its Visibility field (2.25.0): the card stays info, since nothing changed.
  */
 function unchangedReply(
   change: SavedChange,
@@ -974,7 +1041,7 @@ function unchangedReply(
       description: target
         ? `${marker("unchanged")} ${target} was already the ${noun}.${officer}`
         : `${marker("unchanged")} No ${noun} was set.`,
-      fields: [heldWork(change.requeued, change.effectsMode)],
+      fields: [changelogVisibility(change), heldWork(change.requeued, change.effectsMode)],
       footer: revisionFooter(change.guild),
     },
     options,
@@ -1173,11 +1240,15 @@ function roleChangeReply(
 }
 
 /**
- * /config ledger and officer_notifications (spec #23–#26). Warning variant: a ledger channel with no
- * linked FC. While Discord changes are paused, every channel change is the approved paused-save
- * card (errors-and-style#26 covers any change), like the other /config receipts: it keeps the
- * receipt's own sentence and facts, and held work says when it retries. The guest review channel
- * has its own receipt, guestApplicationsReply().
+ * /config ledger, officer_notifications and changelog (spec #23–#26; changelog since 2.25.0).
+ * Warning variants: a ledger channel with no linked FC, and a changelog channel onboarding hides
+ * from members and guests (owner decision 4: warn, never force it visible). A changelog channel
+ * onboarding doesn't manage gets a Visibility field on the success card instead, worded for both
+ * causes (a channel newer than the last repair pass, or the Community Updates channel). While
+ * Discord changes are paused, every channel change is the approved paused-save card
+ * (errors-and-style#26 covers any change), like the other /config receipts: it keeps the receipt's
+ * own sentence and facts, and held work says when it retries. The guest review channel has its own
+ * receipt, guestApplicationsReply().
  */
 function channelChangeReply(
   change: SavedChange,
@@ -1249,6 +1320,36 @@ function channelChangeReply(
             footer,
           },
     );
+  if (field === "changelog_channel_id") {
+    if (!channel)
+      return done("channel.changelog_cleared", {
+        tone: "success",
+        title: "Changelog posts turned off",
+        description:
+          "Updates released while no channel is set aren't posted later. Set a channel again to resume posts.",
+        fields: [held],
+        footer,
+      });
+    // Two sentences, the house limit: the warning and what to do about it.
+    if (change.audience === "hidden")
+      return done("channel.changelog_hidden", {
+        tone: "warning",
+        title: "Changelog channel set",
+        description: `Onboarding keeps ${channel} hidden from members and guests, so they won't see update posts there. Choose a channel they can read.`,
+        fields: [held],
+        footer,
+      });
+    // Setting a channel posts nothing now; the first post comes with the next update that has
+    // something for members (owner decisions 2 and 3). A hidden channel returned above, so the
+    // Visibility field here is only ever the unmanaged one.
+    return done("channel.changelog", {
+      tone: "success",
+      title: "Changelog channel set",
+      description: `From the next update on, TaruBot posts what's new for members in ${channel}. Members and guests need to be able to read this channel.`,
+      fields: [changelogVisibility(change), held],
+      footer,
+    });
+  }
   // configure() no longer saves the guest review channel; guestApplicationsReply() answers it.
   throw new Error(`No channel receipt for field ${field}.`);
 }

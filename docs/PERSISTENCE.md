@@ -47,7 +47,15 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.24.3** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
+The current **2.25.0** source adds `009_changelog_channel.sql` and requires `SCHEMA_VERSION=009_changelog_channel.sql`. It is additive and needs no superuser privileges. It adds two nullable `guilds` columns for update posts:
+
+- **`changelog_channel_id`** (`external_id`): where update posts go; NULL means they're off.
+- **`changelog_version`** (`text`): the newest version the guild was told about. A CHECK allows only `MAJOR.MINOR.PATCH` with an optional prerelease, which `Bun.semver.order` compares. The `changelog_baseline` CHECK requires it whenever a channel is set.
+- **Existing rows.** Both start NULL, so nothing posts on the deploy, and no revision changes.
+
+`/config changelog` writes the channel and, when none was set, the baseline (`newer(stored, running)`) in the same `UPDATE`, under the guild row lock, with its `config` audit and the usual repair pass on one client. It reads the guild's `channel_access_policies` row there, in onboarding guilds, to report who can read the channel; it writes none. Startup queues `changelog.post` in the presence transaction. The job moves the baseline with a compare-and-set (`UPDATE … WHERE changelog_version = <from>`) and its `changelog.advanced` audit in one transaction, and treats zero rows as already done. The Drizzle mapping still covers 26 application tables. An older image can't start on schema 009, so a rollback across it is a restore or a fix release; restoring a snapshot taken before a post was delivered can post it again unless `changelog_version` is raised by hand first.
+
+`008_issue_reports.sql`, introduced in **2.18.0**, is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
 - the source (`user`, `error`, `job` or `trouble`), title, the first occurrence's Markdown body and the newest repeat's (`latest`);
 - the server and member for `/issue`;
 - occurrence counts, and the GitHub issue number, creation time and last post.

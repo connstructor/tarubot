@@ -118,6 +118,16 @@ export const layoutGuildRoles = (client: Connection, guild: string): Promise<str
 export const secureGuildChannels = (client: Connection, guild: string): Promise<string> =>
   enqueue(client, "channels.access", `channel-access:${guild}`, {}, guild);
 
+/**
+ * At most one active (queued, running or blocked) update post per guild (2.25.0): a deploy while
+ * one waits merges into it, and the job reads the release range when it runs, so one post covers
+ * every release since the last. A post parked as disabled isn't merged, so paused restarts can
+ * park several; resuming collapses them to one (requeueParked). The payload stays {}: the job never
+ * reads it, and a merge would overwrite it anyway.
+ */
+export const announceChangelog = (client: Connection, guild: string): Promise<string> =>
+  enqueue(client, "changelog.post", `changelog:${guild}`, {}, guild);
+
 /** The parked job states that activation, a /config change or a restart can put back in the queue. */
 export type ParkedStatus = "disabled" | "blocked";
 /** The states the active_job unique index covers: at most one such row per dedupe key. */

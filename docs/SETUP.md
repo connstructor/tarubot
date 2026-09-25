@@ -25,6 +25,14 @@ Unset officer-notification and guest-review destinations default to the selected
 /config validate
 ```
 
+Optionally, choose where [update posts](OPERATIONS.md#update-posts) go (2.25.0): a normal text channel that members and guests can read. Announcement channels are refused, like every channel setting.
+
+```text
+/config changelog channel:#tarubot-updates
+```
+
+In an onboarding guild, don't choose the lobby, the officer room, the Community Updates channel or a private channel: members and guests can't read the first three kinds, and onboarding never manages the Community Updates channel. The receipt and `/config validate` warn about each; the bot doesn't change the channel's permissions. Setting a channel posts nothing at once; the first post comes with the next update that has something for members.
+
 ## Channel visibility
 
 | Current access | Lobby | Ordinary channels | Officer room / existing private areas |
@@ -194,3 +202,10 @@ Both start NULL. Follow the same stopped-writer backup/migration procedure; on t
 - `/issue` is a new command: 20 roots, 44 paths.
 
 Follow the stopped-writer backup/migration procedure, then register the commands: DevBot's guild, or production with `register.js --global`. Set `GITHUB_REPORTS_TOKEN` in the bot's `.env` for reports to be sent; without it they are saved.
+
+**2.25.0 adds `009_changelog_channel.sql` and `/config changelog`**:
+
+- `guilds.changelog_channel_id` is where update posts go (NULL is off), and `guilds.changelog_version` the newest version the server was told about. Both start NULL, so the deploy posts nothing.
+- `/config changelog` is a new command path: 20 roots, 45 paths.
+
+Follow the stopped-writer backup/migration procedure, start the new release, then register the commands (DevBot's guild, or production with `register.js --global`) and read them back with `commands.js list`. An older image refuses to start on schema 009.

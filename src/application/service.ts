@@ -21,6 +21,8 @@ import { alias } from "drizzle-orm/pg-core";
 import * as t from "../infrastructure/postgres/schema.js";
 import type { PoolClient } from "pg";
 import type { Configuration } from "../config/env.js";
+import { project } from "../config/project.js";
+import { newerVersion } from "../domain/changelog.js";
 import { authorize, authorizeRoleManager, type AccessFacts, type Actor } from "../domain/policy.js";
 import { rankAccess } from "./rank-policy.js";
 import { accessFacts } from "./access-facts.js";
@@ -69,6 +71,7 @@ import type {
   ApplicationState,
   ApplyResult,
   AssignResult,
+  ChangelogAudience,
   CharacterRef,
   CharactersResult,
   ClaimResult,
@@ -594,7 +597,14 @@ export class Service {
             : "Resource check failed; inspect bot permissions and hierarchy.";
       }
     }
+    // Where onboarding decides who sees each channel, the checklist warns about a changelog
+    // channel members can't read, or one onboarding doesn't manage (owner decision 4: warn only).
+    const changelogAudience =
+      guild.access_policy_enabled && guild.changelog_channel_id
+        ? await this.changelogAudience(this.db.orm, guild, guild.changelog_channel_id)
+        : undefined;
     return {
+      ...(changelogAudience ? { changelogAudience } : {}),
       configuration: guild,
       effectsGloballyEnabled: this.config.ENABLE_EFFECTS,
       effectsMode: this.effectsMode(guild),
@@ -744,6 +754,13 @@ export class Service {
    * true (the default, the long-standing behavior) grants every current human holder a manual
    * officer override; false grants nobody, so officer authority comes only from the mapped
    * in-game rank and explicit /officer grant. Either choice is recorded in the config audit.
+   *
+   * The changelog channel (2.25.0, owner decisions of 2026-09-25) also sets the guild's update-post
+   * baseline when it is first set: the running version, or a higher stored one. So setting a channel
+   * posts nothing now (decision 3), and releases published while no channel was set are never
+   * posted later. Moving or unsetting the channel keeps the baseline. Where onboarding manages
+   * channel visibility, the result says who can read the channel, so the receipt can warn
+   * (decision 4: warn only, never force it visible).
    */
   async configure(
     actor: Actor,
@@ -760,6 +777,7 @@ export class Service {
       "leader_role_id",
       "ledger_channel_id",
       "officer_notifications_channel_id",
+      "changelog_channel_id",
     ] as const;
     // The guest review channel has its own method, which changes it with the applications switch.
     const column = fields.find((candidate) => candidate === field);
@@ -869,10 +887,27 @@ export class Service {
               and(eq(t.retiredRoles.guild_id, actor.guildId), eq(t.retiredRoles.role_id, value)),
             );
       }
+      // A changelog channel set where none was sets the update-post baseline in the same UPDATE,
+      // so the migration's changelog_baseline CHECK always holds; nothing is posted until a newer
+      // release with a member note starts.
+      const baseline =
+        column === "changelog_channel_id" && value && saved.changelog_channel_id === null
+          ? newerVersion(saved.changelog_version, project.version)
+          : undefined;
+      // Under the row lock, as the lobby and officer room it compares against are.
+      const audience =
+        column === "changelog_channel_id" && value && saved.access_policy_enabled
+          ? await this.changelogAudience(db, saved, value)
+          : undefined;
       // The computed field is a schema-key union from the allowlist, never a SQL identifier string.
       const [updated] = await db
         .update(t.guilds)
-        .set({ [column]: value, revision: sql`${t.guilds.revision}+1`, active: true })
+        .set({
+          [column]: value,
+          ...(baseline ? { changelog_version: baseline } : {}),
+          revision: sql`${t.guilds.revision}+1`,
+          active: true,
+        })
         .where(eq(t.guilds.id, actor.guildId))
         .returning();
       if (!updated) throw new Error("Missing guild");
@@ -889,7 +924,11 @@ export class Service {
         actor.userId,
         "config",
         field,
-        bindsOfficer ? { value, adoptHolders, adopted: adopted.length } : { value },
+        bindsOfficer
+          ? { value, adoptHolders, adopted: adopted.length }
+          : baseline
+            ? { value, baseline }
+            : { value },
       );
       // Role bindings change the managed block, but presentation work follows the guild's switch.
       if (field.endsWith("role_id") && saved.role_layout_enabled)
@@ -926,6 +965,7 @@ export class Service {
         requeued: requeued.length,
         company: fc ? { id: fc.id, name: fc.name, tag: fc.tag, world: fc.world } : null,
         guild: updated,
+        ...(audience ? { audience } : {}),
       } as const;
       if (!bindsOfficer) return change;
       const sample = adopted.slice(0, 20).map((member) => member.id);
@@ -940,6 +980,55 @@ export class Service {
               note: "Current holders were not granted officer access. Officers come from /config officer_rank and /officer grant; holders with neither can lose this role once effects apply.",
             },
       };
+    });
+  }
+  /**
+   * Who can read a changelog channel in a guild whose onboarding manages channel visibility. The
+   * lobby and officer room deny Member and Guest view, and so does any channel onboarding keeps
+   * staff-only. A channel with no policy row is 'unmanaged': one created since the last repair pass
+   * (the pass a /config save queues classifies it), or the Community Updates channel, which
+   * onboarding never records. The code doesn't guess which, so one wording covers both.
+   */
+  private async changelogAudience(
+    db: Orm,
+    guild: Pick<GuildRecord, "id" | "lobby_channel_id" | "officer_channel_id">,
+    channel: string,
+  ): Promise<ChangelogAudience> {
+    if (channel === guild.lobby_channel_id || channel === guild.officer_channel_id) return "hidden";
+    const [policy] = await db
+      .select({ staff_only: t.channelAccessPolicies.staff_only })
+      .from(t.channelAccessPolicies)
+      .where(
+        and(
+          eq(t.channelAccessPolicies.guild_id, guild.id),
+          eq(t.channelAccessPolicies.channel_id, channel),
+        ),
+      );
+    if (!policy) return "unmanaged";
+    return policy.staff_only ? "hidden" : "members";
+  }
+  /**
+   * Move a guild's update-post baseline from `from` to `to` once a changelog.post job has posted
+   * (or found nothing for members), audited with the message it sent. A compare-and-set: when
+   * another worker already moved it, nothing changes and this returns false rather than throwing,
+   * since a retry could only post the same releases again. It never bumps the revision and queues
+   * nothing: the baseline isn't configuration.
+   */
+  async advanceChangelog(
+    guildId: string,
+    from: string,
+    to: string,
+    messageId: string | null,
+  ): Promise<boolean> {
+    return this.db.transaction(async (client) => {
+      const [advanced] = await orm(client)
+        .update(t.guilds)
+        .set({ changelog_version: to })
+        .where(and(eq(t.guilds.id, guildId), eq(t.guilds.changelog_version, from)))
+        .returning({ id: t.guilds.id });
+      if (!advanced) return false;
+      await audit(client, guildId, null, "changelog.advanced", to, { from, messageId });
+      return true;
     });
   }
   /**

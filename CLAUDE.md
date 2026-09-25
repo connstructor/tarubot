@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", and "Approved officer-notice amendments (2026-09-25)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", and "Approved changelog amendments (2026-09-25)".
 
 ## Project map
 
@@ -23,6 +23,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
   - `values.ts` holds `Failure`, `json`, and ID parsing.
+  - `changelog.ts` decides update posts (2.25.0): the release range and what one `changelog.post` job does. `release-notes.ts` is the member-note map it reads.
 - `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard.
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
@@ -34,7 +35,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `runner.ts` fetches under the network policy (region, `gate.ts` spacing and 429 cooldown, body bound, private-profile detection), then parses in a fresh worker (`worker.ts`), terminated at the deadline.
   - `parser.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages. `pages.ts` says which page, files and keys each operation reads.
   - Selectors follow upstream HEAD live, in memory: `selectors.ts` downloads and validates them, and `upstreams.ts` checks HEAD. `bundled.ts` is the set shipped with the release (`bun run selectors:update` refreshes it).
-- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `008_issue_reports.sql`; 2.17.x required `007_profile_checks.sql`).
+- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `009_changelog_channel.sql`; 2.24.x required `008_issue_reports.sql`).
 
 ## Commands
 
@@ -52,7 +53,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 ## Every change set
 
 1. Branch from `origin/main`. Local `main` may lag.
-2. Bump `package.json`. Add `## X.Y.Z — Title` to CHANGELOG.md and update its current-version sentence.
+2. Bump `package.json`. Add `## X.Y.Z — Title` to CHANGELOG.md and update its current-version sentence. If the release changes something members notice, add a one-sentence note to `src/domain/release-notes.ts`.
 3. Sync the version everywhere it appears:
    - `test-plans/current.json`;
    - the current-version sentences in docs/CONFIGURATION.md and docs/PERSISTENCE.md.
@@ -116,7 +117,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Issue reports (2.18.0):
   - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
-  - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` needs the owner to add the token.
+  - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` and the production host's both hold it (rotated on 2026-09-25).
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
 - Officer Lodestone notices (2.24.3, #29):
   - "FC roster accepted" posts only in the test guild (`guild.id === TEST_GUILD_ID`), on `officer:<guild>`. Production posts no roster line.
@@ -125,5 +126,8 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - Accepted edge case: a `running` degraded row is left alone at recovery and at unlink; if its send fails and is retried, it can post after the recovery line or the unlink. `dispatch.ts` is unchanged and doesn't know a notice's FC.
   - The boundary (`observedAt`, the bot's clock) is compared with `jobs.created_at` (the database's), so the two clocks must agree to within a few seconds (a fetch); NTP keeps them to milliseconds.
   - The `jobs` rows are the notice history, read by exact `dedupe_key`: never prune `officer.notify` rows (docs/PERSISTENCE.md).
+- Update posts (2.25.0):
+  - `guilds.changelog_version` is the newest version a guild was told about. Setting `/config changelog` where no channel was sets it to the running version (or keeps a higher one), so nothing posts until the next release with a member note. Moving or unsetting the channel keeps it, and the bot never lowers it: restarts and rollbacks on the same schema post nothing.
+  - Startup queues one `changelog.post` (`changelog:<guild>`, payload `{}`) per present guild with a channel and an older baseline; a pending one merges. The job reads the range when it runs. `changelog unconfigured`, `already announced` and `nothing for members` complete before the effects gate, like `layout disabled`; only a post parks or blocks. The nonce key is `changelog:<guild>:<running version>`, and a compare-and-set moves the baseline.
 - `/setup` enables onboarding, switches guest applications on (adopting the officer room as the review channel when none is set, and validating a kept one first), and adopts every Officer-role holder.
 - Leave the old `feat/lobby-access` stash alone. It has been superseded. It exists only in the original Mac clone; this Linux clone has no stashes.
