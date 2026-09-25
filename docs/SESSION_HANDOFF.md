@@ -161,7 +161,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Found.** `sshd` offered password login (though `tarubot` had no password); the owner made it key-only the same day, confirmed from outside. No Linode Cloud Firewall is attached; that stays an owner item in OPEN_ITEMS.md.
 - **Status.** Merged ([PR #25](https://github.com/deconfined/tarubot/pull/25), `9cf2afd`) after one review round (quote-aware setting names, verify-then-rename). Nothing to deploy.
 
-**Update, 2.24.0 (current version):**
+**Update, 2.24.0:**
 - **Why.** The last piece of the backup layer: off-site dumps. The owner chose Linode Object Storage over B2 ("not really worried about Akamai going down"): bucket `tarubot-backups`, key `tarubot-backup-key` limited to it, and a second healthchecks check "TaruBot backups".
 - **Change.**
   - `ops/backup.sh` dumps through the production Compose file's profile-only `backup` service, streams into `age`, uploads to `daily/` (and `monthly/` on the 1st) with curl SigV4, and uploads an encrypted `.env` to `env/`. It pings healthchecks with start, success or the failed step.
@@ -169,7 +169,12 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - The host's `.env` holds the storage settings, which the bot never sees.
 - **Proven.** A run from a scratch copy on the host uploaded a 381,594-byte dump. It decrypted and restored into a throwaway PostgreSQL 18 with all 27 table counts identical to production.
 - **Deploy.** A pull on the host (the bot needn't restart), then the crontab line from HOSTING.md.
-- **Status.** Branch `feat/backups-2.24.0`, rebased onto `main` after PR #25; PR open.
+- **Status.** [PR #26](https://github.com/deconfined/tarubot/pull/26) open, with the review fixes (logging off for the dump service, which the first test run's plaintext briefly reached in Docker's log; the region setting expected).
+
+**Update, 2.24.1 (current version):**
+- **Why.** The owner saw many errors in `/sync status`. They were 167 profile-refresh failures from the first night (App Platform refusals, the 429 storm, the deleted character). All had later succeeded, and nothing had failed since 2.17.0, but the work list had no age limit.
+- **Change.** The work list leaves out a failure once the same dedupe key later succeeded. In production that hides all 167.
+- **Status.** Branch `feat/sync-status-2.24.1`, stacked on 2.24.0; not yet pushed. A restart deploys it.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 

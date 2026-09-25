@@ -1,6 +1,19 @@
 # Version history
 
-The current application version is **2.24.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.24.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.24.1 — `/sync status` shows only unresolved failures
+
+The owner saw "a ton of errors" in `/sync status` and asked whether they were stuck. None was. All 167 were profile refreshes from the first night:
+- 149 Lodestone refusals while production was on App Platform;
+- 13 rate limits after the move;
+- 5 for a deleted character.
+
+Every one of the 79 characters had a later refresh succeed, and no job had failed since 2.17.0. They stayed listed because the work list showed the newest non-succeeded jobs with no age limit, and nothing newer had failed. There is no migration and no command change.
+
+- **Change.** `Service.syncStatus` leaves a failed job out of the work list once a later job with the same dedupe key has succeeded. A failure after an earlier success, or one with no success since, is still listed. Job rows are unchanged history, and run totals are unchanged.
+- **Effect in production.** A read-only query applying the same rule lists 0 of the 167 failed jobs.
+- **Test.** An integration test covers a resolved failure (left out), a lone failure and a failure after a success (both listed). It fails without the change.
 
 ## 2.24.0 — Daily encrypted off-site database backups
 

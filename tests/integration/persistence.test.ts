@@ -1443,6 +1443,38 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // A completed run finished when its last child job did, decoded as a Date.
     expect(completed.runs[0]?.completed_at).toBeInstanceOf(Date);
   });
+  test("sync status leaves out failures whose work later succeeded (2.24.1)", async () => {
+    // A guild of its own, so the 25 newest listed jobs are only this scenario's.
+    const statusGuild = "888888888888888813";
+    const officer = await displayGuild(statusGuild, "9230000000000098013");
+    // Three kinds of history under distinct dedupe keys: a failure that later succeeded
+    // (resolved), a failure alone, and a failure after an earlier success.
+    const key = (name: string) => `user:${statusGuild}:status-${name}`;
+    const insert = (name: string, status: "failed" | "succeeded", minutesAgo: number) =>
+      db.query<{ id: string }>(
+        `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, last_error, created_at, completed_at)
+         VALUES ('reconcile.user', $1, '{}'::jsonb, $2, '98070', $3, $4,
+           now() - make_interval(mins => $5), now() - make_interval(mins => $5))
+         RETURNING id::text`,
+        [
+          key(name),
+          statusGuild,
+          status,
+          status === "failed" ? "unavailable: Lodestone unavailable." : null,
+          minutesAgo,
+        ],
+      );
+    const [resolvedFailure] = await insert("resolved", "failed", 120);
+    await insert("resolved", "succeeded", 60);
+    const [loneFailure] = await insert("lone", "failed", 90);
+    await insert("relapsed", "succeeded", 120);
+    const [relapse] = await insert("relapsed", "failed", 60);
+    const listed = (await service.syncStatus(officer, null)).work.map((row) => row.id).sort();
+    // The resolved failure is history; the lone failure and the failure after a success still count.
+    if (!resolvedFailure || !loneFailure || !relapse) throw new Error("Missing inserted jobs");
+    expect(listed).toEqual([loneFailure.id, relapse.id].sort());
+    expect(listed).not.toContain(resolvedFailure.id);
+  });
   test("failed nickname writes do not invent a successful write; manual races are preserved", async () => {
     const owner = "90011";
     await service.assign(

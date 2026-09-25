@@ -505,6 +505,20 @@ export class Service {
           actor.officer ? undefined : eq(t.links.user_id, actor.userId),
         ),
       );
+    // A failure whose work later succeeded under the same dedupe key is history, not a problem
+    // (2.24.1): without this, old failures (such as the first night's Lodestone refusals) stayed
+    // listed indefinitely, since nothing newer had failed to push them out.
+    const later = alias(t.jobs, "later");
+    const recovered = db
+      .select({ id: later.id })
+      .from(later)
+      .where(
+        and(
+          eq(later.dedupe_key, t.jobs.dedupe_key),
+          eq(later.status, "succeeded"),
+          gt(later.created_at, t.jobs.created_at),
+        ),
+      );
     const work = await db
       .select({
         id: t.jobs.id,
@@ -537,6 +551,7 @@ export class Service {
             ),
           ),
           inArray(t.jobs.status, ["queued", "running", "blocked", "failed", "disabled"]),
+          or(not(eq(t.jobs.status, "failed")), not(exists(recovered))),
         ),
       )
       .orderBy(desc(t.jobs.created_at))
