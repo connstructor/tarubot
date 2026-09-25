@@ -131,3 +131,96 @@ export function table(header: readonly string[], rows: readonly (readonly unknow
     ...rows.map((row) => `| ${row.map(cell).join(" | ")} |`),
   ].join("\n");
 }
+
+/**
+ * A two-column table for one record's fields: easier to read than one wide row, and it never
+ * scrolls sideways on GitHub. Pairs whose value is undefined are left out.
+ */
+export function fields(
+  pairs: readonly (readonly [string, unknown])[],
+  header: readonly [string, string] = ["Field", "Value"],
+): string {
+  return table(
+    header,
+    pairs.filter(([, value]) => value !== undefined),
+  );
+}
+
+/** A time as `2026-09-25 03:07:37 UTC`, or a dash. */
+export function when(value: Date | null | undefined): string {
+  return value ? `${value.toISOString().slice(0, 19).replace("T", " ")} UTC` : "—";
+}
+
+/** A boolean as yes or no, or a dash when unknown. */
+export function yesNo(value: boolean | null | undefined): string {
+  return value === null || value === undefined ? "—" : value ? "yes" : "no";
+}
+
+/**
+ * A duration in the largest sensible unit: 45 s, 12 min, 3.7 h, 2.1 d. Anything that isn't a
+ * finite number (null for "no roster yet", a missing field) is a dash, never "0 s".
+ */
+export function duration(seconds: unknown): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "—";
+  if (seconds < 90) return `${Math.round(seconds)} s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+  if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;
+  return `${(seconds / 86400).toFixed(1)} d`;
+}
+
+/** pino's numeric levels, by name. */
+const LEVELS: Readonly<Record<number, string>> = {
+  10: "TRACE",
+  20: "DEBUG",
+  30: "INFO",
+  40: "WARN",
+  50: "ERROR",
+  60: "FATAL",
+};
+/** Fields every record carries that say nothing about what happened. */
+const LOG_NOISE = new Set(["level", "time", "pid", "hostname", "msg"]);
+/** Periodic records that repeat every 30 seconds; readiness already shows their numbers. */
+const LOG_ROUTINE = new Set(["Capability status"]);
+
+/**
+ * Whether a serialized record is routine and worth no space in the recent-log buffer. The buffer
+ * skips these as they are written, so on an idle bot its slots still hold the useful records
+ * instead of half an hour of the same periodic line.
+ */
+export function routineLog(line: string): boolean {
+  try {
+    const entry = JSON.parse(line) as { msg?: unknown };
+    return typeof entry.msg === "string" && LOG_ROUTINE.has(entry.msg);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * pino JSON records as readable lines: `03:07:37 INFO Modules loaded · commands=20 events=15`.
+ * Routine periodic records are dropped; a line that isn't JSON is kept as it is.
+ */
+export function logLines(records: readonly string[]): string[] {
+  const lines: string[] = [];
+  for (const record of records) {
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(record) as Record<string, unknown>;
+    } catch {
+      lines.push(record);
+      continue;
+    }
+    const message = typeof entry.msg === "string" ? entry.msg : "";
+    if (LOG_ROUTINE.has(message)) continue;
+    const time =
+      typeof entry.time === "number"
+        ? new Date(entry.time).toISOString().slice(11, 19)
+        : "--:--:--";
+    const level = LEVELS[Number(entry.level)] ?? String(entry.level ?? "?");
+    const extra = Object.entries(entry)
+      .filter(([key]) => !LOG_NOISE.has(key))
+      .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+    lines.push(`${time} ${level} ${message}${extra.length ? ` · ${extra.join(" ")}` : ""}`);
+  }
+  return lines;
+}

@@ -22,18 +22,23 @@ import {
   AUTO_ISSUES_PER_DAY,
   bounded,
   details,
+  duration,
   fenced,
+  fields,
   fingerprint,
   firstPartyFrames,
   GUILD_REPORTS_PER_DAY,
   LODESTONE_DOWN_SECONDS,
   LODESTONE_RECENT_ATTEMPT_SECONDS,
+  logLines,
   redact,
   REPEAT_COMMENT_SECONDS,
   type ReportSource,
   ROSTER_STALE_SECONDS,
   table,
   USER_REPORT_INTERVAL_SECONDS,
+  when,
+  yesNo,
 } from "../domain/reports.js";
 import { Failure } from "../domain/values.js";
 import type { GitHubIssues } from "../infrastructure/github/issues.js";
@@ -362,7 +367,7 @@ export class IssueReports {
           `No roster for **${fc.name}** (\`${fc.id}\`) has been accepted for over ${ROSTER_STALE_SECONDS / 3600} hours, so membership changes aren't being picked up.`,
           table(
             ["Last accepted", "Last attempt", "Last error"],
-            [[iso(fc.accepted), iso(fc.attempted), fc.error]],
+            [[when(fc.accepted), when(fc.attempted), fc.error]],
           ),
         ].join("\n\n"),
         ref: `roster:${fc.id}`,
@@ -388,14 +393,14 @@ export class IssueReports {
     const body = await this.render({
       source: "trouble",
       what: [
-        `TaruBot hasn't had an answer from the Lodestone since ${iso(reach.failingSince)}; the latest request ended \`${reach.lastFailure}\`. Profile refreshes, verification and roster checks are waiting.`,
+        `TaruBot hasn't had an answer from the Lodestone since ${when(reach.failingSince)}; the latest request ended \`${reach.lastFailure}\`. Profile refreshes, verification and roster checks are waiting.`,
         table(
           ["Last answer", "Failing since", "Last attempt", "Latest code"],
           [
             [
-              iso(reach.lastAnswerAt),
-              iso(reach.failingSince),
-              iso(reach.lastAttemptAt),
+              when(reach.lastAnswerAt),
+              when(reach.failingSince),
+              when(reach.lastAttemptAt),
               reach.lastFailure,
             ],
           ],
@@ -539,7 +544,10 @@ export class IssueReports {
       const created = await this.github.create(
         row.title,
         bounded(
-          `${row.body}\n\n---\n_${row.occurrences} occurrence${row.occurrences === 1 ? "" : "s"} when this issue was opened; fingerprint \`${row.fingerprint}\`._`,
+          // A member's report is one message; an automatic one says how often it has happened.
+          automatic
+            ? `${row.body}\n\n---\n_${row.occurrences} occurrence${row.occurrences === 1 ? "" : "s"} when this issue was opened · fingerprint \`${row.fingerprint}\`_`
+            : row.body,
         ),
         labels,
       );
@@ -550,7 +558,7 @@ export class IssueReports {
         const created = await this.github.create(
           row.title,
           bounded(
-            `This came back after #${row.issue_number} was closed: ${repeats} more occurrence${repeats === 1 ? "" : "s"} since ${iso(row.posted_at)}.\n\n${row.latest ?? row.body}`,
+            `This came back after #${row.issue_number} was closed: ${repeats} more occurrence${repeats === 1 ? "" : "s"} since ${when(row.posted_at)}.\n\n${row.latest ?? row.body}`,
           ),
           labels,
         );
@@ -560,7 +568,7 @@ export class IssueReports {
         await this.github.comment(
           row.issue_number,
           bounded(
-            `**${repeats} more occurrence${repeats === 1 ? "" : "s"}** since ${iso(row.posted_at)} (${row.occurrences} in total). The latest:\n\n${row.latest ?? row.body}`,
+            `**${repeats} more occurrence${repeats === 1 ? "" : "s"}** since ${when(row.posted_at)} (${row.occurrences} in total). The latest:\n\n${row.latest ?? row.body}`,
           ),
         );
         status = "commented";
@@ -606,6 +614,7 @@ export class IssueReports {
    * The report body: what happened, then the bot's state when it happened: deployment, readiness,
    * the Lodestone, the queue, the server and (for /issue or member-scoped work) the member, and
    * the newest log records. Each section is collected separately; one failing read becomes a note.
+   * Single records are two-column tables, times read as UTC, and every code fence starts its line.
    */
   private async render(input: {
     source: ReportSource;
@@ -621,25 +630,19 @@ export class IssueReports {
         return `### ${title}\n\n_Couldn't collect this: ${error instanceof Error ? error.name : "error"}._`;
       }
     };
+    const logs = logLines(this.logs.recent());
     const parts = [
-      table(
-        ["Environment", "Version", "Runtime", "Up since", "Reported", "Source", "Ref"],
-        [
-          [
-            this.environment,
-            project.version,
-            `Bun ${Bun.version}`,
-            iso(this.started),
-            iso(new Date()),
-            input.source,
-            input.ref,
-          ],
-        ],
-      ),
+      fields([
+        ["Environment", this.environment],
+        ["Version", project.version],
+        ["Runtime", `Bun ${Bun.version}`],
+        ["Up since", when(this.started)],
+        ["Reported", when(new Date())],
+        ["Source", input.source],
+        ["Ref", `\`${input.ref}\``],
+      ]),
       `### What happened\n\n${input.what}`,
-      await section("Readiness", async () =>
-        fenced(JSON.stringify(this.status(), null, 2), "json"),
-      ),
+      await section("Readiness", async () => this.readiness()),
       await section("Lodestone", () => this.lodestone()),
       await section("Queue", () => this.queueState()),
       input.guildId ? await section("Server", () => this.guildState(input.guildId ?? "")) : "",
@@ -647,32 +650,81 @@ export class IssueReports {
         ? await section("Member", () => this.memberState(input.guildId ?? "", input.userId ?? ""))
         : "",
       details(
-        "Recent log records",
-        fenced(redact(this.logs.recent().join("\n"), this.secrets) || "(none)", "json"),
+        "Recent log records (UTC, newest last)",
+        fenced(redact(logs.join("\n"), this.secrets) || "(none)", "text"),
       ),
     ];
     return redact(parts.filter(Boolean).join("\n\n"), this.secrets);
   }
 
+  /** What /health/ready says, field by field. */
+  private async readiness(): Promise<string> {
+    const status = (this.status() ?? {}) as Record<string, unknown>;
+    const capabilities = (status.capabilities ?? {}) as Record<string, unknown>;
+    const flag = (value: unknown) => yesNo(typeof value === "boolean" ? value : undefined);
+    return fields([
+      ["Ready", flag(status.ready)],
+      ["Database", flag(status.database)],
+      ["Writer lease", flag(status.writerLease)],
+      ["Discord", flag(status.discord)],
+      ["Discord changes", flag(status.effects)],
+      ["Pending jobs", capabilities.pending ?? "—"],
+      ["Blocked jobs", capabilities.blocked ?? "—"],
+      ["Oldest roster", duration(capabilities.oldest_roster_age_seconds)],
+      ["Degraded FCs", capabilities.degraded_fcs ?? "—"],
+    ]);
+  }
+
   /** The client's view of the Lodestone, and the sidecar's own health with its gate. */
   private async lodestone(): Promise<string> {
     const reach = this.nodestone.reachability();
-    let sidecar = "unreachable";
+    const client = fields([
+      ["Last Lodestone answer", when(reach.lastAnswerAt)],
+      ["Last attempt", when(reach.lastAttemptAt)],
+      ["Failing since", when(reach.failingSince)],
+      ["Latest failure", reach.lastFailure ?? "—"],
+    ]);
+    let health: Record<string, unknown>;
     try {
       const response = await fetch(new URL("/health", this.config.NODESTONE_URL), {
         signal: AbortSignal.timeout(2000),
       });
-      sidecar = JSON.stringify(await response.json());
+      health = (await response.json()) as Record<string, unknown>;
     } catch {
-      /* The table says the sidecar didn't answer. */
+      return `${client}\n\n_The sidecar didn't answer its health check._`;
     }
+    const gate = (health.lodestone ?? {}) as Record<string, unknown>;
+    const upstream = (health.upstream ?? {}) as Record<string, unknown>;
+    const components = Array.isArray(upstream.components)
+      ? (upstream.components as Record<string, unknown>[])
+      : [];
+    const sha = (value: unknown) => (typeof value === "string" ? `\`${value.slice(0, 7)}\`` : "—");
     return [
-      table(
-        ["Last answer", "Failing since", "Latest failure"],
-        [[iso(reach.lastAnswerAt), iso(reach.failingSince), reach.lastFailure]],
+      client,
+      fields(
+        [
+          ["Ready", yesNo(health.ready === true)],
+          ["Parses running", health.active ?? "—"],
+          ["429 cooldown", duration(gate.cooldownSeconds)],
+          ["429s in a row", gate.strikes ?? "—"],
+          ["Upstream parsers", upstream.status ?? "—"],
+        ],
+        ["Sidecar", "Value"],
       ),
-      `Sidecar health: ${fenced(sidecar, "json")}`,
-    ].join("\n\n");
+      components.length
+        ? table(
+            ["Upstream", "Deployed", "Latest", "Current"],
+            components.map((row) => [
+              row.repository ?? row.package,
+              sha(row.deployed),
+              sha(row.latest),
+              yesNo(row.current === true),
+            ]),
+          )
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   /** Active work by kind and status, failures in the last day, and the newest failures. */
@@ -689,7 +741,6 @@ export class IssueReports {
         kind: t.jobs.kind,
         attempts: t.jobs.attempts,
         error: t.jobs.last_error,
-        at: t.jobs.completed_at,
         created: t.jobs.created_at,
       })
       .from(t.jobs)
@@ -708,10 +759,10 @@ export class IssueReports {
             ["Kind", "Job", "Attempts", "Last error", "Created"],
             failed.map((row) => [
               row.kind,
-              row.id.slice(0, 8),
+              `\`${row.id.slice(0, 8)}\``,
               row.attempts,
               row.error,
-              iso(row.created),
+              when(row.created),
             ]),
           )}`
         : "_No failed jobs in the last day._",
@@ -726,32 +777,27 @@ export class IssueReports {
       ? await this.db.orm.select().from(t.freeCompanies).where(eq(t.freeCompanies.id, guild.fc_id))
       : [];
     return [
-      table(
-        ["Server", "Active", "Effects", "Revision", "Role layout", "Applications", "Officer rank"],
+      fields(
         [
-          [
-            guild.id,
-            guild.active,
-            guild.effects_enabled,
-            guild.revision,
-            guild.role_layout_enabled,
-            guild.guest_applications_enabled,
-            guild.officer_rank_name,
-          ],
+          ["Server ID", `\`${guild.id}\``],
+          ["Active", yesNo(guild.active)],
+          ["Discord changes", yesNo(guild.effects_enabled)],
+          ["Settings revision", guild.revision],
+          ["Role layout", yesNo(guild.role_layout_enabled)],
+          ["Guest applications", yesNo(guild.guest_applications_enabled)],
+          ["Officer rank", guild.officer_rank_name ?? "—"],
         ],
+        ["Server", "Value"],
       ),
       fc
-        ? table(
-            ["FC", "Name", "Last accepted roster", "Last attempt", "Last error"],
+        ? fields(
             [
-              [
-                fc.id,
-                fc.name,
-                iso(fc.last_successful_roster_at),
-                iso(fc.last_attempt_at),
-                fc.last_error,
-              ],
+              ["Free Company", `${fc.name} (\`${fc.id}\`)`],
+              ["Last accepted roster", when(fc.last_successful_roster_at)],
+              ["Last attempt", when(fc.last_attempt_at)],
+              ["Last error", fc.last_error ?? "—"],
             ],
+            ["Roster", "Value"],
           )
         : "_No linked Free Company._",
     ].join("\n\n");
@@ -776,14 +822,10 @@ export class IssueReports {
       .from(t.links)
       .leftJoin(t.characters, eq(t.characters.id, t.links.character_id))
       .where(and(eq(t.links.guild_id, guildId), eq(t.links.user_id, userId)))
-      .orderBy(desc(t.links.created_at))
+      .orderBy(desc(t.links.active), desc(t.links.created_at))
       .limit(10);
     const grants = await db
-      .select({
-        provenance: t.guestGrants.provenance,
-        created: t.guestGrants.created_at,
-        ended: t.guestGrants.ended_at,
-      })
+      .select({ provenance: t.guestGrants.provenance, ended: t.guestGrants.ended_at })
       .from(t.guestGrants)
       .where(and(eq(t.guestGrants.guild_id, guildId), eq(t.guestGrants.user_id, userId)));
     const [guest] = await db
@@ -821,57 +863,59 @@ export class IssueReports {
       )
       .orderBy(desc(t.auditEvents.event_at))
       .limit(10);
+    const main = links.find((row) => row.character === member?.primary_character_id);
+    const who = (actor: string | null) =>
+      actor === null ? "TaruBot" : actor === userId ? "this member" : `\`${actor}\``;
     return [
       member
-        ? table(
-            ["Present", "Joined", "Main", "Nickname sync", "Nickname suspended", "Member loss"],
+        ? fields(
             [
+              ["User ID", `\`${userId}\``],
+              ["In the server", yesNo(member.present)],
+              ["Joined", when(member.joined_at)],
               [
-                member.present,
-                iso(member.joined_at),
-                member.primary_character_id,
-                member.nickname_enabled,
-                member.nickname_suspended,
-                member.local_member_loss,
+                "Main character",
+                main
+                  ? `${main.name ?? "?"} @ ${main.world ?? "?"} (\`${main.character}\`)`
+                  : (member.primary_character_id ?? "none"),
               ],
+              ["Nickname sync", yesNo(member.nickname_enabled)],
+              ["Nickname sync suspended", yesNo(member.nickname_suspended)],
+              [
+                "Guest grants",
+                grants
+                  .map((grant) => `${grant.provenance}${grant.ended ? " (ended)" : ""}`)
+                  .join(", ") || "none",
+              ],
+              ["Guest revoked", yesNo(guest?.revoked ?? false)],
+              ["Officer override", officer?.state ?? "none"],
             ],
+            ["Member", "Value"],
           )
         : "_TaruBot has no record of this member in this server._",
       links.length
         ? table(
-            ["Character", "Name", "World", "Active", "Provenance", "First 404"],
+            ["Character", "World", "ID", "Active", "Provenance", "First 404"],
             links.map((row) => [
-              row.character,
-              row.name,
-              row.world,
-              row.active,
+              row.name ?? "?",
+              row.world ?? "?",
+              `\`${row.character}\``,
+              yesNo(row.active),
               row.provenance,
-              iso(row.missing),
+              when(row.missing),
             ]),
           )
         : "_No character links._",
-      table(
-        ["Guest grants", "Guest revoked", "Officer override"],
-        [
-          [
-            grants
-              .map((grant) => `${grant.provenance}${grant.ended ? " (ended)" : ""}`)
-              .join(", ") || "none",
-            guest?.revoked ?? false,
-            officer?.state ?? "none",
-          ],
-        ],
-      ),
       work.length
         ? `**Recent work**\n\n${table(
             ["Kind", "Status", "Attempts", "Last error", "Created"],
-            work.map((row) => [row.kind, row.status, row.attempts, row.error, iso(row.created)]),
+            work.map((row) => [row.kind, row.status, row.attempts, row.error, when(row.created)]),
           )}`
         : "_No recent work for this member._",
       history.length
         ? `**Recent audit**\n\n${table(
-            ["Action", "Actor", "When"],
-            history.map((row) => [row.action, row.actor, iso(row.at)]),
+            ["Action", "By", "When"],
+            history.map((row) => [row.action, who(row.actor), when(row.at)]),
           )}`
         : "_No audit entries for this member._",
     ].join("\n\n");
@@ -880,11 +924,6 @@ export class IssueReports {
 
 /** A saved report needs delivery: never delivered, or repeats past the hourly comment window. */
 const DUE = sql<boolean>`${t.issueReports.issue_number} IS NULL OR ${t.issueReports.posted_at} IS NULL OR ${t.issueReports.posted_at} <= now()-${REPEAT_COMMENT_SECONDS}*interval '1 second'`;
-
-/** ISO time, or a dash. */
-function iso(value: Date | null | undefined): string {
-  return value ? value.toISOString() : "—";
-}
 
 /** Seconds from now until `seconds` after `from`, at least one. */
 function secondsUntil(from: Date, seconds: number): number {
