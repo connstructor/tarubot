@@ -119,6 +119,100 @@ describe("cleaning rules", () => {
       expect(cleaned(phrase)).toBe(phrase);
   });
 
+  test("a link in any script goes like its ASCII equivalent (2.26.0 review)", () => {
+    for (const link of [
+      // Cyrillic, with a path, a subdomain, a port, a query and a fragment.
+      "пример.рф/путь",
+      "поддомен.пример.рф/путь",
+      "пример.рф:8080",
+      "пример.рф?q=1",
+      "пример.рф#якорь",
+      // Mixed scripts: across labels, within a label, and Latin letters with diacritics.
+      "пример.com/путь",
+      "example.рф/путь",
+      "shopпример.com/x",
+      "münchen.de/karte",
+      // Chinese and Japanese labels and TLDs, with Katakana's ー.
+      "例子.中国/路径",
+      "例え.jp/パス",
+      "サーバー.例え.jp/パス",
+      "blog.例え.jp/x",
+      "日本語ドメイン.jp:8080",
+      "例え.みんな/パス",
+      "例子.公司:443",
+      "サーバー.jp?id=1",
+      "例え.jp#top",
+      // Korean, Greek, and Arabic and Hebrew (right to left, written here in logical order).
+      "예시.한국/경로",
+      "παράδειγμα.δοκιμή/x",
+      "مثال.إختبار/مسار",
+      "مثال.السعودية?id=1",
+      "דוגמה.קום/נתיב",
+      // Scripts whose letters carry combining marks (Devanagari's vowel signs, Thai's tone marks).
+      "उदाहरण.भारत/पथ",
+      "ตัวอย่าง.ไทย/x",
+      // Punycode labels and TLDs.
+      "xn--e1afmkfd.xn--p1ai/путь",
+      "xn--r8jz45g.xn--q9jyb4c#top",
+      "xn--80ak6aa92e.com?x=1",
+      // The ideographic full stop, which browsers treat as a dot; NFKC folds the half-width one
+      // (U+FF61) into it and the full-width full stop (U+FF0E) into `.`.
+      "discord。gg/abc",
+      "discord。gg?code",
+      "sub。example。com:8080",
+      "www。example。com",
+      "пример。рф/путь",
+      "example\u{FF61}com/x",
+      "example\u{FF0E}com/x",
+      // A name in front goes with the link.
+      "имя@пример.рф/путь",
+    ])
+      expect(cleaned(`see ${link} please`)).toBe("see [link removed] please");
+    // Email addresses in any script go too, marks and ideographic full stops included.
+    for (const address of ["имя@пример.рф", "नाम@उदाहरण.भारत", "name@example。com"])
+      expect(cleaned(`mail ${address} soon`)).toBe("mail [email removed] soon");
+  });
+
+  test("Chinese and Japanese sentences stay, and so do words running into a link", () => {
+    // Their sentences end in `。`, `．` or `？` with no space after, so these read as prose
+    // (NFKC folds the full-width forms).
+    for (const sentence of [
+      "イベント機能がほしいです。できますか\u{FF1F}よろしくお願いします",
+      "設定しました。ON/OFFで切り替えたいです",
+      "機能を追加。オン/オフを選べるように",
+      "理系の書き方です\u{FF0E}できますか\u{FF1F}はい",
+      "好的.可以吗?谢谢",
+      "好的。可以吗\u{FF1F}谢谢",
+      "面白いwww。次もお願いします",
+      "Node.jsに対応してほしい",
+      // The same shape as the sentences above: an ideographic full stop next to a Han, Hiragana
+      // or Katakana label can't be told from a sentence end (an accepted limit).
+      "例え。jp/パス",
+      "例子。中国/路径",
+    ])
+      expect(cleaned(sentence)).toBe(normalise(sentence));
+    // Other scripts' prose puts a space after its punctuation, as English does.
+    for (const sentence of [
+      "Можно добавить опросы? Спасибо. Очень нужно!",
+      "Könnten wir Umfragen hinzufügen? Danke.",
+      "هل يمكن إضافة تذكير؟ شكرا.",
+      "कृपया रिमाइंडर जोड़ें। धन्यवाद",
+    ])
+      expect(cleaned(sentence)).toBe(sentence);
+    // Chinese or Japanese text running straight into a link keeps its words.
+    for (const [raw, expected] of [
+      ["招待リンクはこちらdiscord.gg/abc", "招待リンクはこちら[link removed]"],
+      ["ありがとうございます.discord.gg/abc", "ありがとうございます.[link removed]"],
+      ["こちらです。discord。gg/abc", "こちらです。[link removed]"],
+      // A label mixing Latin letters and Han keeps its Latin part; the rest of the host goes.
+      ["abc日本.jp/x", "abc[link removed]"],
+      // Text in those scripts running into a label in them can't be told apart from it, so it
+      // goes with the link, as ASCII letters running into an ASCII host do.
+      ["こちら例え.jp/パス", "[link removed]"],
+    ])
+      expect(cleaned(raw ?? "")).toBe(expected ?? "");
+  });
+
   test("email addresses, long IDs and every @ go", () => {
     expect(cleaned("mail me at someone.else+tag@example.co.uk soon")).toBe(
       "mail me at [email removed] soon",
@@ -249,6 +343,7 @@ describe("the fixed point", () => {
       "token abcdefghijklmnopqrstuvwxyz and 1234567890123456789",
       "<a<:b:1>1> my idea here",
       "@@@ <<<>>> :1> </ run:1>",
+      "see пример.рф/путь, 例子.中国/路径 or discord。gg/x, then 招待はこちらdiscord.gg/y",
     ])
       expect(clean(cleaned(raw))).toBe(cleaned(raw));
   });
@@ -258,6 +353,9 @@ describe("the fixed point", () => {
       ["<a<:b:1>1> my idea here", ":b: my idea here"],
       ["<</run:1>:2> my idea here", "/run my idea here"],
       ["example.com<</run:1>:2>", "[link removed]"],
+      // A Chinese TLD needs a path, which only the second pass's `/run` supplies.
+      ["例子.中国<</run:1>:2>", "[link removed]"],
+      ["пример。рф<</run:1>:2>", "[link removed]"],
     ]) {
       const { text, title, body } = pipeline(raw ?? "");
       expect(text).toBe(expected ?? "");
@@ -306,6 +404,14 @@ describe("seeded fuzz", () => {
         (fragment) => () => fragment,
       ),
       ...[".io?", "#a", ":8080", "?x=1", "192.168.1.10", "localhost", "1.2."].map(
+        (fragment) => () => fragment,
+      ),
+      // Internationalised hosts: other scripts' labels and TLDs, punycode, combining marks, the
+      // ideographic full stop and its half-width and full-width forms, and CJK sentence pieces.
+      ...["пример", ".рф/", "例子", ".中国/", "です", "。", "\u{FF61}", "\u{FF0E}", "\u{FF1F}"].map(
+        (fragment) => () => fragment,
+      ),
+      ...["xn--p1ai", "xn--", "مثال", ".भारत", "\u{301}", "ー", "ON/", "münchen"].map(
         (fragment) => () => fragment,
       ),
       ...["\u{AD}", "\u{200B}", "\u{180B}", "\u{17B4}", "\u{E0041}", "\u{FF20}", "\u{D800}"].map(
