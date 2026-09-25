@@ -73,6 +73,13 @@ Since 2.28.0 (REQUIREMENTS.md "Approved public-suggestion amendments"), `/sugges
 
   Expect `422` (the empty issue is rejected after authentication). A `configuration` failure or a 401, 403 or 404 means the key, the client ID or the installation is wrong.
 - **Off switch.** Empty `GITHUB_APP_CLIENT_ID` in the host's `.env`, then recreate the bot with `docker compose -f docker-compose.production.yml up -d --wait` in `~/tarubot` (no migration). A plain `docker compose restart` doesn't re-read `.env`, so it would leave `/suggest` on. Confirm with a `/suggest`: members are then told suggestions are switched off, and nothing is reported. On DevBot, `/suggest` is off whenever `GITHUB_REPORTS_TOKEN` is empty.
+- **Moderation and finding a sender.** Suggestions go up without review; the maintainers answer, label, close (for example as not planned), lock or delete them on GitHub. No issue names its sender, but each post leaves a private `audit` row. To find who sent issue `#N`, query the managed database from the operator machine with the `pg` helper (MIGRATION.md [E0 conventions](MIGRATION.md#e0-conventions), with the Linode values under [Updating to a release](#updating-to-a-release)). The site's `docker compose exec postgres` form needs the stock Compose file's bundled database, which production doesn't have.
+
+  ```sh
+  pg psql -d tarubot -c "SELECT guild_id, actor_id, event_at FROM audit WHERE action = 'suggestion.posted' AND target = '#N'"
+  ```
+
+  An attempt GitHub didn't confirm is recorded as `action = 'suggestion.unconfirmed'` with no target; match it by time against the issue's creation. Removing the member's Guest or Member role (a Guest with `/guest revoke`) ends their access to `/suggest`. The rest of the private record and the failures members see are on the site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#public-suggestions).
 - **Claude workflow.** `.github/workflows/claude.yml` never starts the agent for an issue whose body contains "Suggested in Discord with TaruBot". An `@claude` comment by a trusted account on a `from-discord` issue still starts it, and hands the member's text to the agent: treat that text as untrusted ([CI_CD.md](CI_CD.md#claude-review-and-assistant)).
 
 ## Updating to a release

@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it works
 
-`/suggest` works only in the one Free Company server the TaruBot project's own deployment serves. There is nothing to set up and no `/config` option for it. In every other server, including servers that run their own copy of TaruBot, it answers "Not available here", even for server managers.
+`/suggest` works only in the one Free Company server the TaruBot project's own deployment serves. There is nothing to set up and no `/config` option for it. In every other server, including servers that run their own copy of TaruBot, it answers "Not available here", even for server managers. The one exception is a development deployment's test server (`TEST_GUILD_ID`): there `/suggest` previews suggestions privately into the operator's reports repository (`GITHUB_REPORTS_REPO`) when `GITHUB_REPORTS_TOKEN` is set, so testing never posts publicly ([configuration](/tarubot/deploy/configuration/#development-only)).
 
 ## Who can use it
 

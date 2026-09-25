@@ -78,7 +78,7 @@ A setting derived from the bot's own connection, such as `RESTORE_DATABASE_URL`,
 
 ## Upstream production only
 
-The TaruBot project's own production deployment posts [`/suggest`](/tarubot/admin/suggestions/) ideas to TaruBot's public repository as its GitHub App. `/suggest` works only in the FC server that deployment serves, so every other deployment refuses it in every server, whatever these say. Leave them unset: the stock `docker-compose.yml` doesn't pass them to the bot, and they are never needed for a development deployment.
+The TaruBot project's own production deployment posts [`/suggest`](/tarubot/admin/suggestions/) ideas to TaruBot's public repository as its GitHub App. `/suggest` posts publicly only from the FC server that deployment serves, so every other deployment refuses it in every server, whatever these say. The one exception is a development deployment's test server ([`TEST_GUILD_ID`](#development-only)), where `/suggest` ignores these settings and previews privately into `GITHUB_REPORTS_REPO` when `GITHUB_REPORTS_TOKEN` is set. Leave them unset: the stock `docker-compose.yml` doesn't pass them to the bot, and they are never needed for a development deployment.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |

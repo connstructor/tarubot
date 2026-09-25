@@ -9,7 +9,7 @@ Have an idea for TaruBot? [`/suggest`](/tarubot/reference/commands/#suggest) pos
 
 ## Where and who
 
-- **In the FC's own server only.** `/suggest` works in the one Free Company server the TaruBot project's own deployment serves. Every other server, including servers that run their own copy of TaruBot, answers "Not available here". From anywhere else, open an issue on [GitHub](https://github.com/deconfined/tarubot/issues) yourself.
+- **In the FC's own server only.** `/suggest` works in the one Free Company server the TaruBot project's own deployment serves. Other servers, including servers that run their own copy of TaruBot, answer "Not available here" (a development copy's test server only previews suggestions privately, for testing). From anywhere else, open an issue on [GitHub](https://github.com/deconfined/tarubot/issues) yourself.
 - **With the Member or Guest role.** [Linking a character](/tarubot/use/link-a-character/) gives you one of them, and an officer can also give you [guest access](/tarubot/use/guest-access/). Without either role the reply is "FC membership needed", with the steps to get one. Officers qualify through their Member role; officer access alone doesn't count.
 
 ## Send a suggestion

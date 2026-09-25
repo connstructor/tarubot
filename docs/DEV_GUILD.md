@@ -444,7 +444,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 
 ### 2.27.0 — documentation only
 
-2.27.0 adds the documentation site (`site/`, GitHub Pages) and changes no running code, so DevBot was not redeployed for it. It merged as [PR #37](https://github.com/deconfined/tarubot/pull/37) (`a199fab`) on 2026-09-25, before #36, and the Pages workflow (run 36199615008) published https://deconfined.github.io/tarubot/. Its startup plan asked the owner to review the published site; 2.28.0's plan (`test-plans/current.json`) carries that review forward with the site's `/suggest` pages. The DevBot-only backup and restore-rehearsal notes moved here from the former operations guide ([above](#backup-and-restore-rehearsal-on-devbot)).
+2.27.0 adds the documentation site (`site/`, GitHub Pages) and changes no running code, so DevBot was not redeployed for it. It merged as [PR #37](https://github.com/deconfined/tarubot/pull/37) (`a199fab`) on 2026-09-25, before #36, and the Pages workflow (run 36199615008) published https://deconfined.github.io/tarubot/. Its startup plan asked the owner to review the published site. 2.28.0's plan (`test-plans/current.json`) adds only the site's two `/suggest` pages; the rest of that review (search, the 404 page and edit links) is an Owner item in [OPEN_ITEMS.md](OPEN_ITEMS.md). The DevBot-only backup and restore-rehearsal notes moved here from the former operations guide ([above](#backup-and-restore-rehearsal-on-devbot)).
 
 ### 2.28.0 rollout plan (`/suggest`; not yet run)
 

@@ -58,7 +58,7 @@ Before a report is saved, TaruBot removes known secret shapes (Discord and GitHu
 
 ## Public suggestions
 
-`/suggest` is the one command whose words go public. In the FC server the TaruBot project's own deployment serves, it posts a member's idea as an issue in TaruBot's public GitHub repository, as the project's GitHub App. Every other server refuses it.
+`/suggest` is the one command whose words go public. In the FC server the TaruBot project's own deployment serves, it posts a member's idea as an issue in TaruBot's public GitHub repository, as the project's GitHub App. Other servers refuse it, except a development deployment's test server (`TEST_GUILD_ID`), which previews suggestions into the operator's private reports repository instead and never posts publicly.
 
 - **Posted:** the idea, after TaruBot removes links, IP addresses, Discord mentions, email addresses, credential shapes, long ID numbers and invisible characters, and turns `@` into `＠`; a fixed first line; and the running version. A final check refuses the post if anything slipped through.
 - **Never posted:** the member's Discord name or ID, the server, its channels and roles, characters and FC data, logs and settings.
