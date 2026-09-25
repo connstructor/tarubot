@@ -505,9 +505,12 @@ export class Service {
           actor.officer ? undefined : eq(t.links.user_id, actor.userId),
         ),
       );
-    // A failure whose work later succeeded under the same dedupe key is history, not a problem
+    // A failure whose work succeeded afterwards under the same dedupe key is history, not a problem
     // (2.24.1): without this, old failures (such as the first night's Lodestone refusals) stayed
-    // listed indefinitely, since nothing newer had failed to push them out.
+    // listed indefinitely, since nothing newer had failed to push them out. "Afterwards" means after
+    // the failure itself: the queue stamps a failed row's completed_at, and retry.js clears it, so a
+    // row retried in place that fails again after a success stays listed. Rows that failed before
+    // 2.24.1 carry no failure time and fall back to their creation time.
     const later = alias(t.jobs, "later");
     const recovered = db
       .select({ id: later.id })
@@ -516,7 +519,7 @@ export class Service {
         and(
           eq(later.dedupe_key, t.jobs.dedupe_key),
           eq(later.status, "succeeded"),
-          gt(later.created_at, t.jobs.created_at),
+          gt(later.completed_at, sql`coalesce(${t.jobs.completed_at}, ${t.jobs.created_at})`),
         ),
       );
     const work = await db
