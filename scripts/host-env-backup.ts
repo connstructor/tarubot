@@ -11,7 +11,8 @@
  * what was read, proving the key opens it. The output names only the settings present, never values.
  */
 import { createHash } from "node:crypto";
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -54,9 +55,38 @@ export function parseArgs(argv: readonly string[], home = homedir()): Options {
   return options;
 }
 
-/** The setting names a `.env` defines, in order; values (even multi-line ones) are skipped. */
+/**
+ * The setting names a `.env` defines, in order. Values are skipped, including every line of a
+ * quoted multi-line value such as the CA: a base64 line inside it can look like `NAME=`, and
+ * reporting it would print part of a value. Quotes are tracked as Compose reads them: a value
+ * opening with `"` or `'` runs until that quote closes, and a backslash escapes a double quote.
+ */
 export function settingNames(text: string): string[] {
-  return [...text.matchAll(/^([A-Z][A-Z0-9_]*)=/gmu)].map((match) => match[1] ?? "");
+  const names: string[] = [];
+  let open: '"' | "'" | null = null;
+  for (const line of text.split("\n")) {
+    if (open) {
+      if (closes(line, open)) open = null;
+      continue;
+    }
+    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/u.exec(line);
+    if (!match) continue;
+    names.push(match[1] ?? "");
+    const value = match[2] ?? "";
+    const quote = value[0];
+    if ((quote === '"' || quote === "'") && !closes(value.slice(1), quote)) open = quote;
+  }
+  return names;
+}
+
+/** Whether `text` holds the closing `quote`: any `'`, or a `"` not escaped by a backslash. */
+function closes(text: string, quote: '"' | "'"): boolean {
+  if (quote === "'") return text.includes("'");
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === '"') return true;
+  }
+  return false;
 }
 
 /**
@@ -90,7 +120,9 @@ export function recipients(text: string): string[] {
 }
 
 /** Run a command with `input` on stdin; resolve its stdout, or throw with its exit status. */
-async function run(command: string[], input?: Uint8Array): Promise<Uint8Array> {
+export type Runner = (command: string[], input?: Uint8Array) => Promise<Uint8Array>;
+
+const run: Runner = async (command, input) => {
   const child = Bun.spawn(command, {
     stdin: input ? "pipe" : "ignore",
     stdout: "pipe",
@@ -103,9 +135,50 @@ async function run(command: string[], input?: Uint8Array): Promise<Uint8Array> {
   const output = new Uint8Array(await new Response(child.stdout).arrayBuffer());
   if ((await child.exited) !== 0) throw new Error(`${command[0]} failed (${child.exitCode}).`);
   return output;
-}
+};
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * Encrypt `plain` into `file` so that only a good copy ever carries the final name. age writes a
+ * hidden temporary file first; with an identity, that file must decrypt to `plain` before it is
+ * renamed into place. Any failure removes the temporary file and leaves no `tarubot-env-*.age`
+ * behind, since the rebuild runbook restores the newest such file by name.
+ */
+export async function writeBackup(options: {
+  plain: Uint8Array;
+  file: string;
+  recipientsFile: string;
+  identity: string | null;
+  runner?: Runner;
+}): Promise<{ sha256: string; verified: boolean | null }> {
+  const runner = options.runner ?? run;
+  const temporary = `${dirname(options.file)}/.${basename(options.file)}.partial`;
+  try {
+    await runner(
+      ["age", "--encrypt", "--recipients-file", options.recipientsFile, "--output", temporary],
+      options.plain,
+    );
+    await chmod(temporary, 0o600);
+    let verified: boolean | null = null;
+    if (options.identity) {
+      const decrypted = await runner([
+        "age",
+        "--decrypt",
+        "--identity",
+        options.identity,
+        temporary,
+      ]);
+      verified = sha256(decrypted) === sha256(options.plain);
+      if (!verified) throw new Error("The new copy did not decrypt to what was read.");
+    }
+    const digest = sha256(new Uint8Array(await Bun.file(temporary).arrayBuffer()));
+    await rename(temporary, options.file);
+    return { sha256: digest, verified };
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
 
 if (import.meta.main) {
   const options = parseArgs(process.argv.slice(2));
@@ -119,27 +192,19 @@ if (import.meta.main) {
   process.umask(0o077);
   await mkdir(options.out, { recursive: true, mode: 0o700 });
   const file = `${options.out}/${backupName(new Date())}`;
-  await run(["age", "--encrypt", "--recipients-file", recipientsFile, "--output", file], plain);
-  await chmod(file, 0o600);
-  const encrypted = new Uint8Array(await Bun.file(file).arrayBuffer());
-  let verified: boolean | null = null;
-  if (options.identity)
-    verified =
-      sha256(await run(["age", "--decrypt", "--identity", options.identity, file])) ===
-      sha256(plain);
+  const result = await writeBackup({ plain, file, recipientsFile, identity: options.identity });
   console.log(
     JSON.stringify(
       {
         file,
         bytes: (await stat(file)).size,
-        sha256: sha256(encrypted),
+        sha256: result.sha256,
         settings: names,
         notSet: absent,
-        verified,
+        verified: result.verified,
       },
       null,
       2,
     ),
   );
-  if (verified === false) throw new Error("The new copy did not decrypt to what was read.");
 }

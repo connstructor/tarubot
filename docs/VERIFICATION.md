@@ -27,13 +27,17 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 - the required settings refused by name;
 - UTC file names;
 - the recipients file's format;
-- the committed `ops/age-recipients.txt` holding a valid public key and no private key.
+- the committed `ops/age-recipients.txt` holding a valid public key and no private key;
+- **review round** (each failing against the first version):
+  - the name scan skips every line of a quoted value, so a base64 CA line ending in `=` isn't printed as a setting;
+  - a copy gets its final name only after it decrypts to what was read. A mismatch or a failing decryption leaves no `tarubot-env-*.age` behind for the runbook's "newest file" restore.
 
-`bun run test:unit` passed **1,147 tests** and `bun run test:contract` **26**; no application code changed.
+`bun run test:unit` passed **1,148 tests** and `bun run test:contract` **26**; no application code changed.
 
 **Live, 2026-09-25:**
 - `age` 1.2.1 on the operator machine generated the key `~/tarubot-cutover/age/tarubot.key` (mode 600). Its public key `age10k03wzyu…quevfc6` is in `ops/age-recipients.txt`.
 - `bun run host:env-backup -- --identity …` read the production `.env` over SSH and wrote `tarubot-env-20260925T125338Z.age` (2,329 bytes, mode 600, in a mode-700 folder). It named the six settings present (`TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, `GITHUB_REPORTS_TOKEN`, `HEALTHCHECKS_PING_URL`), with none missing. It confirmed the copy decrypts to exactly what was read.
+- After the review fixes, a second copy (`tarubot-env-20260925T130803Z.age`) was verified the same way and listed exactly the six names. A run with a missing key exited 1 and left its output folder empty.
 - The file starts with the `age-encryption.org/v1` header, and the runbook's decryption command (step 7) yields six settings lines.
 - **SSH:** before the owner's change, a probe with no credentials saw `publickey,password` offered for `root` and `tarubot`. After it, both offer `publickey` only, and key login as `tarubot` works.
 - **Linode, read with the owner's CLI (no changes):**

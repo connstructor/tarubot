@@ -9,7 +9,8 @@ The robust, disposable host (owner decision, 2026-09-25) needs a way back when t
 - **Settings copy (`scripts/host-env-backup.ts`, `bun run host:env-backup`).** It runs on the operator machine and reads the host's `.env` over SSH.
   - It checks that the settings production needs are present, naming only what's missing, and encrypts with `age` for the public keys in `ops/age-recipients.txt`.
   - It writes only the encrypted copy (`~/tarubot-cutover/env-backups/tarubot-env-<UTC time>.age`, mode 600), so the settings never touch the operator machine's disk or the terminal.
-  - `--identity` decrypts the new copy in memory and confirms it matches.
+  - `--identity` decrypts the new copy in memory and confirms it matches. The copy is written under a hidden temporary name and renamed into place only after that check, so a failed run leaves nothing a restore could pick up.
+  - The setting-name scan tracks quotes, so no line of a multi-line value, such as the CA, is ever printed.
   - Its output names the settings present, never their values.
 - **Rebuild runbook (HOSTING.md "Rebuilding the host").** Eleven steps from a lost host to a running bot:
   - stop the old writer;
@@ -30,7 +31,8 @@ The robust, disposable host (owner decision, 2026-09-25) needs a way back when t
   - setting names read without values, including a multi-line CA;
   - the required settings refused by name;
   - UTC file names;
-  - the recipients file's format.
+  - the recipients file's format;
+  - from the review: the quote-aware name scan, and the verify-then-rename write path.
 
 ## 2.22.0 — A healthchecks.io heartbeat
 
