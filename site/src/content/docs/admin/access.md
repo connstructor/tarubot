@@ -22,7 +22,7 @@ TaruBot gives the Officer role to exactly those members. A role given by hand al
 
 The Officer role grants TaruBot's officer commands only. It carries no Discord permissions, and it doesn't let anyone manage Discord roles or channels. A revocation takes effect at once, even while Discord is still removing the role.
 
-Officers run the day-to-day commands: the guest decisions, assigning and unassigning characters, withdrawals and corrections in the ledger, the ledger, notification and review channels, and `/config show` and `/config validate`.
+Officers run the day-to-day commands: the guest decisions, assigning and unassigning characters, withdrawals and corrections in the ledger, the ledger, officer notification, guest review and changelog channels ([`/config changelog`](/tarubot/reference/commands/#config-changelog) for update posts), and `/config show` and `/config validate`.
 
 ## Server managers
 

@@ -4,7 +4,7 @@
   "user": [
     "Open https://deconfined.github.io/tarubot/ after the merge: the six sidebar groups, search (try adopt_holders), dark mode and an Edit page link.",
     "Compare one Use TaruBot page with the bot: run /claim or /characters and check the page describes what you see.",
-    "Read the Run a server pages you'd send an officer, and flag anything unclear."
+    "Read the Run a server pages you'd send an officer, including Officer notices and update posts, and flag anything unclear."
   ],
   "assistant": [
     "After the merge, confirm the Documentation site workflow deployed and the site serves search and a 404 page.",

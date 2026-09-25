@@ -64,7 +64,7 @@ Background work follows the same path without an interaction: a scheduler, which
 
 ## Lifecycle and the single writer
 
-At startup the bot checks the database schema, then takes the **writer lease**, a PostgreSQL session lock, before it logs in or starts any work, so only one process ever writes to a database. It checks the schema again, reconciles every configured server, resumes held work, and starts the queue and scheduler. It reports ready only when the database, the lease and Discord are all up. On shutdown it stops taking work, lets workers finish for up to 20 seconds, and releases the lease. See [the single writer](/tarubot/deploy/operations/#single-database-writer).
+At startup the bot checks the database schema, then takes the **writer lease**, a PostgreSQL session lock, before it logs in or starts any work, so only one process ever writes to a database. It checks the schema again, reconciles every configured server, resumes held work, queues an [update post](/tarubot/admin/notices-and-updates/#update-posts) for each server whose changelog channel hasn't heard about the running version, and starts the queue and scheduler. It reports ready only when the database, the lease and Discord are all up. On shutdown it stops taking work, lets workers finish for up to 20 seconds, and releases the lease. See [the single writer](/tarubot/deploy/operations/#single-database-writer).
 
 ## The Lodestone adapter
 

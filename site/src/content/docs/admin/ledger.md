@@ -60,6 +60,6 @@ A previous FC's ledger is read-only.
 
 Every entry is posted to the ledger channel as `<Operation> · <amount>`: deposits in green, withdrawals and the opening balance in blue, corrections in orange. A post shows the full note, the new balance (a correction also shows the previous balance and the entry it corrects), who recorded it and the entry number, with the entry ID in the footer.
 
-Posting happens in the background. If TaruBot can't post, for example after the channel was deleted or its permissions changed, the entry is still recorded: the post waits as a blocked job. Fix the channel, then run `/config validate`; any `/config` change requeues held posts, and `/sync status` shows their progress. A retried post is identical to the first, and each post names the entry it belongs to, so a duplicate message never means a duplicate entry.
+Posting happens in the background. If TaruBot can't post, for example after the channel was deleted or its permissions changed, the entry is still recorded: the post waits as a blocked job. Fix the channel, then run `/config validate`; saving a `/config` role or channel (choosing the same ledger channel again works) requeues held posts, and `/sync status` shows their progress. A retried post is identical to the first, and each post names the entry it belongs to, so a duplicate message never means a duplicate entry.
 
 If a ledger command ends in an unexpected error, the reply warns that it may have been saved. Check `/ledger history` before recording the same gil again.

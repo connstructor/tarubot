@@ -33,9 +33,9 @@ Grant these at the server level. In each channel TaruBot posts to, it also needs
 | **Manage Roles** | Give and remove the Member, Guest, Officer and FC Leader roles; manage channel permission overwrites and, once onboarding is on, the server's default View Channel. |
 | **Manage Channels** | Only for [`/setup`](/tarubot/admin/setup/)'s lobby onboarding: create or reuse the lobby and officer room, and keep channel visibility in line. Without onboarding you can leave it out. |
 | **Manage Nicknames** | Set and restore character-based nicknames for members who turn nickname sync on. |
-| **View Channel** | See the ledger, officer notification and guest review channels. |
-| **Send Messages** | Post ledger entries, officer notices and guest review messages. |
-| **Embed Links** | Ledger posts, guest review messages and `/version` are embeds. |
+| **View Channel** | See the ledger, officer notification, guest review and changelog channels. |
+| **Send Messages** | Post ledger entries, officer notices, guest review messages and update posts. |
+| **Embed Links** | Ledger posts, guest review messages, update posts and `/version` are embeds. |
 | **Attach Files** | Deliver an officer's **Full details (JSON)** file, and keep explicit access in onboarding's managed rooms. |
 | **Read Message History** | Find its own earlier messages, so a notice isn't posted twice and a review message can be updated. |
 
