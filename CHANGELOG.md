@@ -1,6 +1,20 @@
 # Version history
 
-The current application version is **2.18.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.18.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.18.1 — Readable issue reports
+
+The owner's first `/issue` (issue #1) worked, but read poorly on GitHub. A code fence that started mid-line (`Sidecar health: ```json`) made GitHub render the rest of the report as code. Readiness and sidecar health were raw JSON (the sidecar's on one long line), times were raw ISO strings with milliseconds, booleans read `true`/`false`, and the log records were raw pino JSON, mostly `Capability status` repeating every 30 seconds. A member's report also ended with an occurrence count. There is no migration and no command change.
+
+- **Layout:**
+  - single records are two-column tables (`fields()`): the summary, readiness, the Lodestone client, the sidecar, the server, the roster and the member;
+  - lists stay tables: links (active first, with names), work, audit ("this member" or "TaruBot" as the actor), failures, and the sidecar's upstream components (short SHAs, and whether each is current);
+  - times read `2026-09-25 03:07:37 UTC` (`when()`), durations read `3.7 h`, and booleans read yes/no;
+  - the member's main character is shown by name.
+- **Logs.** `logLines()` turns pino records into `03:07:37 INFO Modules loaded · commands=20 …`, and drops `pid`, `hostname` and the routine `Capability status` records.
+- **Footer.** Only automatic reports end with their occurrence count and fingerprint.
+- **Tests.** Unit tests cover the new helpers. The `/issue` delivery test now requires every code fence to start its line, no raw ISO times, and no occurrence footer on a member's report. A sample was verified through GitHub's Markdown renderer.
+- **Records.** The 2.18.0 rollouts are recorded in DEV_GUILD.md and VERIFICATION.md.
 
 ## 2.18.0 — Issue reports and /issue
 

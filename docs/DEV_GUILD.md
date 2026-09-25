@@ -326,6 +326,27 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - The bot was healthy at 00:34:50, about 31 s of downtime. Readiness was 200, with one lease holder at head 007 and info log lines only; the storm's warnings were gone.
 - **The storm's characters:** 13746792 and 51218446 completed as `{status: "private"}`, their next checks paced a day out. 35999242 had no active link: an officer had already run `/unassign` at 2026-09-24 22:56:10 UTC ("Deleted from the Lodestone."), so the automatic two-404 unlink had nothing to do there. The PostgreSQL tests cover it.
 
+### 2.18.0 rollout — 2026-09-25
+
+- PR #19 merged as `98552d9` after three Claude review rounds, which found five real bugs, all fixed; the last round had no comments. Publish run 36088537989 published `tarubot:2.18.0` (`sha256:0abd8a6a…`) and `tarubot-nodestone:2.18.0` (`sha256:d5f41e4d…`), and promoted `latest`.
+- **DevBot:**
+  - The owner added `GITHUB_REPORTS_TOKEN` to `.env`: one line, whose checksum matches the token file.
+  - The writer stopped at 03:07:08 UTC: exit 0, 487 jobs all succeeded, no connections or lease holders, head 007.
+  - The backup `.cache/backups/tarubot_dev-before-2.18.0-98552d9.dump` is 118,704 bytes, sha256 `206992daf3e1d64c09558607facbac9c18b384cb3be3253f32b32de85627a204`. The restore check matched 26 tables at 007.
+  - The rehearsal on the copy applied `008_issue_reports.sql` and printed `Schema ready.`, with `issue_reports` empty. The copy was dropped.
+  - `migrate.js` applied 008 (lease at 03:07:35.769). 2.18.0 was healthy at 03:07:52, with the token present in the container, one lease holder and info log lines only.
+  - `register.js --guild` registered 20 roots / 44 paths, and `commands.js list` exited 0 and clean (20 commands in the dev guild, none global).
+  - The plan was posted as message `1552879227550961796`, "Session: 2.18.0 issue reports".
+- **Production:**
+  - The token was appended to the host's `.env` over SSH stdin: one line, checksum matching, mode 600.
+  - The pull and pin to 2.18.0 ran while 2.17.0 kept running. The bot stopped at 03:08:45.
+  - The writer-lease gate printed nothing (head 007).
+  - The backup `~/tarubot-cutover/work/backups/before-2.18.0.dump` is 308,481 bytes, sha256 `f8ad32f85b0dd6713c805b8f0b8d87968561dd36d32cb20fb8f4a9a86be58f99`, with 26 tables of data.
+  - `migrate.js` in the new image applied 008. Its restore point is 03:08:59.951594 UTC.
+  - The bot was healthy at 03:09:15, about 30 s of downtime, with the token present, one lease holder, head 008 and info log lines only.
+  - From the operator clone, `register.js --global` registered 20 roots / 44 paths, and `commands.js list` exited 0 and clean (global 20, including `issue`).
+- **First report:** the owner's `/issue` opened issue #1 in `deconfined/tarubot-reports`, with the right title, labels and fenced description, and no secrets. Its layout problems, above all a code fence starting mid-line, are fixed in 2.18.1.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

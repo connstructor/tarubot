@@ -21,6 +21,15 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.18.1** (readable issue reports) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.18.1 above 2.18.0). New cases:
+- two-column record tables, UTC times, durations and yes/no;
+- log records as readable lines, without routine `Capability status` records or per-process fields;
+- in the `/issue` delivery test, every code fence starting its line, no raw ISO times, and no occurrence footer on a member's report.
+
+A sample body built from the new helpers rendered through GitHub's Markdown API (`POST /markdown`) as 6 tables, 2 code blocks and the collapsible logs, with no stray fence markers. `bun run test:unit` passed **1,132 tests** and `bun run test:contract` **24**. The full container run passed **1,254 tests / 37,306 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+**2.18.0 rollouts (2026-09-25).** DevBot and production applied migration 008, production with about 30 s of downtime (restore point 03:08:59.951594 UTC) and a backup kept off Linode. `/issue` was registered in DevBot's guild and globally, and both read-backs were clean. The owner's test report opened issue #1 ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)).
+
 **2.18.0** (issue reports, migration 008, `/issue`) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.18.0 above 2.17.0). New cases:
 - **Helpers:** redaction of Discord and GitHub tokens, Authorization values, URL passwords, PEM blocks and the deployment's own secret values; stable fingerprints; repository-relative first-party stack frames; bounded bodies, safe fences and escaped tables; the recent-log buffer.
 - **Review-round regressions:** a GitHub 403 whose message names a secondary rate limit waits a minute as `rate_limited`, while a permission 403 stays `configuration` (contract). `/issue` waits for another server's uncommitted report from the same member and then refuses (PostgreSQL); that test fails without the member lock.

@@ -102,7 +102,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Status.** Merged ([PR #18](https://github.com/deconfined/tarubot/pull/18), `baa9d3c`) and published by run 36077621763. On 2026-09-25 it was deployed with migration 007 to DevBot at 00:33 UTC and to production at 00:34 UTC (about 31 s down) ([DEV_GUILD.md](DEV_GUILD.md#2170-rollout--2026-09-25)). The two private profiles now complete as private. 35999242 had already been unlinked by an officer.
 - **Hosting follow-up (owner decision, 2026-09-25).** The owner kept production on the Linode host rather than splitting it across App Platform and Linode, and asked that the host be made robust and disposable. That means a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, confirmed backups with off-site dumps, and an SSH deploy workflow (REQUIREMENTS.md, hosting amendment).
 
-**Update, 2.18.0 (current version):**
+**Update, 2.18.0:**
 - **Branch.** `feat/issue-reporter-2.18.0` starts from `main` at `baa9d3c` (2.17.0, PR #18). It adds migration `008_issue_reports.sql` and `/issue` (20 roots, 44 paths), so commands need registering after the deploy.
 - **Issue reports.** Reports go to the private repository `deconfined/tarubot-reports`, using `GITHUB_REPORTS_TOKEN`:
   - `/issue` for every member, limited to one per 10 minutes and 20 per server per day;
@@ -110,7 +110,12 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 
   Automatic reports are grouped by fingerprint, repeats are commented at most hourly, a recurrence after a close opens a new issue, and each day allows 10 automatic issues and 50 comments. Reports are saved in `issue_reports` before delivery and carry redacted context ([OPERATIONS.md](OPERATIONS.md#issue-reports)).
 - **Token.** The owner created the repository and an Issues-only token for it, saved as `~/tarubot-cutover/github-reports.token` (0600). The token was also pasted in chat, so it should be regenerated once the reporter runs. DevBot's `.env` needs `GITHUB_REPORTS_TOKEN` (owner action), and the production host's `.env` gets it at the deploy.
-- **Status.** Committed locally; not yet pushed.
+- **Status.** Merged ([PR #19](https://github.com/deconfined/tarubot/pull/19), `98552d9`) after three review rounds, which found five real bugs, all fixed. Published by run 36088537989. On 2026-09-25 it was deployed with migration 008 to DevBot at 03:07 UTC and to production at 03:09 UTC (about 30 s down), with `/issue` registered in DevBot's guild and globally ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)). Both `.env` files hold `GITHUB_REPORTS_TOKEN`. The owner's test `/issue` opened issue #1 in `deconfined/tarubot-reports`.
+
+**Update, 2.18.1 (current version):**
+- **Why.** The owner's test report worked but was hard to read. A code fence that started mid-line (`Sidecar health: ```json`) made GitHub render everything after it as code. Readiness and sidecar health were raw JSON, times were raw ISO strings, booleans read `true`/`false`, the log records were raw pino JSON dominated by 30-second `Capability status` lines, and a member's report ended with an occurrence count.
+- **Change.** Single records are now two-column tables, times read `YYYY-MM-DD HH:MM:SS UTC`, and booleans read yes/no. The sidecar is a table with an upstream-component table, and log lines are compact, without the routine noise. Member reports carry no occurrence footer. Every fence starts its own line, and a test enforces it. A sample was checked through GitHub's Markdown renderer.
+- **Status.** Committed locally; not yet pushed. No migration and no command change: a plain restart on DevBot and production.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 

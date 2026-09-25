@@ -6361,6 +6361,14 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ])
       expect(created?.body).toContain(section);
     expect(created?.body).not.toContain(config.DISCORD_TOKEN);
+    // Every code fence starts its line: a fence after text breaks GitHub's rendering of everything
+    // below it (the 2.18.0 "Sidecar health: ```json" line did). Times read as UTC, not raw ISO.
+    const lines = (created?.body ?? "").split("\n");
+    expect(lines.filter((line) => line.includes("```") && !line.startsWith("```"))).toEqual([]);
+    expect(created?.body).not.toMatch(/\d{2}:\d{2}:\d{2}\.\d{3}Z/u);
+    expect(created?.body).toStartWith("| Field | Value |");
+    // A member's report carries no occurrence footer; automatic reports do.
+    expect(created?.body).not.toContain("occurrence");
     expect(await reportRow(key)).toMatchObject({ issue_number: 1, posted_occurrences: 1 });
     // Nothing new: a second delivery posts nothing.
     expect(await reports.deliver(key, async () => {})).toEqual({ skipped: "nothing new" });

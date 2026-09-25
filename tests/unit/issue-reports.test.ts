@@ -8,11 +8,16 @@ import {
   BODY_LIMIT,
   bounded,
   details,
+  duration,
   fenced,
+  fields,
   fingerprint,
   firstPartyFrames,
+  logLines,
   redact,
   table,
+  when,
+  yesNo,
 } from "../../src/domain/reports.js";
 
 describe("redact", () => {
@@ -95,4 +100,39 @@ test("recent logs keep the newest records within their capacity", () => {
   for (const line of ["1\n", "2\n", "3\n", "4\n"]) logs.write(line);
   expect(logs.recent()).toEqual(["2", "3", "4"]);
   expect(logs.recent(2)).toEqual(["3", "4"]);
+});
+
+test("single records are two-column tables with readable times, durations and yes/no (2.18.1)", () => {
+  expect(
+    fields([
+      ["Ready", "yes"],
+      ["Skipped", undefined],
+    ]),
+  ).toBe("| Field | Value |\n| --- | --- |\n| Ready | yes |");
+  expect(fields([["A", 1]], ["Server", "Value"])).toStartWith("| Server | Value |");
+  expect(when(new Date("2026-09-25T03:07:37.378Z"))).toBe("2026-09-25 03:07:37 UTC");
+  expect(when(null)).toBe("—");
+  expect([yesNo(true), yesNo(false), yesNo(undefined)]).toEqual(["yes", "no", "—"]);
+  expect([
+    duration(45),
+    duration(720),
+    duration(13203.6),
+    duration(200000),
+    duration(Number.NaN),
+  ]).toEqual(["45 s", "12 min", "3.7 h", "2.3 d", "—"]);
+});
+
+test("log records become readable lines without routine or per-process noise (2.18.1)", () => {
+  expect(
+    logLines([
+      '{"level":30,"time":1790305657380,"pid":1,"hostname":"h","commands":20,"msg":"Modules loaded"}',
+      '{"level":30,"time":1790305688189,"pid":1,"hostname":"h","metrics":{"pending":0},"msg":"Capability status"}',
+      '{"level":40,"time":1790305690000,"pid":1,"hostname":"h","detail":{"code":"x"},"msg":"Retrying"}',
+      "not json",
+    ]),
+  ).toEqual([
+    "03:07:37 INFO Modules loaded · commands=20",
+    '03:08:10 WARN Retrying · detail={"code":"x"}',
+    "not json",
+  ]);
 });
