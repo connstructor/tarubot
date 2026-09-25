@@ -213,6 +213,12 @@ describe("cleaning rules", () => {
       expect(cleaned(raw ?? "")).toBe(expected ?? "");
   });
 
+  test('"Awww." and a bare "www." are words, not links', () => {
+    for (const phrase of ["Awww. That would be cute to have", "the site www. is down"])
+      expect(cleaned(phrase)).toBe(phrase);
+    expect(cleaned("see www.example.com please")).toBe("see [link removed] please");
+  });
+
   test("email addresses, long IDs and every @ go", () => {
     expect(cleaned("mail me at someone.else+tag@example.co.uk soon")).toBe(
       "mail me at [email removed] soon",
@@ -258,6 +264,208 @@ describe("cleaning rules", () => {
       ["small \u{FE6B}claude too", "small ＠claude too"],
     ])
       expect(cleaned(raw ?? "")).toBe(expected ?? "");
+  });
+});
+
+/**
+ * The hostile review of the host rule (2.26.0): each bypass it found, with the cleaned text and the
+ * title, since a title isn't fenced. `gone` expects `see <form> please` to lose the whole form.
+ */
+describe("the hostile review's bypasses", () => {
+  const gone = (form: string) => {
+    const { text, title } = pipeline(`see ${form} please`);
+    expect({ form, text, title }).toEqual({
+      form,
+      text: "see [link removed] please",
+      title: "see [link removed] please",
+    });
+  };
+  const stays = (phrase: string) => expect(cleaned(phrase)).toBe(normalise(phrase));
+
+  test("a fully qualified host's final dot doesn't hide it", () => {
+    for (const form of [
+      "discord.gg./abcdef",
+      "discord.gg\u{3002}/abcdef",
+      "example.com.:8080/admin",
+      "abc.xn--p1ai./x",
+      "localhost.:3000/admin",
+      "例子.中国./路径",
+    ])
+      gone(form);
+    // Abbreviations before a slash have one-letter "TLDs", so they stay.
+    for (const phrase of ["i.e./etc should stay", "at 9 a.m./p.m. each day", "e.g./or"])
+      stays(phrase);
+  });
+
+  test("a backslash path goes like a slash, and so does a special scheme's host", () => {
+    for (const form of [
+      "discord.gg\\abcdef",
+      "example.com:8080\\x",
+      "https:discord.gg\\abc",
+      "https:\\\\example.com\\secret",
+      "https:/example.com",
+      "https:intranet/secret",
+      "http:///example.com/x",
+    ])
+      gone(form);
+    // A scheme word on its own, or at the end of another word, stays.
+    for (const phrase of ["https: is better than http: for sure", "my profile:Kaanidog, news:none"])
+      stays(phrase);
+  });
+
+  test("an empty port goes", () => {
+    for (const form of ["discord.gg:/abcdef", "discord.gg:?code", "localhost:/admin"]) gone(form);
+    stays("Node.js: it would help");
+  });
+
+  test("percent-escaped hosts go, as browsers decode them", () => {
+    for (const form of [
+      "discord%2Egg/abcdef",
+      "discord%2egg/abcdef",
+      "disc%6Frd.gg/abcdef",
+      "discord%E3%80%82gg/abcdef",
+      "discord.gg%2E/abcdef",
+      "127%2E0%2E0%2E1/admin",
+    ])
+      gone(form);
+    // A leading escaped dot stays in front of the host it doesn't belong to.
+    expect(cleaned("see %2Eexample.com/x please")).toBe("see %2E[link removed] please");
+    for (const phrase of ["It's 100% done", "50%/50% split", "grew 20%.Next time"]) stays(phrase);
+  });
+
+  test("emoji and symbol labels go, as browsers accept them", () => {
+    for (const form of [
+      "i\u{2764}.ws/abcdef",
+      "\u{1F355}.ws/abcdef",
+      "\u{2603}.net/secret",
+      "ab\u{2665}.com/secret",
+      "ab\u{20AC}.com/secret",
+      "abc.\u{1F355}.ws/abcdef",
+      // U+FE0F, the emoji variation selector, is removed first.
+      "\u{2764}\u{FE0F}.ws/x",
+    ])
+      gone(form);
+    for (const phrase of ["I \u{2764} it. Can we/should we?", "Great idea \u{1F44D}. Also/maybe"])
+      stays(phrase);
+  });
+
+  test("IPv4 in octal or hexadecimal, and touching letters, goes", () => {
+    for (const form of [
+      "0x7f.1/admin",
+      "0x7f.0x0.0x0.0x1/admin",
+      "0x7f000001/admin",
+      "0177.0.0.01/admin",
+      "0177.0.0.1",
+    ])
+      gone(form);
+    for (const [raw, expected] of [
+      ["server ip192.168.1.10 please", "server ip[link removed] please"],
+      ["server _192.168.1.10 please", "server _[link removed] please"],
+      ["server 192.168.1.10x please", "server [link removed]x please"],
+      ["server IP192.168.1.10:8080/admin please", "server IP[link removed] please"],
+    ])
+      expect(cleaned(raw ?? "")).toBe(expected ?? "");
+    // Versions, a build number, ratings, times and counts stay; so, as an accepted limit, do
+    // addresses written as one to three decimal numbers, which read exactly like them.
+    for (const phrase of [
+      "since v1.2.3.4",
+      "a build number 1.2.3.4567",
+      "rated 3.5/5, open 24/7, at 10.30:00",
+      "see 2.26.0/2.27.0 notes",
+      "admin at 127.1:8080/admin now",
+      "admin at 192.168.1/admin now",
+      "admin at 2130706433/admin now",
+    ])
+      stays(phrase);
+  });
+
+  test("Chinese and Japanese sound marks in a host don't hide it", () => {
+    for (const form of [
+      "discord.gg\u{3099}/abcdef",
+      "discord.g\u{3099}g/abcdef",
+      "discord.gg\u{302A}/abcdef",
+      "disc\u{3099}ord.gg/abcdef",
+      "discord\u{3099}.gg/abcdef",
+    ])
+      gone(form);
+  });
+
+  test("the ideographic full stop's accepted limit covers any host it sits next to", () => {
+    // `。` next to a Chinese or Japanese label or TLD reads as the end of a sentence, whatever
+    // comes before or after it, so a Latin subdomain or a Latin host with such a TLD stays too.
+    for (const phrase of [
+      "join secret-token-abc.例え\u{3002}jp/private please",
+      "join discord\u{3002}コム/abcdef please",
+      "join example\u{3002}中国/secret please",
+      "join ディスコード\u{3002}gg/abcdef please",
+      "join discord\u{3002}コム:443 please",
+    ])
+      stays(phrase);
+  });
+
+  test("quoted and punctuated email addresses go", () => {
+    for (const address of [
+      '"john doe"@example.com',
+      "john!smith@example.com",
+      "o'brien@example.com",
+      "john@mail_srv.example.com",
+      "john@i\u{2764}.ws",
+    ])
+      expect(cleaned(`mail ${address} soon`)).toBe("mail [email removed] soon");
+    // A name at a world (FFXIV's Name@World) has no dot and stays, like a look-alike dot (U+A4F8).
+    for (const [raw, expected] of [
+      ["find Kaani Dog@Cactuar soon", "find Kaani Dog＠Cactuar soon"],
+      ["mail john@example\u{A4F8}com soon", "mail john＠example\u{A4F8}com soon"],
+    ])
+      expect(cleaned(raw ?? "")).toBe(expected ?? "");
+  });
+
+  test("credentials without a scheme go with the host", () => {
+    for (const form of [
+      "admin:hunt!er2@example.com/x",
+      "admin:p@ss@example.com/x",
+      "db:user:s3cr3t*@example.com/x",
+    ])
+      gone(form);
+    // A bracket ends the user part, so it stays; the link takes what follows it, as ever.
+    expect(cleaned("(see admin:pw@example.com/x)")).toBe("(see [link removed]");
+  });
+
+  test("an ID in keycaps, with marks, or in other number characters goes", () => {
+    const keycaps = [..."123456789012345678"].map((digit) => `${digit}\u{FE0F}\u{20E3}`).join("");
+    for (const id of [
+      keycaps,
+      "1234567890\u{307}123456789",
+      "12345678\u{3099}90123456789",
+      "\u{2780}\u{2781}\u{2782}\u{2783}\u{2784}\u{2785}\u{2786}\u{2787}\u{2788}\u{2789}\u{2780}\u{2781}\u{2782}\u{2783}\u{2784}\u{2785}\u{2786}\u{2787}",
+      "\u{2776}\u{2777}\u{2778}\u{2779}\u{277A}\u{277B}\u{277C}\u{277D}\u{277E}\u{2776}\u{2777}\u{2778}\u{2779}\u{277A}\u{277B}\u{277C}\u{277D}\u{277E}",
+    ]) {
+      const { text, title } = pipeline(`id ${id} ok`);
+      expect({ id, text, title }).toEqual({
+        id,
+        text: "id [ID removed] ok",
+        title: "id [ID removed] ok",
+      });
+    }
+    // Keycap choices are short and stay.
+    expect(cleaned("pick 1\u{FE0F}\u{20E3} or 2\u{FE0F}\u{20E3}")).toBe(
+      "pick 1\u{20E3} or 2\u{20E3}",
+    );
+  });
+
+  test("look-alike separators without a compatibility form stay (an accepted limit)", () => {
+    // Browsers send these to other hosts, so none is a link, and `·`, `։`, `۔` and `٠` are
+    // punctuation or a digit in their own scripts.
+    for (const phrase of [
+      "join discord\u{B7}gg/abcdef now",
+      "join discord\u{A4F8}gg/abcdef now",
+      "join discord\u{660}gg/abcdef now",
+      "join discord\u{589}gg/abcdef now",
+      "join discord.gg\u{2215}abcdef now",
+      "join discord.gg\u{2044}abcdef now",
+      "Catalan col\u{B7}lecci\u{F3}/opcions",
+    ])
+      stays(phrase);
   });
 });
 
@@ -344,6 +552,7 @@ describe("the fixed point", () => {
       "<a<:b:1>1> my idea here",
       "@@@ <<<>>> :1> </ run:1>",
       "see пример.рф/путь, 例子.中国/路径 or discord。gg/x, then 招待はこちらdiscord.gg/y",
+      'see discord.gg./x, discord%2Egg/y, i\u{2764}.ws/z, ip192.168.1.10 and "a b"@c.de',
     ])
       expect(clean(cleaned(raw))).toBe(cleaned(raw));
   });
@@ -372,6 +581,32 @@ describe("the fixed point", () => {
     expect(command).toHaveLength(988);
     expect(clean(emoji)).toBe(":b:");
     expect(clean(command)).toBe("/run");
+  });
+
+  test("adversarial 1,000-character chains clean in linear time", () => {
+    // Each takes under 1 ms warm; the bound only catches a regression to quadratic or exponential
+    // backtracking (an ambiguous `.` in one lookahead once took `1.1.1…` to 4.7 seconds).
+    const fill = (unit: string) => unit.repeat(Math.ceil(1000 / unit.length)).slice(0, 1000);
+    for (const text of [
+      fill("1."),
+      `例${fill("1.")}`.slice(0, 1000),
+      fill("例1."),
+      fill("例.1."),
+      fill("-例-."),
+      fill("a\u{3002}"),
+      fill("a%2e"),
+      fill("%41"),
+      fill("x@例."),
+      fill("a:b@"),
+      fill("\u{2764}."),
+      fill("0x0."),
+      fill("1\u{301}"),
+    ]) {
+      const started = performance.now();
+      clean(text);
+      const fast = performance.now() - started < 250;
+      expect({ text: text.slice(0, 8), fast }).toEqual({ text: text.slice(0, 8), fast: true });
+    }
   });
 });
 
@@ -412,6 +647,11 @@ describe("seeded fuzz", () => {
         (fragment) => () => fragment,
       ),
       ...["xn--p1ai", "xn--", "مثال", ".भारत", "\u{301}", "ー", "ON/", "münchen"].map(
+        (fragment) => () => fragment,
+      ),
+      // The hostile review's shapes: final dots, backslashes, empty ports, escapes, symbols,
+      // hexadecimal addresses, sound marks, keycaps, quotes and user parts.
+      ...["\\", ":/", "%2E", "%41", "\u{2764}", "0x7f", "\u{3099}", "\u{20E3}", '"', "a:b@"].map(
         (fragment) => () => fragment,
       ),
       ...["\u{AD}", "\u{200B}", "\u{180B}", "\u{17B4}", "\u{E0041}", "\u{FF20}", "\u{D800}"].map(

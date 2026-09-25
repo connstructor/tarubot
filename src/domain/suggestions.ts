@@ -10,9 +10,18 @@
  * 3. `suggestionTitle` and `suggestionBody`: the fixed public format, with the text fenced;
  * 4. `assertPublic`: a final check over all three, which fails only if the steps above have a bug.
  *
- * Names typed freely, IDs deliberately split with visible separators, and a Chinese or Japanese
- * host written next to `。` (which reads as the end of a sentence) can't be recognised; the option's
- * description warns members, and the owner moderates after posting.
+ * Some things can't be recognised; the option's description warns members, and the owner
+ * moderates after posting:
+ * - names typed freely, and IDs deliberately split with visible separators;
+ * - a host whose `。` sits next to a Chinese or Japanese label or TLD, which reads as the end of a
+ *   sentence (`例え。jp/パス`, `discord。コム/…`, `ディスコード。gg/…`, `abc.例え。jp/…`), whatever
+ *   follows it;
+ * - look-alike dots and slashes that have no compatibility form (`discord·gg`, `discordꓸgg`,
+ *   `discord.gg∕x`). Browsers send these to a different host, so they aren't links, and several are
+ *   real punctuation or digits in their own scripts (`·` in Catalan, `։` in Armenian, `٠`);
+ * - IPv4 addresses written as one to three decimal numbers (`127.1`, `192.168.1`, `2130706433`),
+ *   which can't be told apart from ratings, times, version ranges and counts (`3.5/5`, `10.30:00`,
+ *   `2.26.0/2.27.0`, `24/7`), and IPv6 addresses.
  */
 import type { Actor } from "./policy.js";
 import { BODY_LIMIT, fenced, SECRET_PATTERNS } from "./reports.js";
@@ -77,66 +86,133 @@ export function normalise(raw: string): string {
 
 /*
  * The host form of the link rule, built from named `v`-mode (Unicode sets) pieces so it can name
- * the scripts it treats differently. A label is letters, digits, marks and `-` in any script, so an
- * internationalised host (`пример.рф/путь`, `उदाहरण.भारत/पथ`, `مثال.إختبار/مسار`) goes like its
- * ASCII equivalent, and a TLD is letters and marks, or punycode (`xn--p1ai`). Labels are separated
- * by `.` or by `。`, which browsers treat as a dot; `normalise` has already folded `．` into `.` and
- * `｡` into `。`.
+ * the scripts it treats differently. Browsers read a host generously (the WHATWG URL parser, with
+ * UTS 46 for names outside ASCII), and the rule follows them:
+ * - a label is letters, digits, marks, symbols outside ASCII and `-` in any script, so an
+ *   internationalised host (`пример.рф/путь`, `उदाहरण.भारत/पथ`, `مثال.إختبار/مسار`, `i❤.ws/…`,
+ *   `☃.net/…`) goes like its ASCII equivalent; a TLD is letters and marks, or punycode (`xn--p1ai`);
+ * - labels are separated by `.` or by `。`, which browsers treat as a dot (`normalise` has already
+ *   folded `．` into `.` and `｡` into `。`), and a host may end in one more of them, as a fully
+ *   qualified name does (`discord.gg./…`, `discord.gg。/…`);
+ * - browsers decode percent-escapes in a host, so an escape counts as the character it encodes
+ *   would: `%2E` (and the escaped `。`, `．` and `｡`) separates labels, and any other escape is a
+ *   label character (`discord%2Egg/…`, `disc%6Frd.gg/…`);
+ * - a path may start with `\`, which browsers read as `/`, and a port may be empty
+ *   (`discord.gg\…`, `discord.gg:/…`).
  *
  * Han, Hiragana and Katakana are written without spaces, and their sentences end in `。`, `．` or
  * `？`, so three rules keep ordinary Chinese and Japanese text from reading as a host:
  * - a label never mixes their letters with other scripts' letters, and in a host their labels come
  *   after any others (`blog.例え.jp`), so text running straight into a link stays
- *   (`招待はこちらdiscord.gg/x` and `…ます.discord.gg/x` keep `招待はこちら` and `…ます.`);
+ *   (`招待はこちらdiscord.gg/x` and `…ます.discord.gg/x` keep `招待はこちら` and `…ます.`). A mark
+ *   is never a letter, so their sound marks count in other labels too (`discord.gg゙/…` goes);
  * - `。` separates labels only where neither side is in those scripts, so `…です。できますか？…`
  *   and `…しました。ON/OFF…` stay, and so does `例え。jp/パス`, which can't be told apart from them;
  * - a TLD in those scripts (`.中国`, `.みんな`) needs a `.` before it and a port or a path after
  *   it, so `好的.可以吗?谢谢` stays.
- * A host's labels can start matching only where a run of them begins (not inside a label, and not
- * after a label that could have led the run), so each run is scanned once and the labels need no
- * length bound.
+ * A host's labels can start matching only where a run of them begins (not inside a label or an
+ * escape, and not after a label that could have led the run), so the labels need no length bound
+ * and a run is scanned about once: the slowest 1,000-character shapes tried take under 1 ms a pass.
  */
-/** Han, Hiragana and Katakana, by script extension, so `々`, `ー` and the sound marks count. */
+/** Han, Hiragana and Katakana, by script extension, so `々` and `ー` count. */
 const CJK = String.raw`[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]`;
-/** A label character outside those scripts: a letter, digit or mark of any other script, or `-`. */
-const WORD = String.raw`[[\p{L}\p{N}\p{M}\-]--${CJK}]`;
-/** A digit, mark or `-` outside those scripts, which may also lead a label in them (`1日`). */
-const NEUTRAL = String.raw`[[\p{N}\p{M}\-]--${CJK}]`;
-/** A Han, Hiragana or Katakana letter, digit or mark (not their punctuation, such as `。`). */
-const CJK_CHAR = String.raw`[[\p{L}\p{N}\p{M}]&&${CJK}]`;
-/** A label of other scripts, then `.`, or `。` unless a Han, Hiragana or Katakana label follows. */
-const WORD_LABEL = String.raw`${WORD}+(?:\.|。(?!${NEUTRAL}*${CJK_CHAR}))`;
-/** A Han, Hiragana or Katakana label, which may carry digits, marks and `-`, then `.`. */
-const CJK_LABEL = String.raw`${NEUTRAL}*${CJK_CHAR}[${CJK_CHAR}${NEUTRAL}]*\.`;
+/** A label character of any script: a letter, digit, mark, symbol outside ASCII, or `-`. */
+const HOST_CHAR = String.raw`[\p{L}\p{N}\p{M}\-[\p{S}--\p{ASCII}]]`;
+/** A label character outside those scripts, or a mark of any script. */
+const WORD = String.raw`[[${HOST_CHAR}--${CJK}]\p{M}]`;
 /**
- * Labels of other scripts, then any Han, Hiragana or Katakana ones, starting where such a run
- * begins: not inside a label, and not just after a label of other scripts and its separator.
+ * A digit or `-` outside those scripts, or a mark of any script (a mark is never a letter), which
+ * may sit in a label of any script and lead one in those scripts (`1日`).
  */
-const WORD_RUN = `(?<!${WORD}[.。]?)(?:${WORD_LABEL})+(?:${CJK_LABEL})*`;
+const NEUTRAL = String.raw`[[[\p{N}\-]--${CJK}]\p{M}]`;
+/** A Han, Hiragana or Katakana letter or digit (not their punctuation, such as `。`). */
+const CJK_CHAR = String.raw`[[\p{L}\p{N}]&&${CJK}]`;
+/** `.`, or an escaped `.`, `。`, `．` or `｡`, which a browser decodes into one. */
+const DOT = String.raw`(?:\.|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1)`;
+/** Any other percent-escape: a label character once decoded. */
+const ESCAPE = String.raw`%(?!2e|e3%80%82|ef%bc%8e|ef%bd%a1)[\da-f]{2}`;
+/** A label of other scripts, then a dot, or `。` unless a Han, Hiragana or Katakana label follows. */
+const WORD_LABEL = `(?:${WORD}|${ESCAPE})+(?:${DOT}|。(?!${NEUTRAL}*${CJK_CHAR}))`;
+/** A Han, Hiragana or Katakana label, which may carry digits, marks and `-`, then a dot. */
+const CJK_LABEL = `${NEUTRAL}*${CJK_CHAR}[${CJK_CHAR}${NEUTRAL}]*${DOT}`;
 /**
- * Han, Hiragana or Katakana labels alone, starting where such a run begins: not inside a label,
- * and not just after any label and a `.`.
+ * Han, Hiragana or Katakana labels, with labels of only digits, marks and `-` among them after the
+ * first (`例.1.jp`).
  */
-const CJK_RUN = String.raw`(?<![${CJK_CHAR}${NEUTRAL}]|[\p{L}\p{N}\p{M}\-]\.)(?:${CJK_LABEL})+`;
-/** A TLD outside those scripts, or punycode. */
-const TLD = String.raw`(?:xn--[a-z\d\-]{1,59}|[[\p{L}\p{M}]--${CJK}]{2,63})`;
+const CJK_LABELS = `${CJK_LABEL}(?:${CJK_LABEL}|${NEUTRAL}+${DOT})*`;
+/** A separator: `。` or a dot. */
+const SEP = `(?:。|${DOT})`;
+/**
+ * Where a run of labels of other scripts may start: not inside a label or an escape, and not just
+ * after a label (or an escape) and its separator, which a run starting there would have covered.
+ * An escape's hex digits don't count as a label there, so a run can start after a leading `%2E`.
+ */
+const RUN_START = String.raw`(?<!(?<!%[\da-f]?)${WORD}${SEP}?|${ESCAPE}${SEP}?)(?!(?<=%)[\da-f]{2}|(?<=%[\da-f])[\da-f])`;
+/**
+ * Just after a Han, Hiragana or Katakana letter (and a separator), a run starts only where a letter
+ * or symbol of other scripts, or an escape, comes before their next letter (`例1abc.com/…`,
+ * `例.1.discord.gg/…`): digits alone there belong to their label, which CJK_RUN reads, so a chain
+ * of them isn't scanned again from every label. The two branches exclude each other, so the
+ * lookahead runs only there.
+ */
+const AFTER_CJK = `(?:(?<!${CJK_CHAR}${SEP}?)|(?<=${CJK_CHAR}${SEP}?)(?=(?:${NEUTRAL}|${SEP})*(?:[${WORD}--${NEUTRAL}]|${ESCAPE})))`;
+/** Labels of other scripts, then any Han, Hiragana or Katakana ones. */
+const WORD_RUN = `${RUN_START}${AFTER_CJK}(?:${WORD_LABEL})+(?:${CJK_LABELS})?`;
+/**
+ * Han, Hiragana or Katakana labels alone, after any labels of only digits, marks and `-`
+ * (`1.例.jp`), starting where such a run begins: not inside a label, and not just after any label
+ * and a `.`.
+ */
+const CJK_RUN = String.raw`(?<![${CJK_CHAR}${NEUTRAL}]|${HOST_CHAR}\.)(?:${NEUTRAL}+${DOT})*${CJK_LABELS}`;
+/** A TLD outside those scripts (a mark of any script counts), or punycode. */
+const TLD = String.raw`(?:xn--[a-z\d\-]{1,59}|(?:[[\p{L}--${CJK}]\p{M}]|${ESCAPE}){2,63})`;
 /** A Han, Hiragana or Katakana TLD. */
 const CJK_TLD = String.raw`[[\p{L}\p{M}]&&${CJK}]{2,63}`;
+/** A path (`/`, or `\`, which browsers read as `/`) after an optional port, which may be empty. */
+const PATH = String.raw`(?::\d{0,5})?[\/\\]`;
 /** What makes a host a link: a port, a path, or a query or fragment. */
-const AFTER_HOST = String.raw`(?::\d{1,5}|\/|[?#]\S)`;
-/** A TLD and what follows it; a Han, Hiragana or Katakana TLD takes only a port or a path. */
-const HOST_END = String.raw`(?:${TLD}${AFTER_HOST}|${CJK_TLD}(?::\d{1,5}|\/))`;
-/** A `user@` in front of a linked host. */
-const USER = String.raw`(?:[\p{L}\p{N}\p{M}._%+\-]{1,64}@)?`;
+const AFTER_HOST = String.raw`(?:${PATH}|(?::\d{0,5})?[?#]\S|:\d{1,5})`;
+/**
+ * A TLD, an optional final dot, and what follows; a Han, Hiragana or Katakana TLD takes only a
+ * port or a path, and a final `.` (a `。` after it reads as the end of a sentence).
+ */
+const HOST_END = String.raw`(?:${TLD}(?:${DOT}|。)?${AFTER_HOST}|${CJK_TLD}${DOT}?(?:${PATH}|:\d{1,5}))`;
+/** A character of a URL's user part: anything but a space, `/`, `\`, `?`, `#` and brackets. */
+const USER_CHAR = String.raw`[^\s\/\\?#\(\)<>\[\]\{\}]`;
+/**
+ * A `user@` or `user:password@` in front of a linked host, up to its last `@` as browsers read it.
+ * It starts only where a word does (not just after another user character), so it is scanned once
+ * per word; a bracket ends it, so it can't take a replacement token's bracket with it.
+ */
+const USER = `(?:(?<!${USER_CHAR})${USER_CHAR}{1,256}@)?`;
+/** One part of an IPv4 address as browsers read it: decimal, octal (`0177`) or hexadecimal. */
+const IP_PART = String.raw`(?:0x[\da-f]{0,8}|0\d{0,11}|[1-9]\d{0,2})`;
+/** A dot between IPv4 parts: any of the host's dots. */
+const IP_DOT = `(?:${DOT}|。)`;
+/**
+ * An IPv4 address: four parts (`192.168.1.10`, `0177.0.0.1`), or one to three with a hexadecimal
+ * part (`0x7f.1`), which no number in prose has, before a port, path, query or fragment. It may
+ * touch letters on either side (`ip192.168.1.10`, `192.168.1.10x`), but not an ASCII digit, so
+ * `1.2.3.4567` stays, and not a lone `v` before it, so a version (`v1.2.3.4`) stays too.
+ */
+const IPV4 = String.raw`(?<!\d|\bv)(?:${IP_PART}(?:${IP_DOT}${IP_PART}){3}|(?:${IP_PART}${IP_DOT}){0,2}0x[\da-f]{0,8}(?:${IP_DOT}${IP_PART}){0,2}(?=${AFTER_HOST}))(?!\d)`;
 /** Rule f, as PUBLIC_PATTERNS describes it. */
 const LINK = new RegExp(
   [
-    String.raw`[a-z][a-z\d+.\-]{0,31}:\/\/\S*`,
-    String.raw`www(?:\.|。(?=${WORD}))\S*`,
-    String.raw`${USER}(?:(?:${WORD_RUN}|${CJK_RUN})${HOST_END}|\blocalhost${AFTER_HOST})\S*`,
-    String.raw`${USER}\b\d{1,3}(?:\.\d{1,3}){3}\b(?:${AFTER_HOST}\S*)?`,
+    String.raw`[a-z][a-z\d+.\-]{0,31}:[\/\\]{2}\S*`,
+    String.raw`\b(?:https?|wss?|ftp|file):[\/\\]*(?=${HOST_CHAR}|[%\[])\S*`,
+    String.raw`www(?:\.(?=\S)|。(?=${WORD}))\S*`,
+    String.raw`${USER}(?:(?:${WORD_RUN}|${CJK_RUN})${HOST_END}|\blocalhost(?:${DOT}|。)?${AFTER_HOST})\S*`,
+    String.raw`${USER}${IPV4}(?:${AFTER_HOST}\S*)?`,
   ].join("|"),
   "giv",
+);
+/** A label of an email address's domain: a host's label characters, or `_`. */
+const MAIL_LABEL = String.raw`[\p{L}\p{N}\p{M}_\-[\p{S}--\p{ASCII}]]{1,63}`;
+/** An email address: a quoted or plain local part (any of RFC 5322's characters), then a domain. */
+const EMAIL = new RegExp(
+  String.raw`(?:"[^"\n]{1,64}"|[\p{L}\p{N}\p{M}._%+\-!#$&'*\/=?^\`\{\|\}~]{1,64})@${MAIL_LABEL}(?:[.。]${MAIL_LABEL})+`,
+  "gv",
 );
 
 /**
@@ -144,19 +220,24 @@ const LINK = new RegExp(
  * One list drives both `clean` and `assertPublic`, so the check can't be stricter than the cleaner.
  * - Discord markup: member, role and channel mentions become words; custom emoji keep their name
  *   and command mentions their path, without the IDs.
- * - Links (rule f): any scheme URL; `www.…`, and `www。…` when a label outside Han, Hiragana and
- *   Katakana follows (so `面白いwww。次は…` stays); a host in any script (see above) or `localhost`
- *   followed by a port, a path, or a query or fragment (`?x`, `#x`), scheme or not, so
- *   `discord.gg/…`, `discord.gg?…`, `discord。gg/…`, `discord.com/channels/…`, `example.com:8080`,
- *   `пример.рф/путь`, `例子.中国/路径` and Lodestone character pages all go; and any IPv4 address,
- *   with whatever port, path, query or fragment follows it. A `user@` in front goes with the link,
- *   so an email address followed by a path or query can't leave its name behind. A bare domain
- *   (`discord.gg`) or `localhost` carries no ID and stays, and so does a word before a colon or a
- *   question mark ("Node.js: …", "Node.js?"). Links run before the credential shapes, so a ping
- *   URL or a URL with credentials goes whole.
- * - Email addresses in any script, with `.` or `。` between the domain's labels, then the issue
- *   reporter's credential shapes (never the deployment's own secret values), then runs of 17 or
- *   more digits in any script (Discord and Lodestone IDs).
+ * - Links (rule f): any URL with `//` or `\\` after its scheme, and a word `http:`, `https:`,
+ *   `ws:`, `wss:`, `ftp:` or `file:` before a host with any number of slashes, as browsers read
+ *   them (`https:example/x`, but not `profile:x`); `www.` before anything but a space ("Awww.
+ *   That…" stays), and `www。…` when a label outside Han, Hiragana and Katakana follows (so
+ *   `面白いwww。次は…` stays); a host in any script (see above) or `localhost` followed by a port, a
+ *   path, or a query or fragment (`?x`, `#x`), scheme or not, so `discord.gg/…`, `discord.gg?…`,
+ *   `discord。gg/…`, `discord.gg./…`, `discord.com/channels/…`, `example.com:8080`,
+ *   `пример.рф/путь`, `例子.中国/路径` and Lodestone character pages all go; and any IPv4 address
+ *   (see IPV4), with whatever port, path, query or fragment follows it. A `user@` or `user:password@` in front goes with the link, so an email
+ *   address or credentials followed by a path or query can't leave a name or password behind. A
+ *   bare domain (`discord.gg`) or `localhost` carries no ID and stays, and so does a word before a
+ *   colon or a question mark ("Node.js: …", "Node.js?"). Links run before the credential shapes,
+ *   so a ping URL or a URL with credentials goes whole.
+ * - Email addresses in any script, with a quoted local part or any of the characters RFC 5322
+ *   allows unquoted (`"john doe"@…`, `hunt!er2@…`), and `.` or `。` between the domain's labels;
+ *   then the issue reporter's credential shapes (never the deployment's own secret values); then
+ *   runs of 17 or more digits or other number characters in any script (Discord and Lodestone
+ *   IDs), with any marks on them (keycaps `1⃣`, `1̇`), so `➀➁…` and `1⃣2⃣…` go too.
  * - Every `@` last: a GitHub @mention notifies that account, and `@claude` would ask the agent.
  * The quantifiers are bounded (or, for a host's labels, start only where a run begins) and Discord
  * caps the option at 1,000 characters, so backtracking stays small. No replacement equals its own
@@ -169,12 +250,9 @@ export const PUBLIC_PATTERNS: readonly (readonly [RegExp, string])[] = [
   [/<a?:(\w{1,32}):\d+>/gu, ":$1:"],
   [/<\/([-\w ]{1,100}):\d+>/gu, "/$1"],
   [LINK, "[link removed]"],
-  [
-    /[\p{L}\p{N}\p{M}._%+-]{1,64}@[\p{L}\p{N}\p{M}-]{1,63}(?:[.。][\p{L}\p{N}\p{M}-]{1,63})+/gu,
-    "[email removed]",
-  ],
+  [EMAIL, "[email removed]"],
   ...SECRET_PATTERNS,
-  [/\p{Nd}{17,}/gu, "[ID removed]"],
+  [/\p{N}(?:\p{M}*\p{N}){16,}\p{M}*/gu, "[ID removed]"],
   [/@/gu, "＠"],
 ];
 
@@ -264,10 +342,14 @@ const CONTROL = /(?!\n)\p{Cc}/u;
 const LONG_ID = /\p{Nd}{17,}/u;
 
 /**
- * The final check before anything is posted. Titles are cut and bodies wrapped only at spaces,
- * after `clean`, so neither can create a match `clean` didn't see: a failure here is a bug, thrown
- * as a plain Error so the member gets the unexpected-failure card and the owner a private report.
- * `search` ignores the global patterns' lastIndex.
+ * The final check before anything is posted: the text must match none of PUBLIC_PATTERNS, and the
+ * title and body, which only cut, wrap and fence it, must carry no `@`, long ID, `#` in the title,
+ * invisible character or control. The link rule isn't run over the title and body: a cut title
+ * can end `example.com?…`, and fencing turns backticks into `ʼ` (a letter), so `discord```.gg/x`
+ * reads `discordʼʼʼ.gg/x` in the body. Neither is a link GitHub renders, since titles aren't linked
+ * and the body is fenced, and neither adds anything the member wrote. A failure here is a bug,
+ * thrown as a plain Error so the member gets the unexpected-failure card and the owner a private
+ * report. `search` ignores the global patterns' lastIndex.
  */
 export function assertPublic(text: string, title: string, body: string): void {
   const safe = (part: string) =>
