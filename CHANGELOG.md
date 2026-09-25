@@ -1,6 +1,30 @@
 # Version history
 
-The current application version is **2.23.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.24.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.24.0 — Daily encrypted off-site database backups
+
+The robust, disposable host's backup layer. Linode's point-in-time recovery reaches back to the cluster's creation, and now a daily dump lives outside the cluster too. The owner chose Linode Object Storage over Backblaze B2 ("not really worried about Akamai going down") and set up the bucket, a key limited to it, and a second healthchecks.io check. The bot itself doesn't change: there is no migration, no command change and no restart.
+
+- **`ops/backup.sh`**, daily at 04:30 UTC from the `tarubot` user's crontab on the host.
+  - `pg_dump` (custom format) runs in the pinned PostgreSQL 18 image through a new profile-only `backup` service in the production Compose file, which `up` never starts, with the bot's database URL and verified TLS.
+  - The dump streams straight into `age` for `ops/age-recipients.txt`, so no plaintext touches the disk and the host can't decrypt what it wrote.
+  - `curl` signs the uploads itself (SigV4): `daily/` every day and `monthly/` on the 1st. An encrypted copy of the host's `.env` goes to `env/`, keeping the settings copy current without the operator machine.
+  - healthchecks.io's "TaruBot backups" check hears the start, then success with the sizes, or a failure naming the step.
+  - Strict bash (`set -Eeuo pipefail`, `umask 077`). Credentials and ping URLs reach curl on stdin, never in its arguments.
+  - **Review fix.** The `backup` service's logging is off (`driver: none`). Its stdout is the unencrypted dump, and Docker's logging driver copies a container's stdout to disk even while `docker compose run` pipes it. The first test run's plaintext stayed in that container's log file until `--rm` removed it.
+- **Retention.** `ops/bucket-lifecycle.xml` keeps `daily/` and `env/` for 30 days and `monthly/` for a year. It is applied to the bucket and was read back.
+- **Settings.** The host's `.env` holds `BACKUP_STORAGE_ENDPOINT`, `_ACCESS_KEY`, `_SECRET_KEY`, `_REGION` and `HEALTHCHECKS_BACKUP_URL`. The bot never sees them, because Compose passes it only its own settings. `host-env-backup` now expects all five.
+- **Docs.** HOSTING.md's "Backups and recovery" covers the three layers, the weekly maintenance window, the bucket and its limits (Linode has no write-only keys), setup, retention and restore. Rebuild step 10 points to it.
+- **Tests.** `tests/unit/backup-job.test.ts`:
+  - the script's syntax and strict mode;
+  - the dump encrypted as it streams;
+  - no secrets in curl's arguments;
+  - https only;
+  - the Compose service behind its profile, with the registry deployment's PostgreSQL image and verified TLS;
+  - the retention rules.
+
+  The Compose test now allows the profile-only service.
 
 ## 2.23.0 — A rebuild runbook and an off-host settings copy
 

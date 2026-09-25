@@ -26,7 +26,16 @@ export const REQUIRED_SETTINGS = [
   "DISCORD_TOKEN",
 ] as const;
 /** Settings a complete production `.env` also holds; their absence is reported, not refused. */
-export const EXPECTED_SETTINGS = ["GITHUB_REPORTS_TOKEN", "HEALTHCHECKS_PING_URL"] as const;
+export const EXPECTED_SETTINGS = [
+  "GITHUB_REPORTS_TOKEN",
+  "HEALTHCHECKS_PING_URL",
+  // The daily backup's storage and check (2.24.0; ops/backup.sh).
+  "BACKUP_STORAGE_ENDPOINT",
+  "BACKUP_STORAGE_ACCESS_KEY",
+  "BACKUP_STORAGE_SECRET_KEY",
+  "BACKUP_STORAGE_REGION",
+  "HEALTHCHECKS_BACKUP_URL",
+] as const;
 
 export interface Options {
   host: string;

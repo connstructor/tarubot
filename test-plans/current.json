@@ -1,15 +1,15 @@
 {
-  "title": "Session: 2.23.0 rebuild runbook and settings copy",
-  "objective": "2.23.0 adds the host rebuild runbook and an encrypted, off-host copy of the production settings. It changes no running code: DevBot and production keep 2.22.0, and there is nothing to deploy.",
+  "title": "Session: 2.24.0 daily encrypted backups",
+  "objective": "2.24.0 adds a daily encrypted database dump from the production host to Linode Object Storage, with its own healthchecks.io check. The bot itself doesn't change: DevBot and production keep running, and deploying is a pull plus a crontab line on the host.",
   "user": [
-    "Keep a second copy of the age key (~/tarubot-cutover/age/tarubot.key) in your password manager.",
-    "Read HOSTING.md's \"Rebuilding the host\" once and say if any step doesn't match how you'd do it.",
+    "Keep the 'TaruBot backups' check at period 1 day, grace 3 hours, with Pushover for down.",
+    "After the first scheduled run (04:30 UTC), confirm the check shows the dump size.",
     "Optional: attach a Linode Cloud Firewall to the tarubot Linode (inbound SSH and ICMP only)."
   ],
   "assistant": [
-    "Take the first encrypted settings copy and verify it decrypts to the host's .env.",
-    "Prepare 2.24.0: daily encrypted off-site database dumps with their own healthchecks check.",
-    "Record the evidence in docs/VERIFICATION.md."
+    "After the merge, pull on the host and install the backup schedule (no bot restart).",
+    "Check the first scheduled run in ~/tarubot-backup.log and the bucket.",
+    "Prepare 2.25.0: deploys over SSH from GitHub Actions."
   ],
   "bot": [
     "Keep running 2.22.0 on schema 008 with the heartbeat on in production.",

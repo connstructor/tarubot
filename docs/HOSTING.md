@@ -13,6 +13,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 | Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), and since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
 | Database | Linode managed PostgreSQL `tarubot-pgsql`, PostgreSQL 18, us-iad-2. Use the **direct port 27520**, never the 27521 pool, which can't hold the writer lease. The login and database are `tarubot`, and `tarubot` owns the database. The admin login `akmadmin` is for provisioning only; the tool guard refuses it. The allow list holds the host and the operator's address. |
 | Settings copy | Encrypted with `age` in `~/tarubot-cutover/env-backups/` on the operator machine (2.23.0; see "Settings copy"). |
+| Backups | A daily encrypted dump at 04:30 UTC, and a settings copy, uploaded to Linode Object Storage `tarubot-backups` (2.24.0; see "Backups and recovery"). |
 | Operator tools | Run from a clean clone of the deployed release on the operator machine, as `prod dist/scripts/<tool>.js`, with `~/tarubot-cutover/production.env` ([MIGRATION.md](MIGRATION.md#e0-conventions) E0). That file points at the Linode database, with its CA in `DATABASE_CA_CERT`. |
 
 ## Everyday checks
@@ -89,9 +90,72 @@ The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MI
 
 ## Backups and recovery
 
-- **Linode's backups:** Linode's managed PostgreSQL backups and point-in-time recovery cover the database. Check the plan's retention in the Linode console.
-- **Independent backups:** take a `pg_dump` before every migration and keep it on the operator machine, off Linode. The 2026-09-24 cutover left `pre-activation.dump` and `move-to-linode.dump` in `~/tarubot-cutover/work/backups/`.
-- **Restore checks:** `check-restore.js` compares a restored copy with the source. The production profile accepts `tarubot` on another host, such as a new cluster, or `tarubot_restore` on the same host.
+There are three layers:
+- **Linode's point-in-time recovery.** The managed cluster keeps its own backups. On 2026-09-25 its restore window reached back to the cluster's creation. Restoring forks a new cluster in the Linode console.
+- **Daily encrypted dumps (2.24.0),** kept in Linode Object Storage. They're independent of the cluster, so they survive a deleted or broken cluster.
+- **A dump before every migration,** kept on the operator machine (below).
+
+The cluster's weekly maintenance runs Tuesdays from 19:00 UTC for up to 4 hours. On this single-node cluster a restart can drop the bot's connection. The bot then exits, Docker restarts it, and it waits for the writer lease again. A long outage trips the heartbeat.
+
+### Daily dumps
+
+`ops/backup.sh` runs at 04:30 UTC from the `tarubot` user's crontab on the host:
+1. `pg_dump` runs in the pinned PostgreSQL 18 image, through the production Compose file's `backup` service. The service sits behind a profile, so `up` never starts it. It uses the bot's database URL and CA. Its logging is off, because a logging driver would copy the unencrypted dump on stdout to disk.
+2. The dump streams straight into `age`, encrypted for [`ops/age-recipients.txt`](../ops/age-recipients.txt). No unencrypted dump touches the disk, and the host can't decrypt what it wrote.
+3. `curl` uploads it with SigV4 signing to `daily/`, and also to `monthly/` on the 1st.
+4. The host's `.env` goes to `env/` the same way, so the settings copy stays current without the operator machine.
+5. healthchecks.io's "TaruBot backups" check (period 1 day, grace 3 hours) hears the start, then success with the sizes, or a failure naming the step. The script logs one line per run to `~/tarubot-backup.log`.
+
+| Piece | Where |
+| --- | --- |
+| Bucket | `tarubot-backups` in Linode Object Storage, `us-iad-2`, at `https://tarubot-backups.us-iad-18.linodeobjects.com`. The access key `tarubot-backup-key` is limited to this bucket. Linode offers no write-only keys, so a compromised host could delete copies. The copies are encrypted, and the operator machine can pull its own. |
+| Retention | [`ops/bucket-lifecycle.xml`](../ops/bucket-lifecycle.xml): `daily/` and `env/` for 30 days, `monthly/` for 365 days. |
+| Settings | In the host's `.env`: `BACKUP_STORAGE_ENDPOINT`, `BACKUP_STORAGE_ACCESS_KEY`, `BACKUP_STORAGE_SECRET_KEY`, `BACKUP_STORAGE_REGION` (`us-iad-2`) and `HEALTHCHECKS_BACKUP_URL`. The bot never sees them, because Compose passes it only its own settings. The operator copies are `~/tarubot-cutover/backup-storage.env` and `~/tarubot-cutover/healthchecks-backup.url`. |
+
+**Setting it up** (on a new host, rebuild step 10). A settings copy taken on or after 2026-09-25 already holds the storage settings, so after a restore only the schedule is needed:
+
+```sh
+# From the operator machine: the storage settings and the check URL, over SSH stdin.
+set -a; . ~/tarubot-cutover/backup-storage.env; set +a
+{ printf 'BACKUP_STORAGE_ENDPOINT=%s\nBACKUP_STORAGE_ACCESS_KEY=%s\nBACKUP_STORAGE_SECRET_KEY=%s\nBACKUP_STORAGE_REGION=us-iad-2\n' \
+    "$BACKUP_STORAGE_ENDPOINT" "$BACKUP_STORAGE_ACCESS_KEY" "$BACKUP_STORAGE_SECRET_KEY"
+  printf 'HEALTHCHECKS_BACKUP_URL=%s\n' "$(tr -d '\r\n' < ~/tarubot-cutover/healthchecks-backup.url)"
+} | ssh tarubot@tarubot.deconfined.com 'set -e; umask 077; cd ~/tarubot; tmp=$(mktemp .env.XXXXXX)
+    grep -v -E "^(BACKUP_STORAGE_[A-Z_]+|HEALTHCHECKS_BACKUP_URL)=" .env > "$tmp"; cat >> "$tmp"
+    chmod 600 "$tmp"; mv "$tmp" .env'
+# On the host, as tarubot: the schedule, then one run to check it.
+( crontab -l 2>/dev/null | grep -v ops/backup.sh; echo '30 4 * * * $HOME/tarubot/ops/backup.sh >> $HOME/tarubot-backup.log 2>&1' ) | crontab -
+~/tarubot/ops/backup.sh
+```
+
+A new bucket also needs its retention rules, set once from the operator machine with the bucket's key:
+
+```sh
+set -a; . ~/tarubot-cutover/backup-storage.env; set +a
+printf 'user = "%s:%s"\n' "$BACKUP_STORAGE_ACCESS_KEY" "$BACKUP_STORAGE_SECRET_KEY" |
+  curl --config - -sS --fail --aws-sigv4 "aws:amz:us-iad-2:s3" -X PUT \
+    -H "Content-MD5: $(openssl md5 -binary ops/bucket-lifecycle.xml | base64)" \
+    --data-binary @ops/bucket-lifecycle.xml "https://${BACKUP_STORAGE_ENDPOINT%/}/?lifecycle"
+```
+
+**Restoring a dump.** Restore into a new database, never over the live one. Use a new cluster, or `tarubot_restore` on the same cluster:
+
+```sh
+set -a; . ~/tarubot-cutover/backup-storage.env; set +a
+base="https://${BACKUP_STORAGE_ENDPOINT%/}"
+s3() { printf 'user = "%s:%s"\n' "$BACKUP_STORAGE_ACCESS_KEY" "$BACKUP_STORAGE_SECRET_KEY" |
+  curl --config - -sS --fail --aws-sigv4 "aws:amz:us-iad-2:s3" "$@"; }
+s3 "$base/?list-type=2&prefix=daily/" | grep -o '<Key>[^<]*' | cut -c6-   # the copies, oldest first
+s3 -o db.age "$base/daily/tarubot-YYYYMMDDTHHMMSSZ.dump.age"
+age --decrypt --identity ~/tarubot-cutover/age/tarubot.key -o db.dump db.age
+pg_restore --no-owner --no-privileges --exit-on-error -d "NEW_DATABASE_URL" db.dump
+```
+
+Compare the result with `check-restore.js`, then stop the bot and point `DATABASE_URL` at it. Settings copies in `env/` decrypt the same way.
+
+**Before a migration** keep taking an independent `pg_dump` on the operator machine, as in the migration procedure above. Running `~/tarubot/ops/backup.sh` on the host right before also puts a fresh copy off-site. The 2026-09-24 cutover left `pre-activation.dump` and `move-to-linode.dump` in `~/tarubot-cutover/work/backups/`.
+
+**Restore checks:** `check-restore.js` compares a restored copy with the source. The production profile accepts `tarubot` on another host, such as a new cluster, or `tarubot_restore` on the same host.
 
 ## Settings copy (off the host)
 
@@ -152,7 +216,7 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
 
 8. **Start the bot:** `ssh tarubot@NEW_IP 'cd ~/tarubot && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d --wait'`.
 9. **Check it** with the everyday checks above. Readiness must be all true, and the logs must show "Database writer lease acquired" and "TaruBot ready". Resume the healthchecks.io check; it should turn green within five minutes. Commands are registered globally and survive a rebuild, so there is nothing to register.
-10. **Restore the backup schedule** (2.24.0).
+10. **Restore the backup schedule:** add the database's new access-list entry first (step 5), then follow "Setting it up" under Daily dumps. The first run should turn the "TaruBot backups" check green.
 11. **Retire the old host.** Delete the old Linode and remove its database access entry. Update the Layout table above, and take a fresh settings copy (`bun run host:env-backup`).
 
 ## DigitalOcean leftovers

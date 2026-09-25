@@ -17,7 +17,9 @@ const service = z
     image: z.string(),
     environment: z.record(z.string(), z.string()),
     restart: z.string().optional(),
-    logging: z.object({ driver: z.string(), options: z.record(z.string(), z.string()) }).optional(),
+    logging: z
+      .object({ driver: z.string(), options: z.record(z.string(), z.string()).optional() })
+      .optional(),
   })
   .passthrough();
 const composeFile = z.object({ services: z.record(z.string(), service) }).passthrough();
@@ -25,19 +27,21 @@ const composeFile = z.object({ services: z.record(z.string(), service) }).passth
 test("production runs only the bot, pinned to an explicit release", async () => {
   const production = composeFile.parse(YAML.parse(await read("docker-compose.production.yml")));
   // No bundled PostgreSQL (production data lives in the managed cluster), and no parser sidecar.
-  expect(Object.keys(production.services)).toEqual(["tarubot"]);
-  for (const { image, restart, logging } of Object.values(production.services)) {
-    // `latest` is never deployed: an unset tag refuses to interpolate.
-    expect(image).toContain("${TARUBOT_IMAGE_TAG:?");
-    expect(image).not.toContain(":-latest");
-    expect(restart).toBe("unless-stopped");
-    // Bounded json-file logs so a busy day can't fill the host's disk.
-    expect(logging?.driver).toBe("json-file");
-    expect(logging?.options).toMatchObject({
-      "max-size": expect.any(String),
-      "max-file": expect.any(String),
-    });
-  }
+  // The backup service (2.24.0) is a one-off behind a profile, which `up` never starts
+  // (tests/unit/backup-job.test.ts).
+  expect(Object.keys(production.services).sort()).toEqual(["backup", "tarubot"]);
+  const bot = production.services.tarubot;
+  // `latest` is never deployed: an unset tag refuses to interpolate.
+  expect(bot?.image).toContain("${TARUBOT_IMAGE_TAG:?");
+  expect(bot?.image).not.toContain(":-latest");
+  expect(bot?.restart).toBe("unless-stopped");
+  // Bounded json-file logs so a busy day can't fill the host's disk. (The backup service logs
+  // nothing at all: its output is the dump; tests/unit/backup-job.test.ts.)
+  expect(bot?.logging?.driver).toBe("json-file");
+  expect(bot?.logging?.options).toMatchObject({
+    "max-size": expect.any(String),
+    "max-file": expect.any(String),
+  });
 });
 
 test("the production bot uses the managed database, production scoping, and effects", async () => {

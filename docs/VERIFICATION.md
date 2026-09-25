@@ -21,6 +21,37 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.24.0** (daily encrypted off-site backups) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/backup-job.test.ts`:
+- `bash -n` and strict mode;
+- the dump piped straight into `age`;
+- no `--user` or secret in curl's arguments;
+- https only;
+- the `backup` service behind its profile, with the base Compose file's PostgreSQL image, `verify-full` TLS and `$$`-deferred expansion;
+- the retention rules.
+
+The production Compose test now expects `backup` beside `tarubot`, and `host-env-backup` expects the backup settings. `bun run test:unit` passed **1,152 tests** and `bun run test:contract` **26**. `docker compose config` accepts the production file, and lists only `tarubot` unless the `backup` profile is named.
+
+**Live, 2026-09-25:**
+- **Storage.**
+  - The owner's key `tarubot-backup-key` is limited to `tarubot-backups` (`us-iad-2`, E3 endpoint `us-iad-18.linodeobjects.com`).
+  - A signed HEAD request on the bucket answered 200 for any signing region; `us-iad-2` is used.
+  - The retention rules were applied (`PUT ?lifecycle` 200) and read back: three enabled rules, 30/30/365 days.
+- **First run.**
+  - The five backup settings went into the host's `.env` over SSH stdin (11 settings, mode 600), without restarting the bot.
+  - The script ran from a scratch copy on the host (`~/backup-test`, later removed), exited 0 and logged `backup ok: tarubot-20260925T131506Z (381594 bytes, settings 2623 bytes)` in 6 seconds.
+  - The bucket then held exactly `daily/tarubot-20260925T131506Z.dump.age` (381,594 bytes) and `env/tarubot-env-20260925T131506Z.age` (2,623 bytes).
+- **Restore.**
+  - On the operator machine the dump was downloaded and decrypted (381,314 bytes). `pg_restore --list` showed 150 archive entries, 27 of them table data.
+  - It restored with `--exit-on-error` into a throwaway PostgreSQL 18.4 at schema `008_issue_reports.sql`.
+  - All 27 tables' row counts matched production exactly (8,776 rows, read over a read-only connection). The settings copy decrypted to 11 settings.
+  - The throwaway database and the scratch files were removed.
+- **Settings copy.** A fresh operator copy after the change (`tarubot-env-20260925T131612Z.age`) was verified, with no expected setting missing.
+- **Review round.**
+  - The review found that the `backup` service used the `json-file` logging driver, which copies stdout, and so the unencrypted dump, to disk even while it is piped. The first test run's plaintext therefore sat in that container's log file until `--rm` removed it.
+  - With `logging: driver: none`, a `run` of the service on the host showed log driver `none` with no log path, and `docker logs` could not read it. stdout still streamed.
+  - A second real run then uploaded `tarubot-20260925T133159Z` (391,244 bytes).
+  - `host-env-backup` now also expects `BACKUP_STORAGE_REGION`.
+
 **2.23.0** (the rebuild runbook and the off-host settings copy) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.23.0 above 2.22.0). New cases in `tests/unit/host-env-backup.test.ts`:
 - argument parsing;
 - setting names read without values, including a multi-line CA;
