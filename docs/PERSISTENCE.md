@@ -46,7 +46,16 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.16.1** source adds no migration and requires `SCHEMA_VERSION=006_guest_application_switch.sql`, introduced in **2.15.0**. It is additive and needs no superuser privileges:
+The current **2.17.0** source adds `007_profile_checks.sql` and requires `SCHEMA_VERSION=007_profile_checks.sql`. It is additive and needs no superuser privileges. It adds two nullable columns to `characters`:
+
+- **`profile_retry_at`.** The scheduler queues no profile refresh before it. It is stamped an hour ahead whenever a refresh is queued, moved to the profile interval for a private profile, and cleared by a successful refresh.
+- **`profile_missing_at`.** The first Lodestone 404 of the two-404 unlink rule. Any later sighting clears it: a profile read, a private answer, or a roster listing.
+
+Existing rows start NULL, so behavior is unchanged until each character's next refresh. The scheduler selects and stamps characters in one pass, and queues each refresh with `scheduleJob`. That is an `INSERT … ON CONFLICT DO NOTHING` against the active-job partial index, so it never touches an active job's `due_at` or generation.
+
+The automatic unlink ends each link in its own transaction, in `/unclaim`'s lock order: the guild_users row, then the character, then the link. It re-checks under those locks that the first 404 still stands, and writes the unlink, its audit, the officer notice and the owner's reconciliation on one client, through the same `endLink` path as `/unclaim` and `/unassign`.
+
+`006_guest_application_switch.sql`, introduced in **2.15.0**, is also additive and needs no superuser privileges:
 
 - **Applications switch.** It adds `guilds.guest_applications_enabled boolean NOT NULL DEFAULT false`, separate from `guest_application_channel_id`. `/apply` opens only while the switch is on and a review channel and a Guest role are set.
 - **Backfill.** Guilds with a review channel whose `guest_grandfather` is not `pending` get the switch on, so DevBot's applications stay open. Guilds without a channel, and imported guilds still awaiting first activation, stay off. On an empty database the update is a no-op. Guilds created later start off: `/setup` turns the switch on, and the importer stores the legacy review channel with the switch off.
@@ -59,7 +68,7 @@ Raw SQL is limited to transaction/migration control, advisory locks, health prob
 
 ## Regression coverage
 
-The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths. `tests/integration/migrations.test.ts` applies 005 over 001–004, and 006 over 001–005, in private schemas: it checks each backfill case (for 006, the switch starts on only for a guild with a review channel that is not awaiting first activation, revisions stay unchanged, schema-005 grants stay active, and a guild created later starts off), the constraints, grants written under the old provenances, an empty database, and a real `Database.migrate` upgrade from schema 004 through 006 that a second run leaves unchanged. `tests/integration/managed-privileges.test.ts` runs every migration as a non-owner login holding only the documented managed-cluster grants.
+The PostgreSQL suite compares every application table/column/type/null/default mapping to the migrated catalog. It exercises unsigned IDs, maximum bigint money, large sequences, UTC dates, scalar/nested JSON and JSON null, isolation and rollback across policy/audit/outbox writes, simultaneous `SKIP LOCKED` claims, superseding generations, expired leases, and empty/shared-FC capability aggregates. Existing ownership, ledger, guest, roster, nickname, import, and recovery tests exercise the converted application paths. `tests/integration/migrations.test.ts` applies 005 over 001–004, 006 over 001–005, and 007 over 001–006, in private schemas: it checks each backfill case (for 006, the switch starts on only for a guild with a review channel that is not awaiting first activation, revisions stay unchanged, schema-005 grants stay active, and a guild created later starts off), the constraints, grants written under the old provenances, an empty database, and a real `Database.migrate` upgrade from schema 004 to the head that a second run leaves unchanged. For 007, existing characters keep both new columns NULL. `tests/integration/managed-privileges.test.ts` runs every migration as a non-owner login holding only the documented managed-cluster grants.
 
 ```sh
 bun run test:docker

@@ -157,13 +157,33 @@ Replies describe background work with text markers (see [REPLIES.md](REPLIES.md#
 | `succeeded` with a `skipped` result | `– SKIPPED` | "nothing to do" |
 | `running` | `… IN PROGRESS` | The kind's label |
 | `queued`, no `last_error` | `… QUEUED` | The kind's label |
-| `queued` with `ordered`, `busy`, `cooldown`, `superseded` or `lease_lost` | `↻ WAITING` | "next" and the due time |
+| `queued` with `ordered`, `busy`, `cooldown`, `superseded`, `lease_lost` or (since 2.17.0) `rate_limited` | `↻ WAITING` | "next" and the due time |
 | `queued` with any other `last_error` | `↻ WAITING` | "retrying" and the due time |
 | `blocked` | `! BLOCKED` | "an officer needs to fix permissions" |
 | `disabled` | `‖ PAUSED` | "waiting for activation" or "Discord changes are off for this deployment" |
 | `failed` | `✗ FAILED` | "stopped and won't retry"; a closed-DM decision DM says the decision still stands |
 
 Members see labels (Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice). Officers see the raw kind (`reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored `last_error` quoted and cut to 150 characters; the job ID prefix matches `SELECT … FROM jobs WHERE id::text LIKE '1a2b3c4d%'`. Immediate replies never use completion words; `… QUEUED` or `‖ PAUSED` there only means the work was saved.
+
+## Profile refreshes, private profiles and deleted characters
+
+Since 2.17.0 (REQUIREMENTS.md "Approved Lodestone amendments"):
+
+- **Pacing.** The scheduler queues a character's profile refresh at most once an hour, whatever happens to the job, by stamping `characters.profile_retry_at`. It never pulls a job that is backing off forward. Old failed `profile` rows from before 2.17.0 are history, and nothing needs retrying: the next scheduled refresh supersedes them.
+- **Throttling.** A Lodestone 429 closes the sidecar's gate for a shared cooldown (15 s, doubling to 5 min). Jobs wait it out as `↻ WAITING` without spending attempts. The sidecar logs `{"event":"lodestone_throttled",…}` once per 429, and its `/health` shows `lodestone.cooldownSeconds` and `strikes`.
+- **Private profiles** complete as `{status: "private"}` and wait for the profile interval (`PROFILE_INTERVAL_SECONDS`). Links are unaffected, because membership comes from the roster.
+- **Deleted characters.** A 404 is recorded in `characters.profile_missing_at` (`{status: "missing", confirmed: false}`). A second 404 at least an hour later ends every active link, audited as `character.unlink` with a null actor and `automatic: "lodestone_not_found"`, and posts an officer notice per link. A profile read, a private answer or a roster listing in between clears the mark.
+
+To see what is waiting, private or pending confirmation:
+
+```sql
+SELECT id, name, world, profile_at, profile_retry_at, profile_missing_at
+  FROM characters
+ WHERE profile_missing_at IS NOT NULL OR profile_retry_at > now()
+ ORDER BY profile_missing_at NULLS LAST, profile_retry_at;
+```
+
+To undo an automatic unlink (for example, a character that reappears after a rename or transfer glitch), the owner claims and verifies the character again, or an officer runs `/assign`.
 
 ## Single database writer
 

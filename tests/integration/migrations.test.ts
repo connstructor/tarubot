@@ -388,6 +388,46 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
   });
 });
 
+const PROFILE_CHECKS = "007_profile_checks.sql";
+
+describe.skipIf(!url)("migration 007 profile checks", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  test("existing characters keep today's behavior: both new columns start NULL", async () => {
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE SCHEMA m007_rehearsal");
+      await client.query("SET LOCAL search_path TO m007_rehearsal");
+      for (const file of (await migrationFiles()).filter((name) => name < PROFILE_CHECKS))
+        await client.query(await migration(file));
+      // A schema-006 character with a refreshed profile, and one never refreshed.
+      await client.query(
+        `INSERT INTO characters (id, name, world, profile_at)
+         VALUES ('35999242', 'Vanessa Wolfe', 'Diabolos', NULL),
+                ('45286792', 'Refreshed Character', 'Diabolos', now())`,
+      );
+      await client.query(await migration(PROFILE_CHECKS));
+      const rows = await client.query<{
+        id: string;
+        profile_retry_at: Date | null;
+        profile_missing_at: Date | null;
+      }>("SELECT id, profile_retry_at, profile_missing_at FROM characters ORDER BY id");
+      expect(rows.rows).toEqual([
+        { id: "35999242", profile_retry_at: null, profile_missing_at: null },
+        { id: "45286792", profile_retry_at: null, profile_missing_at: null },
+      ]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+});
+
 describe.skipIf(!url)("the migration guard (writer lease)", () => {
   if (!url) return;
   const db = new Database(url);

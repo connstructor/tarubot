@@ -95,6 +95,7 @@ export const FAILURE_CONCEPTS = [
   "upstream.lodestone_incomplete",
   "upstream.lodestone_page",
   "upstream.biography",
+  "upstream.private_profile",
   "upstream.member_list",
   "upstream.join_context",
   "upstream.discord",
@@ -1025,6 +1026,16 @@ function upstreamView(s: Situation): FailureView {
   // "challenge").
   const verifying = s.scope.root === "verify" || s.scope.prefix === "verify";
   const still = verifying ? " Your token is still valid." : "";
+  // Not an outage: the owner made the profile private, and only they can make it public again.
+  if (s.c.code === "private_profile")
+    return {
+      concept: "upstream.private_profile",
+      tone: "warning",
+      title: "Lodestone profile is private",
+      lead: `${s.message ?? "That character's Lodestone profile is private."} TaruBot can't read a private profile.${still}`,
+      tail: "Make the character's Lodestone profile public, then try again.",
+      unchanged: "changed",
+    };
   const base = {
     tone: "warning" as const,
     unchanged: "changed" as const,

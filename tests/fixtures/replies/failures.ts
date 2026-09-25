@@ -805,6 +805,22 @@ export const FAILURE_CASES = {
     ),
     "/verify",
   ),
+  // 2.17.0: a private profile is the owner's setting, not an outage; /verify keeps the token.
+  "private profile · /verify · member": card(
+    "upstream.private_profile",
+    "member",
+    { tone: "warning", title: "Lodestone profile is private" },
+    failure(
+      "private_profile",
+      `The Lodestone profile for character ID ${CHARACTER.id} is private.`,
+      {
+        kind: "resource",
+        resource: "character",
+        id: CHARACTER.id,
+      },
+    ),
+    "/verify",
+  ),
   "member list · /config roles officer · manager": card(
     "upstream.member_list",
     "manager",

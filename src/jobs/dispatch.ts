@@ -78,7 +78,23 @@ export function dispatcher(
           );
       }
       if (!present) return { skipped: "no present linked owner" };
-      const identity = await app.lodestone.profile(input.characterId);
+      let identity: Awaited<ReturnType<typeof app.lodestone.profile>>;
+      try {
+        identity = await app.lodestone.profile(input.characterId);
+      } catch (error) {
+        // Answers about the character, not outages (2.17.0): a private profile waits for the
+        // normal interval, and a 404 follows the two-404 rule. Both complete the job rather than
+        // failing it, so neither is retried as if the Lodestone were down.
+        if (error instanceof Failure && error.code === "private_profile") {
+          await guard();
+          return app.profilePrivate(input.characterId);
+        }
+        if (error instanceof Failure && error.code === "not_found") {
+          await guard();
+          return app.profileMissing(input.characterId);
+        }
+        throw error;
+      }
       await guard();
       await app.db.transaction(async (client) => {
         await app.storeCharacter(client, identity);

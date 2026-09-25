@@ -180,3 +180,10 @@ The migration does not change any guild's revision. Registered-visitor Guest nee
 - `guest_grants.ended_at`, `ended_by` and `ended_reason` record a grant that `/guest reset` ended. Existing grants stay active.
 
 The migration does not change any guild's revision. Follow the same stopped-writer backup/migration procedure, then re-register guild commands: `/officer reset` and `/guest reset` are new (19 roots, 43 paths), the `/config` unset options are renamed (`unset_channel`, `unset_role`, `unset_rank`), `/config guest_applications` gains `enabled`, every member option now autocompletes, and option descriptions changed, including `/ledger adjust entry:`, which takes an entry number (`5` or `#5`) or the entry ID.
+
+**2.17.0 adds `007_profile_checks.sql`**:
+
+- `characters.profile_retry_at` paces scheduled profile refreshes, to at most one an hour per character, or one per profile interval for a private profile.
+- `characters.profile_missing_at` records the first Lodestone 404 of the two-404 unlink rule.
+
+Both start NULL. Follow the same stopped-writer backup/migration procedure; on the production host that is [HOSTING.md](HOSTING.md#updating-to-a-release). No command changes, so nothing needs re-registering.

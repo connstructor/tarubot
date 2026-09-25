@@ -74,6 +74,38 @@ export async function enqueue(
   if (!row) throw new Error("Missing queued job");
   return row.id;
 }
+/**
+ * Queue periodic work only when no active job carries the key, leaving an existing one alone. The
+ * scheduler uses this instead of enqueue(), whose conflict update pulls an active job's due_at
+ * forward to the new row's: that is right when new input arrives, but for a job backing off after a
+ * failure it cancelled the backoff on every 30-second scheduler tick (the 2.16 retry storm). Returns
+ * the new job's ID, or undefined when an active job already covers the key.
+ */
+export async function scheduleJob(
+  client: Connection,
+  kind: string,
+  key: string,
+  payload: unknown,
+  guild: string | null = null,
+  delay = 0,
+): Promise<string | undefined> {
+  const [row] = await orm(client)
+    .insert(t.jobs)
+    .values({
+      kind,
+      dedupe_key: key,
+      payload: payload === null ? sql`'null'::jsonb` : payload,
+      guild_id: guild,
+      due_at: sql`now()+${delay}*interval '1 second'`,
+    })
+    .onConflictDoNothing({
+      target: t.jobs.dedupe_key,
+      // Literal states match the existing partial unique index, as in enqueue().
+      where: sql`${t.jobs.status} IN ('queued','running','blocked')`,
+    })
+    .returning({ id: t.jobs.id });
+  return row?.id;
+}
 /** One active reconciliation per guild/user coalesces command changes and gateway echoes. */
 export const reconcileUser = (client: Connection, guild: string, user: string): Promise<string> =>
   enqueue(client, "reconcile.user", `user:${guild}:${user}`, {}, guild, user);

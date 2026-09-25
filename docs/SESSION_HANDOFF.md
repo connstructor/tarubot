@@ -86,12 +86,20 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Lodestone block.** On App Platform every profile refresh failed: the Lodestone answers DigitalOcean's addresses with HTTP 403. The owner chose a Linode Docker host with Linode managed PostgreSQL. The move (22:38–22:40 UTC, about 90 s down) stopped the App Platform worker, copied the database with `pg_dump`/`pg_restore`, and verified it with `check-restore.js`. Production now runs `docker-compose.production.yml` on `tarubot@tarubot.deconfined.com` ([HOSTING.md](HOSTING.md)). REQUIREMENTS.md records the "Approved hosting amendment".
 - **After the move.** One lease holder on Linode, and reconciliation caught up. The first profile burst hit Lodestone 429s. Investigating those found a retry storm: the 30-second scheduler pulls a backing-off profile job's `due_at` to now, and re-creates the job each time one fails. It also found that a 404 is retried like an outage, and that a private profile's 403 is reported as `unavailable`. 2.17.0 fixes these. The owner approved it, and asked that characters the Lodestone no longer has be unclaimed automatically, after two 404s ([OPEN_ITEMS.md](OPEN_ITEMS.md#implementation-work)).
 
-**Update, 2.16.1 (current version):**
+**Update, 2.16.1:**
 - **Branch.** `chore/linode-hosting-2.16.1` starts from `main` at `c812d4d` (2.16.0, PR #16). No migration, no command change, and no bot behavior change.
 - **Tool guard.** The production profile accepts the Linode cluster's direct port 27520, and refuses its 27521 pool and the `akmadmin` login. DigitalOcean's 25060 and `doadmin` rules stay until that cluster is deleted. Until 2.16.1, production tools refused the Linode database, which blocked `retry.js` and `preview.js --late-joiners`.
 - **Production Compose file.** `docker-compose.production.yml` runs the bot and Nodestone only, with the release pinned by a required `TARUBOT_IMAGE_TAG`, required database and token settings, and bounded logs. A unit test checks it against `docker-compose.yml`, and CI validates it.
 - **Docs.** HOSTING.md (new), the MIGRATION.md cutover record, the superseded notes and the `app:` trusted-source correction in APP_PLATFORM.md, the REQUIREMENTS.md hosting amendment, and CLAUDE.md, README.md and OPERATIONS.md.
-- **Status.** Committed locally; not yet pushed.
+- **Status.** Merged ([PR #17](https://github.com/deconfined/tarubot/pull/17), `1655adc`; the Claude review's HOSTING.md finding was fixed in `b556b28`) and published by run 36072940021. Deployed to production at 23:39 UTC and to DevBot at 23:40 UTC ([DEV_GUILD.md](DEV_GUILD.md#2161-rollout--2026-09-24)). The host clone now tracks `main`. The late-joiner report found none, and the planned profile retries were unnecessary.
+
+**Update, 2.17.0 (current version):**
+- **Branch.** `feat/lodestone-hardening-2.17.0` starts from `main` at `1655adc` (2.16.1, PR #17). It implements the owner's Lodestone decisions of 2026-09-24 (REQUIREMENTS.md "Approved Lodestone amendments") and adds migration `007_profile_checks.sql`. There are no command changes.
+- **Retry storm.** The scheduler uses `scheduleJob` (`ON CONFLICT DO NOTHING`), so it never pulls a job that is backing off forward. It also stamps `characters.profile_retry_at` an hour ahead, so each character is refreshed at most hourly, whatever the outcome.
+- **Two-404 rule.** A profile 404 completes the job. The first is recorded in `profile_missing_at`. One at least an hour later ends every active link through `/unclaim`'s `endLink`, audited with a null actor, with an officer notice per link. Any sighting in between clears the mark.
+- **Private profiles.** The sidecar's `private` becomes `private_profile`. The refresh waits for the profile interval, links stay, and commands show "Lodestone profile is private".
+- **Throttling.** The sidecar's `LodestoneGate` refuses starts during a shared cooldown after a 429 (15 s, doubling to 5 min). `rate_limited` is a waiting code, the client no longer retries it, and a full sidecar answers `busy`.
+- **Status.** Committed locally; not yet pushed. On deployment: DevBot needs the migration rehearsal; production follows HOSTING.md's migration procedure. The three storm IDs should stop failing, and 35999242 should unlink an hour after its first 404.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -154,11 +162,11 @@ Keep these owner-approved decisions intact:
 
 ## 3. First actions next session
 
-1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.16.1 (`chore/linode-hosting-2.16.1`) was pushed, merged and published.
-2. With the owner's go-ahead, deploy 2.16.1 to production ([HOSTING.md](HOSTING.md#updating-to-a-release)) and DevBot. On the host, `~/tarubot/docker-compose.production.yml` is an untracked copy from the move; it differs from 2.16.1's only in a header comment. Remove it before `git pull --ff-only`, which would otherwise refuse to overwrite it. Then run `preview.js --late-joiners` and retry the failed profile jobs from the operator clone (`~/tarubot-cutover/src`, checked out at the release).
-3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): the W14 and W15 officer configuration, the DigitalOcean cleanup, rotating the legacy MariaDB login, and the reports repository and token.
-4. Build 2.17.0, the Lodestone hardening. The owner approved it on 2026-09-24, along with the order: hardening before the 2.18.0 issue reporter. It unlinks a character only after two 404s, the second at least an hour after the first.
-5. After that, the issue reporter, OPS-10/OPS-11, and a deploy workflow re-planned for the Compose host.
+1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.17.0 (`feat/lodestone-hardening-2.17.0`) was pushed, merged and published.
+2. With the owner's go-ahead, deploy 2.17.0 to DevBot (with the migration rehearsal on the restore copy) and to production ([HOSTING.md](HOSTING.md#updating-to-a-release), the migration procedure). Then check that the three storm IDs stop producing failed rows, and that 35999242 unlinks an hour after its first 404, with an officer notice.
+3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, and the reports repository and token.
+4. Build 2.18.0, the issue reporter and `/issue`, as the owner specified: a private reports repository; `/issue` for everyone, limited to one per user per 10 minutes and 20 a day per server; automatic reports on errors and repeated trouble, grouped by fingerprint, with a daily cap.
+5. After that, OPS-10/OPS-11, and a deploy workflow re-planned for the Compose host.
 
 Useful read-only starting checks from the repository:
 
@@ -186,8 +194,8 @@ If your shell isn't in the `docker` group, run each `docker` command through `sg
 - [x] Merge and publish 2.15.0 (reply-session fixes, migration 006; PR #14, `974bd27`, publish run 36002040486, where the Claude review fix was confirmed), and roll it out to DevBot with the backup, restore check, migration rehearsal and migration, re-registering the guild commands (19 roots / 43 paths).
 - [x] **2.15.1 (GitHub account rename to `deconfined`):** merged and published (PR #15, `529990f`).
 - [x] **2.16.0 (deployment safeguards):** merged and published (PR #16, `c812d4d`), deployed to DevBot, and used for the production cutover.
-- [ ] **2.16.1 (Linode hosting):** push, PR, merge and publish, then deploy to production and DevBot.
-- [ ] **P1 — 2.17.0 Lodestone hardening (approved):** stop the retry storm, treat 404s as final and unlink characters after two 404s at least an hour apart, report private profiles as `private`, and add sidecar backoff after a 429.
+- [x] **2.16.1 (Linode hosting):** merged and published (PR #17, `1655adc`), deployed to production and DevBot.
+- [ ] **P1 — 2.17.0 Lodestone hardening:** implemented on `feat/lodestone-hardening-2.17.0` (migration 007). Push, PR, merge and publish, then deploy to DevBot and production with the migration procedure.
 - [ ] **P1 — 2.18.0 issue reporter (approved order):** automatic GitHub issues in a private reports repository, and `/issue`.
 - [ ] **P1 — Officer operational alerts (OPS-11 / DB-07), after launch:** aggregate material access changes, repeated role/nickname/guest/ledger delivery failures, and recovery notices; throttle per guild/run. Existing roster summaries do not cover all of these.
 - [ ] **P1 — Telemetry (OPS-10), after launch:** complete operation/job durations, queue age, retry details, and guild/FC/run context while retaining redaction.
@@ -268,4 +276,4 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
 
 ## Suggested next-session prompt
 
-> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. TaruBot v2 has been live in Woven Souls since 2026-09-24. It runs on the Linode Docker host `tarubot@tarubot.deconfined.com` with Linode managed PostgreSQL (docs/HOSTING.md). The App Platform setup is superseded because the Lodestone refuses DigitalOcean. Check whether 2.16.1 (`chore/linode-hosting-2.16.1`) was merged and published. With the owner's go-ahead, deploy it to production and DevBot, then run the late-joiner report and retry the failed profile jobs. Raise the owner's open items in docs/OPEN_ITEMS.md ("Production after the cutover"). Next is 2.17.0, the Lodestone hardening: stop the scheduler from collapsing retry backoff, make 404s final and unlink a character after two 404s at least an hour apart, report private profiles as `private`, and add sidecar 429 backoff. Then 2.18.0, the GitHub issue reporter and `/issue`, as the owner specified. Preserve the owner's launch, reply-session and hosting decisions in REQUIREMENTS.md.
+> Read AGENTS.md, CLAUDE.md, and docs/SESSION_HANDOFF.md. TaruBot v2 has been live in Woven Souls since 2026-09-24. It runs on the Linode Docker host `tarubot@tarubot.deconfined.com` with Linode managed PostgreSQL (docs/HOSTING.md); 2.16.1 is deployed there and on DevBot. Check whether 2.17.0 (`feat/lodestone-hardening-2.17.0`: paced profile refreshes, private profiles, the two-404 unlink, sidecar 429 cooldown, migration 007) was merged and published. With the owner's go-ahead, deploy it to DevBot and production with the migration procedure. Then confirm the retry storm is gone and 35999242 unlinks after its second 404. Raise the owner's open items in docs/OPEN_ITEMS.md ("Production after the cutover"). Next is 2.18.0, the GitHub issue reporter and `/issue`. Preserve the owner's launch, reply-session, hosting and Lodestone decisions in REQUIREMENTS.md.

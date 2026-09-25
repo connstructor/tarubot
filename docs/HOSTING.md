@@ -25,7 +25,14 @@ docker compose -f docker-compose.production.yml exec -T tarubot \
   bun -e 'const r = await fetch("http://127.0.0.1:3000/health/ready"); console.log(await r.text())'
 ```
 
-Readiness must report `database`, `writerLease`, `discord` and `effects` as true.
+Readiness must report `database`, `writerLease`, `discord` and `effects` as true. The sidecar's health shows whether the Lodestone is throttling it (since 2.17.0):
+
+```sh
+docker compose -f docker-compose.production.yml exec -T nodestone \
+  bun -e 'const r = await fetch("http://127.0.0.1:8080/health"); console.log(await r.text())'
+```
+
+`lodestone.cooldownSeconds` above 0 means new Lodestone requests are paused after a 429. Jobs wait it out.
 
 ## Updating to a release
 

@@ -21,6 +21,27 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.17.0** (Lodestone hardening, migration 007) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.17.0 above 2.16.1). New cases:
+- **The sidecar gate** (unit, on an injected clock): start spacing; a 429 refuses every start with the remaining cooldown; consecutive 429s give 15, 30, 60, 120, 240, 300, 300 seconds, and any other answer resets the escalation; a longer Retry-After wins, capped at 15 minutes; a cooldown that begins while a request waits for its slot still refuses it; an aborted wait throws.
+- **The sidecar** (contract, through the compiled worker):
+  - the Lodestone's "Access Restricted" page on a character page is `private`;
+  - an edge-block 403, and the same page on an FC page, stay `unavailable`;
+  - after a 429 a second request is refused without reaching the transport;
+  - a full sidecar answers `busy`.
+- **The client** (contract): `busy` is retried; `rate_limited` fails fast with its cooldown as `retryAfter`; `private` becomes `private_profile` with the approved message and the character's resource; the parser boundary keeps `private`.
+- **The catalog and replies:** `private_profile` is an upstream code; `rate_limited` joins the waiting codes (queued, no attempt spent, the cooldown as delay) and the `↻ WAITING` job lines; "Lodestone profile is private" renders in every audience, and for `/verify` adds that the token is still valid.
+- **PostgreSQL:**
+  - `scheduleJob` leaves a backing-off job's `due_at` alone, and queues afresh once the key has no active job;
+  - the scheduler stamps `profile_retry_at` an hour ahead, and queues nothing more for a character whose job failed;
+  - a private profile completes as `{status: "private"}` and paces a day;
+  - the two-404 sequence: a first 404 is recorded; a repeat inside the hour changes nothing; a successful read clears it; a 404 more than an hour after a fresh first one ends the link, with the audit (null actor, `automatic: "lodestone_not_found"`), the main cleared for a nickname restore, the owner's reconciliation and a per-link officer notice mentioning the owner; with no active link left, the next job is skipped;
+  - a throttled roster crawl records `last_error` without re-queuing the officer notice;
+  - migration 007 over 001–006 leaves existing characters' new columns NULL.
+
+`bun run test:unit` passed **1,120 tests** and `bun run test:contract` **21**. The full container run passed **1,235 tests / 37,015 assertions** with no failures (1,120 unit, 21 contract and 94 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+**2.16.1 rollouts (2026-09-24).** Production ran 2.16.1 from 23:39 UTC and DevBot from 23:40 UTC, with readiness 200, one lease holder each, and DevBot's restore check matching all 26 tables at 006. The late-joiner report found none. [DEV_GUILD.md](DEV_GUILD.md#2161-rollout--2026-09-24) has the details.
+
 **2.16.1** (production on the Linode Docker host) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.16.1 above 2.16.0). New cases:
 - the production tool profile accepts the Linode cluster's direct port 27520, and refuses its 27521 pool and the `akmadmin` login, as it refuses 25061 and `doadmin`;
 - `production.env.example` loads as a passing production env on port 27520;

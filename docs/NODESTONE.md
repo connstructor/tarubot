@@ -54,7 +54,11 @@ The service is private to the Compose network. `POST /v1/parse` accepts one of:
 
 Success: `{ "ok": true, "data": ... }`.
 
-Failure: `{ "ok": false, "code": "not_found|unavailable|rate_limited|invalid_response|incomplete", "retryAfter": 0 }`.
+Failure: `{ "ok": false, "code": "not_found|unavailable|rate_limited|busy|private|invalid_response|incomplete", "retryAfter": 0 }`.
+
+- `rate_limited`: the Lodestone answered 429, or the gate is still cooling down from one; `retryAfter` is the remaining cooldown in seconds.
+- `busy`: every parser slot is taken (HTTP 429 with `retryAfter: 1`). It is the sidecar's own capacity, not Lodestone throttling. A stopping sidecar answers 503 `unavailable`.
+- `private`: a character page answered with the Lodestone's own "Access Restricted" page (HTTP 403 carrying its `ldst__error` window markup), which it serves for a private profile. The bot reports it as `private_profile`. Any other 403, such as an edge or firewall block, is `unavailable`.
 
 Responses are uncached. Verification always requests biography data through a new network operation, independently of persisted display caches. Concurrent requests for the same profile operation can share an in-flight acquisition.
 
@@ -73,6 +77,10 @@ Responses are uncached. Verification always requests biography data through a ne
 | `LODESTONE_MAX_PAGES` | 100 | Search/roster pagination bound |
 | `NODESTONE_RESPONSE_BYTES` | 8,000,000 | Maximum streamed sidecar response size |
 | `NODESTONE_UPSTREAM_CHECK_SECONDS` | 3,600 | Background checks of both upstream repositories; minimum 300, or 0 for offline operation |
+
+**Lodestone gate (2.17.0).** Start spacing and a shared cooldown live in `sidecar/gate.ts`. The first Lodestone 429 closes the gate for every request: new starts are refused locally with the remaining cooldown, without contacting the Lodestone. The cooldown starts at 15 s and doubles on each consecutive 429 up to 5 min, or follows a longer Retry-After of up to 15 min. Any other Lodestone answer resets the escalation. `/health` reports `lodestone: {cooldownSeconds, strikes}`, and each 429 logs one `lodestone_throttled` line.
+
+**Client retries (2.17.0).** Within one request the bot retries only `unavailable` (the sidecar unreachable or stopping) and `busy`, up to `LODESTONE_ATTEMPTS`. It does not retry `rate_limited`: the sidecar would refuse again until the cooldown ends. Instead, the job queue waits the `retryAfter` without spending an attempt, and a command tells the user when to try again.
 
 Each isolated parser worker has a 30-second execution deadline. Underlying fetches use abort signals; cancellation also terminates the worker. The main bot remains responsive to Discord acknowledgement deadlines. Retryable failures use exponential backoff/jitter and usable upstream Retry-After metadata.
 

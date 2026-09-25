@@ -38,7 +38,15 @@ const CODES = [
   "dm_blocked",
   "invalid_job",
 ] as const;
-const WAITING = new Set(["ordered", "busy", "cooldown", "superseded", "lease_lost"]);
+// 2.17.0: Lodestone throttling waits too, instead of spending attempts.
+const WAITING = new Set([
+  "ordered",
+  "busy",
+  "cooldown",
+  "superseded",
+  "lease_lost",
+  "rate_limited",
+]);
 
 /** The approved marker for a status and code, written out independently of jobMarker. */
 function expectedMarker(status: (typeof STATUSES)[number], code: string | null): Marker {
