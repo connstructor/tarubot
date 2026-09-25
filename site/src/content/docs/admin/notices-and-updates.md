@@ -35,7 +35,7 @@ While a notice waits to post, the officer view of [`/sync status`](/tarubot/refe
 When TaruBot starts on a newer version, it can post what's new for members in a channel you choose: one short message, "TaruBot updated to vX.Y.Z", with a one-sentence note for each release since the last post, newest first. The title links the full changelog, and [`/version`](/tarubot/reference/commands/#version) lists the recent commits.
 
 - **Only what members notice.** A release that changes nothing for members has no note and isn't listed, and an update with nothing for members posts nothing.
-- **Nothing is posted twice.** A restart, a rollback or another update doesn't repeat releases the channel was already told about.
+- **No repeats.** A restart, a rollback or another update doesn't repeat releases the channel was already told about. Only a crash in the middle of a post or an operator's restore of an older backup can repeat one; see [Monitoring](/tarubot/deploy/monitoring/#update-posts).
 - **Nothing piles up.** Updates released while no channel is set are never posted later.
 
 ### Choosing the channel

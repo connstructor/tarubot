@@ -27,7 +27,7 @@ A failed job stops being listed once the same work succeeds after it; the job it
 
 What to do with each [status marker](/tarubot/reference/replies/#status-markers):
 
-- `! BLOCKED`: a permission, the role order, or a deleted role or channel. Fix what the diagnostic names, then run `/config validate`. Saving a `/config` role or channel, the FC link or `/config guest_applications` requeues blocked work.
+- `! BLOCKED`: a permission, the role order, or a deleted role or channel. Fix what the diagnostic names, then run `/config validate`. TaruBot retries blocked work by itself about every 10 minutes, and saving a `/config` role or channel, the FC link or `/config guest_applications` retries it at once.
 - `‖ PAUSED`: Discord changes are off for the deployment. Only its operator can turn them back on.
 - `✗ FAILED`: the job stopped after repeated errors. Tell the deployment's operator, who can retry it; the error was also reported to them if issue reports are on.
 - `↻ WAITING`: it's waiting its turn, a Lodestone rate limit or a retry. Nothing to do.

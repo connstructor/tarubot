@@ -60,7 +60,7 @@ A member's role update (`reconcile.user`) keeps an `applied` list in its stored 
 
 ## Jobs that need attention
 
-Officers see outstanding and failed work in `/sync status`. Blocked work (a permission, the role order, a deleted channel) resumes once an officer fixes the cause and saves a `/config` role or channel, the FC link or `/config guest_applications`, or when the same work is queued again. `/config officer_rank`, `/config role_layout` and `/config fc unlink` don't requeue it.
+Officers see outstanding and failed work in `/sync status`. Blocked work (a permission, the role order, a deleted channel) resumes once an officer fixes the cause. The scheduler retries it by itself about every 10 minutes; saving a `/config` role or channel, the FC link or `/config guest_applications` retries it at once, and so does queuing the same work again. `/config officer_rank`, `/config role_layout` and `/config fc unlink` don't requeue it.
 
 A job that **failed** has stopped for good. After fixing the cause, retry it with [`retry.js`](/tarubot/deploy/tools/#retryjs), giving the server's ID and the job's full ID:
 
