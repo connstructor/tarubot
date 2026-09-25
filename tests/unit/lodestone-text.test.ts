@@ -1,6 +1,6 @@
 /** Lodestone text normalization yields plain display text; HTML encoding belongs to each renderer. */
 import { expect, test } from "bun:test";
-import { display } from "../../src/infrastructure/nodestone/client.js";
+import { display } from "../../src/infrastructure/lodestone/client.js";
 
 test("parser markup is removed completely while line breaks survive", () => {
   expect(display("line one<br>line two<BR/>three<br />four")).toBe(

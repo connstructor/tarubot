@@ -1,13 +1,13 @@
 # Repository workflow
 
 - Work within this repository. Use Bun for installation, scripts, tests, and builds.
-- The Lodestone sidecar parses pages with TaruBot's own parser (`sidecar/lodestone.ts`, since 2.20.0; there is no Nodestone submodule). Its selectors follow `xivapi/lodestone-css-selectors` HEAD live; `bun run selectors:update` refreshes the bundled fallback. Commit the lockfile and `sidecar/upstream-revisions.json` together after verification.
+- The bot parses Lodestone pages in process with TaruBot's own parser (`src/infrastructure/lodestone/`; since 2.20.0 there is no Nodestone, and since 2.21.0 no sidecar). Its selectors follow `xivapi/lodestone-css-selectors` HEAD live; `bun run selectors:update` refreshes the bundled set. Commit the lockfile and `src/infrastructure/lodestone/upstream-revisions.json` together after verification.
 - Keep commands, gateway events, and components in their existing discoverable modules. Add explanatory comments to first-party code, tooling, and tests.
 - Run the checks appropriate to each change. `bun run typecheck`, `bun run lint`, `bun run format:check`, and `bun run build` cover source quality. `bun run test:unit` and `bun run test:contract` cover local behavior; `bun run test:docker` runs the complete suite with disposable PostgreSQL and the locally supplied `tarubot_backup.sql` fixture.
 - Do not edit migrations already applied to a running database; add a migration for schema changes.
 - Use Drizzle ORM and `src/infrastructure/postgres/schema.ts` for application persistence. Bind transaction work with `orm(client)`; keep state, audit, and outbox writes on that client. Numbered SQL migrations remain the schema authority; raw SQL is reserved for migration/control statements, session locks, probes, and catalog-based restore verification. See `docs/PERSISTENCE.md` for exact-value and query conventions.
 - Normal Compose deployments pull GHCR images. DevBot adds `-f docker-compose.devbot.yml` and uses database `tarubot_dev`; append `-f docker-compose.build.yml` for local source builds and editable test plans. Update `test-plans/current.json` before starting a new development test session.
-- `.do/app.yaml` attaches the owner-provisioned DigitalOcean Managed PostgreSQL cluster `tarubot-pg` (database/user `tarubot`); it never creates cloud databases. Keep its image versions synchronized with `package.json`; validate it and its derived foundation/maintenance phases with the pinned offline doctl check. Follow `docs/APP_PLATFORM.md` for provider prerequisites, secret handling, TLS, worker-free creation, and single-writer updates; generating/validating a spec does not authorize creating or changing cloud resources.
+- Production runs on the Linode Docker host (`docker-compose.production.yml`, docs/HOSTING.md) against owner-provisioned Linode managed PostgreSQL. App Platform was retired in 2.21.0; docs/APP_PLATFORM.md is only the record. Nothing here authorizes creating or changing cloud resources.
 
 ## Versioning
 

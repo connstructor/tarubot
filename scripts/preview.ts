@@ -41,7 +41,7 @@ import { guestApplicationsOpen } from "../src/domain/guest-application.js";
 import { managedRoleOrder } from "../src/domain/role-layout.js";
 import { Failure, id, json } from "../src/domain/values.js";
 import { Database } from "../src/infrastructure/postgres/database.js";
-import { Nodestone } from "../src/infrastructure/nodestone/client.js";
+import { Lodestone } from "../src/infrastructure/lodestone/client.js";
 import { eq } from "drizzle-orm";
 import * as t from "../src/infrastructure/postgres/schema.js";
 
@@ -150,9 +150,7 @@ if (import.meta.main) {
         );
       // The token must belong to the profile's application before any member is read.
       assertAuthenticatedApplication(deployment, gateway.client.application?.id);
-      const sync = new Synchronization(
-        new Service(db, gateway, new Nodestone(config.NODESTONE_URL), config),
-      );
+      const sync = new Synchronization(new Service(db, gateway, new Lodestone(), config));
       const actions = [];
       // The grandfathering plan classifies exactly this enumeration.
       const enumeratedAt = new Date();

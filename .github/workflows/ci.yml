@@ -1,4 +1,4 @@
-# Pull requests validate source, persistence, and both image targets before they are merged.
+# Pull requests validate source, persistence, and the bot image before they are merged.
 name: CI
 
 on:
@@ -60,7 +60,7 @@ jobs:
         run: bun run lint
       - name: Check formatting
         run: bun run format:check
-      - name: Compile application and sidecar
+      - name: Compile the application
         run: bun run build
       - name: Generate synthetic integration input
         run: bun run test:fixture
@@ -74,21 +74,6 @@ jobs:
           TARUBOT_IMAGE_TAG=0.0.0 DATABASE_URL=postgresql://tarubot:x@db.example:27520/tarubot \
             DATABASE_CA_CERT=x DISCORD_TOKEN=x \
             docker compose --env-file /dev/null -f docker-compose.production.yml config --quiet
-      # The app is created from the worker-free foundation phase and updated through the
-      # maintenance phase, so both derived files are validated alongside the committed template.
-      - name: Derive worker-free App Platform phases
-        run: |
-          mkdir -p .cache/ci/app-platform
-          for phase in foundation maintenance; do
-            bun scripts/app-spec.ts "$phase" .do/app.yaml ".cache/ci/app-platform/$phase.yaml"
-          done
-      - name: Validate App Platform schemas without cloud credentials
-        run: |
-          for spec in .do/app.yaml .cache/ci/app-platform/foundation.yaml .cache/ci/app-platform/maintenance.yaml; do
-            docker run --rm --network none -v "$PWD:/repo:ro" \
-              digitalocean/doctl:1.169.0@sha256:f8a097dd95129ce4e5c751418d3ba4a67372c908728064af2b7fa7e3ee02b75f \
-              apps spec validate "/repo/$spec" --schema-only > /dev/null
-          done
       # Last, so dependency-update pull requests report every other step of this job before a
       # maintainer adds the required version increment; the job, the container builds that depend
       # on it, and CI result still fail without it.
@@ -108,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [tarubot, nodestone]
+        target: [tarubot]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

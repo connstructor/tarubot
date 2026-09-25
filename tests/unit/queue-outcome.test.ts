@@ -33,7 +33,7 @@ test("expected waits stay queued at debug level without consuming attempts", () 
   expect(jobOutcome(new Failure("ordered", "Earlier entry pending.", 30), 1).delaySeconds).toBe(30);
 });
 
-test("Lodestone throttling waits out the sidecar's cooldown without spending an attempt", () => {
+test("Lodestone throttling waits out the gate's cooldown without spending an attempt", () => {
   // Before 2.17.0 a 429 spent an attempt and eight of them failed the job (the retry storm).
   expect(jobOutcome(new Failure("rate_limited", "Lodestone rate limited.", 45), 8)).toMatchObject({
     code: "rate_limited",

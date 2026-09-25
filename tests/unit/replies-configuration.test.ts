@@ -1199,7 +1199,7 @@ describe("configuration failures render as their approved concepts", () => {
       { code: "not_found", ref: REF, title: "Free Company not found" },
     );
     expectFailure(
-      refusal(failure("unavailable", "Nodestone is unavailable."), officer, "/config fc link"),
+      refusal(failure("unavailable", "The Lodestone is unavailable."), officer, "/config fc link"),
       { code: "unavailable", ref: REF, title: "The Lodestone isn't responding" },
     );
   });
@@ -1270,7 +1270,7 @@ describe("configuration failures render as their approved concepts", () => {
 });
 
 describe("stored Lodestone tags (2.14.0 reply session, D1)", () => {
-  // Nodestone stores a tag as the Lodestone shows it, «EXMPL»; DevBot's /config show and
+  // The parser stores a tag as the Lodestone shows it, «EXMPL»; DevBot's /config show and
   // /config validate rendered ««Souls»» until presenters stripped the stored pair.
   const stored = { ...CONFIG_FC, tag: "«EXMPL»" };
   const tagged = configReport({ fc: fcRow({ tag: stored.tag }) });

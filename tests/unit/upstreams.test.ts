@@ -3,7 +3,14 @@
  * notice a new HEAD and tolerate update-service outages.
  */
 import { expect, test } from "bun:test";
-import { lockedRevisions, UpstreamMonitor, upstreams } from "../../sidecar/upstreams.js";
+import revisions from "../../src/infrastructure/lodestone/upstream-revisions.json" with {
+  type: "json",
+};
+import {
+  lockedRevisions,
+  UpstreamMonitor,
+  upstreams,
+} from "../../src/infrastructure/lodestone/upstreams.js";
 
 const deployed = {
   "lodestone-css-selectors": {
@@ -82,4 +89,15 @@ test("bun.lock's selector commit is read from its Git resolution", () => {
   expect(() =>
     lockedRevisions({ packages: { "lodestone-css-selectors": ["lodestone-css-selectors@1.0.0"] } }),
   ).toThrow("Missing Git revision");
+});
+
+test("the recorded bundled commit is the one bun.lock resolved (2.21.0: formerly a build step)", async () => {
+  // A mismatch would mislabel the bundled set in /health/ready and issue reports.
+  const locked = lockedRevisions(
+    Bun.JSONC.parse(await Bun.file(new URL("../../bun.lock", import.meta.url)).text()),
+  )["lodestone-css-selectors"];
+  const recorded = revisions["lodestone-css-selectors"];
+  expect(recorded.repository).toBe("xivapi/lodestone-css-selectors");
+  expect(locked).toBeDefined();
+  expect(recorded.revision.startsWith(locked ?? "-")).toBe(true);
 });

@@ -14,5 +14,3 @@ const compiler = Bun.spawn(
   },
 );
 if ((await compiler.exited) !== 0) throw new Error("TypeScript compilation failed.");
-// The sidecar's pinned third-party source is bundled after first-party compilation.
-await import("./build-sidecar.js");

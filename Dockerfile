@@ -23,12 +23,6 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER bun
 STOPSIGNAL SIGTERM
 
-# The bundled worker holds TaruBot's own Lodestone parser (2.20.0); it loads the live selector set,
-# falling back to the bundled copy in dist/sidecar/selectors-baseline.json.
-FROM runtime AS nodestone
-EXPOSE 8080
-CMD ["bun", "dist/sidecar/server.js"]
-
 # The test harness injects the SQL fixture separately into an ephemeral container.
 FROM build AS test
 CMD ["bun", "test", "tests"]

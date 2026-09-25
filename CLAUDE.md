@@ -6,7 +6,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
 
 ## Project map
 
-- `src/main.ts`: composition root. It wires the database, Discord gateway, Nodestone client, services, and job queue.
+- `src/main.ts`: composition root. It wires the database, Discord gateway, Lodestone adapter, services, and job queue.
 - `src/bot/`: module contracts, recursive discovery, the service registry, and the router. The router handles actor resolution, authorization, acknowledgement, and the optional pre-modal check a modal command can declare with `beforeModal`. `shape.ts` refuses a subcommand or option the release doesn't declare (another release's registration) with the stale card.
 - `src/commands/<feature>/*.command.ts` (one root command per file), `src/events/*.event.ts`, and `src/components/*.component.ts`: all discovered automatically. See docs/MODULES.md.
 - `src/application/`: durable business operations.
@@ -27,12 +27,12 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
 - `src/import/`: the legacy MariaDB importer. Imports keep the legacy review channel with the guest-application switch off, and start with layout off and grandfathering pending.
-- `scripts/`: one-shot operator tools: migrate, register, commands (scope read-back and cleanup), snapshot, import, acquire, preview, activate, retry, check-restore, discord-inspect, discord-smoke, and app-spec (App Platform phases).
-- `sidecar/`: the bounded Lodestone service. It keeps the Compose service `nodestone`, the image `tarubot-nodestone` and `NODESTONE_URL`, but no longer uses Nodestone (2.20.0).
-  - `lodestone.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages.
-  - `worker.ts` fetches through the server's gate and parses the page.
-  - Selectors follow upstream HEAD live: `selectors.ts` downloads and validates them, and `selector-runtime.ts` loads them per worker.
-  - `bun run selectors:update` only refreshes the bundled fallback.
+- `scripts/`: one-shot operator tools: migrate, register, commands (scope read-back and cleanup), snapshot, import, acquire, preview, activate, retry, check-restore, discord-inspect, discord-smoke, and selectors-update (the bundled selector set).
+- `src/infrastructure/lodestone/`: the Lodestone adapter, in the bot process since 2.21.0 (there is no sidecar and no Nodestone).
+  - `client.ts` (`Lodestone`): parse slots (`LODESTONE_CONCURRENCY`, waiting rather than refusing), retries, reachability, and validation of every parsed field.
+  - `runner.ts` fetches under the network policy (region, `gate.ts` spacing and 429 cooldown, body bound, private-profile detection), then parses in a fresh worker (`worker.ts`), terminated at the deadline.
+  - `parser.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages. `pages.ts` says which page, files and keys each operation reads.
+  - Selectors follow upstream HEAD live, in memory: `selectors.ts` downloads and validates them, and `upstreams.ts` checks HEAD. `bundled.ts` is the set shipped with the release (`bun run selectors:update` refreshes it).
 - `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `008_issue_reports.sql`; 2.17.x required `007_profile_checks.sql`).
 
 ## Commands
@@ -53,9 +53,8 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 1. Branch from `origin/main`. Local `main` may lag.
 2. Bump `package.json`. Add `## X.Y.Z — Title` to CHANGELOG.md and update its current-version sentence.
 3. Sync the version everywhere it appears:
-   - `.do/app.yaml` `tag: &release` (unit-tested);
    - `test-plans/current.json`;
-   - the current-version sentences in docs/APP_PLATFORM.md, docs/CONFIGURATION.md, and docs/PERSISTENCE.md.
+   - the current-version sentences in docs/CONFIGURATION.md and docs/PERSISTENCE.md.
 
    Record the evidence in docs/VERIFICATION.md, and state changes in docs/OPEN_ITEMS.md and docs/DEV_GUILD.md.
 4. In `test-plans/current.json`, each actor's list must fit in one 1,024-character embed field (`tests/unit/test-session.test.ts`).
@@ -72,7 +71,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   2. `pg_dump` to `.cache/backups/tarubot_dev-before-X.Y.Z-<sha>.dump`.
   3. Restore it into `tarubot_dev_restore_test` and run `dist/scripts/check-restore.js`. Use the currently deployed build, or the new build with `--schema-version <current head>.sql`, because both databases are still on the old schema.
   4. If there is a migration, rehearse it on the restore first: `docker compose -f docker-compose.yml -f docker-compose.devbot.yml run --rm --no-deps -T tarubot sh -c 'DATABASE_URL="${DATABASE_URL%/*}/tarubot_dev_restore_test" exec bun dist/scripts/migrate.js --restore-rehearsal'` must print `Schema ready.` Then run a plain `dist/scripts/migrate.js` against `tarubot_dev`.
-  5. `up -d --wait tarubot nodestone`.
+  5. `up -d --wait --remove-orphans tarubot` (`--remove-orphans` clears a pre-2.21.0 sidecar container).
   6. Register guild commands, then confirm with `dist/scripts/commands.js list`.
   7. Check readiness (including `writerLease`), logs, and the plan posted in #chat.
 - Run one-off tools inside the image: `… run --rm --no-deps -T tarubot bun dist/scripts/<tool>.js`. For other database names, derive the URL inside the container (`${DATABASE_URL%/*}/<db>`) instead of printing credentials.
@@ -81,7 +80,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 
 ## Production and cutover
 
-- Production went live on 2026-09-24. Since that evening it runs on the Linode Docker host `tarubot@tarubot.deconfined.com` (`~/tarubot`, `docker-compose.production.yml`, a mode-600 `.env`), attached to Linode managed PostgreSQL `tarubot-pgsql` (database and user `tarubot`, direct port 27520, never the 27521 pool). See docs/HOSTING.md. App Platform (docs/APP_PLATFORM.md, `.do/app.yaml`) is superseded because the Lodestone returns 403 to DigitalOcean's addresses. It is kept validated as the record and as a fallback.
+- Production went live on 2026-09-24. Since that evening it runs on the Linode Docker host `tarubot@tarubot.deconfined.com` (`~/tarubot`, `docker-compose.production.yml`, a mode-600 `.env`), attached to Linode managed PostgreSQL `tarubot-pgsql` (database and user `tarubot`, direct port 27520, never the 27521 pool). See docs/HOSTING.md. App Platform is retired (2.21.0): the Lodestone returns 403 to DigitalOcean's addresses, and with the parser inside the bot it could not serve as a fallback. docs/APP_PLATFORM.md stays as the record; its spec and tooling were removed.
 - Production tools never run from this checkout or its `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file="$HOME/tarubot-cutover/production.env" dist/scripts/<tool>.js`, never `bun run`. The file is a copy of `production.env.example`. Before the window, token use is limited to read-only REST inspection and rehearsal logins against `tarubot_rehearsal`, under `TARUBOT_ENVIRONMENT=rehearsal`, which the guard keeps read-only on Discord. See docs/MIGRATION.md E0–E2.
 - The production application `965294750741692416` must not be installed in the dev guild; the owner removes it before cutover.
 - Production registers commands only with `register.js --global`; the guard refuses a production `--guild` registration, which would show every command twice.
@@ -92,7 +91,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardens Lodestone handling (migration 007), 2.18.0 adds the issue reporter, then OPS-10/OPS-11.
+  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, and 2.21.0 moved the parser into the bot (no sidecar); then OPS-10/OPS-11.
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
@@ -105,7 +104,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - Shell exports override an env file.
   - The tool guard refuses production and rehearsal runs that could merge these values.
 - One bot process writes to a database. It holds the writer lease (PostgreSQL advisory lock `714882494`) from before login until shutdown, and checks the lease session every 30 seconds, exiting with status 1 if it errors, goes silent or no longer holds the lock (also when shutdown then hangs, through the 27-second deadline). Every lease statement, including each wait attempt, has a 10-second client-side deadline; a waiting process whose session goes silent exits with status 1 too. A second instance logs `Waiting for the database writer lease…`, stays unready (readiness 503) and does nothing until the lease frees, then checks the schema again before logging in. Since 2.16.0 `migrate.js` takes the same lease (transaction-scoped) whenever a migration is pending, waits up to `MIGRATE_WRITER_WAIT_SECONDS` (90) for a stopping bot and then refuses, so stop the bot before migrating; with nothing pending it ignores the lease. Before migrate, import, activate, or restore, still check `pg_locks` for that key (docs/OPERATIONS.md).
-- Queue waits (`busy`, `ordered`, `cooldown`, `superseded`, and since 2.17.0 the Lodestone's `rate_limited`) are expected and log at debug. `lease_lost` logs at warn, and only terminal failures log at error. Throttling shows instead as one sidecar log line per Lodestone 429 (`lodestone_throttled`) and in the sidecar's `/health` (`lodestone.cooldownSeconds`).
+- Queue waits (`busy`, `ordered`, `cooldown`, `superseded`, and since 2.17.0 the Lodestone's `rate_limited`) are expected and log at debug. `lease_lost` logs at warn, and only terminal failures log at error. Throttling shows instead as one bot log line per Lodestone 429 ("The Lodestone throttled TaruBot") and in `/health/ready` (`lodestone.cooldownSeconds`).
 - Profile refreshes (2.17.0):
   - The scheduler uses `scheduleJob`, which never touches an active job; `enqueue` pulls one forward. It stamps `characters.profile_retry_at` an hour ahead for each character it queues.
   - A private profile (`private_profile`) completes the job as `{status: "private"}` and waits for the profile interval.

@@ -67,7 +67,7 @@ export function fingerprint(...parts: readonly (string | number | null | undefin
 
 /**
  * The first-party frames of a stack, which identify where an error came from without the noise of
- * dependency internals: frames under src/, scripts/ or sidecar/, with any absolute directory before
+ * dependency internals: frames under src/ or scripts/, with any absolute directory before
  * the repository-relative path removed.
  */
 export function firstPartyFrames(stack: string | undefined, limit = 8): string[] {
@@ -76,21 +76,14 @@ export function firstPartyFrames(stack: string | undefined, limit = 8): string[]
     .split("\n")
     .slice(1)
     .map((line) => line.trim())
-    .filter((line) => /\/(src|dist\/src|scripts|dist\/scripts|sidecar)\//u.test(line))
+    .filter((line) => /\/(src|dist\/src|scripts|dist\/scripts)\//u.test(line))
     .filter((line) => !line.includes("node_modules"))
     .map(relative)
     .slice(0, limit);
 }
 
 /** Repository-relative markers, compiled output first; the last occurrence wins. */
-const FRAME_ROOTS = [
-  "/dist/src/",
-  "/dist/scripts/",
-  "/dist/sidecar/",
-  "/src/",
-  "/scripts/",
-  "/sidecar/",
-];
+const FRAME_ROOTS = ["/dist/src/", "/dist/scripts/", "/src/", "/scripts/"];
 
 /** A stack frame with everything before its repository-relative path removed. */
 function relative(line: string): string {

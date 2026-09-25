@@ -1,6 +1,6 @@
 {
   "name": "tarubot",
-  "version": "2.20.0",
+  "version": "2.21.0",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -34,7 +34,6 @@
     "roster:acquire": "bun dist/scripts/acquire.js",
     "activate": "bun dist/scripts/activate.js",
     "jobs:retry": "bun dist/scripts/retry.js",
-    "app:spec": "bun dist/scripts/app-spec.js",
     "test:docker": "bun scripts/test-docker.ts",
     "test:fixture": "bun tests/fixtures/legacy.ts",
     "ci:version": "bun scripts/ci-version.ts",
@@ -45,6 +44,8 @@
     "discord.js": "14.27.0",
     "drizzle-orm": "0.45.3",
     "html-entities": "2.6.0",
+    "linkedom": "0.16.11",
+    "lodestone-css-selectors": "git+https://github.com/xivapi/lodestone-css-selectors.git#HEAD",
     "pg": "8.23.0",
     "pino": "10.3.1",
     "zod": "4.6.5"
@@ -53,8 +54,6 @@
     "@biomejs/biome": "2.5.14",
     "@types/bun": "1.4.2",
     "@types/pg": "8.23.1",
-    "linkedom": "0.16.11",
-    "lodestone-css-selectors": "git+https://github.com/xivapi/lodestone-css-selectors.git#HEAD",
     "typescript": "7.0.2"
   }
 }

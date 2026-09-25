@@ -6,7 +6,7 @@
 import type { ChatInputCommandInteraction } from "discord.js";
 import { z } from "zod";
 import type { Service } from "../application/service.js";
-import type { CharacterIdentity } from "../infrastructure/nodestone/client.js";
+import type { CharacterIdentity } from "../infrastructure/lodestone/client.js";
 import {
   type EntryRef,
   Failure,
@@ -16,7 +16,7 @@ import {
   sequenceCursor,
 } from "../domain/values.js";
 
-/** Longest Lodestone search inputs the sidecar accepts (its request schema's bounds). */
+/** Longest Lodestone search inputs the adapter accepts (its request schema's bounds). */
 const MAX_NAME = 100;
 const MAX_WORLD = 80;
 
@@ -85,7 +85,7 @@ export function cursor(value: string | null): string | null {
   return value === null ? null : sequenceCursor(value.trim()).toString();
 }
 
-/** Bound a search input to what the Lodestone sidecar accepts, naming the offending option. */
+/** Bound a search input to what the Lodestone adapter accepts, naming the offending option. */
 function searchText(value: string, max: number, option: string): string {
   if (value.length > max)
     throw new Failure("input", "Names can be up to 100 characters and worlds up to 80.", 0, {

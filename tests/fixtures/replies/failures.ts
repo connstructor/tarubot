@@ -800,7 +800,7 @@ export const FAILURE_CASES = {
     "upstream.lodestone_page",
     "member",
     { tone: "warning", title: "Unexpected Lodestone page" },
-    failure("invalid_response", "Nodestone returned missing or invalid required fields.", {
+    failure("invalid_response", "The Lodestone page lacked required fields.", {
       kind: "resource",
       resource: "character",
       id: CHARACTER.id,

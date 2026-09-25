@@ -1,10 +1,9 @@
 /**
  * What each Lodestone operation reads (2.20.0): its page, its selector files and the keys it parses.
- * Kept apart from the parser (sidecar/lodestone.ts) so the sidecar server, which validates new
- * selector sets against these keys (sidecar/selectors.ts), doesn't load the DOM library: linkedom is
- * bundled into the worker only.
+ * Kept apart from the parser (parser.ts), so the modules that fetch pages and check new selector sets
+ * against these keys (runner.ts, selectors.ts) don't load the DOM library, which only workers need.
  */
-import type { ParseRequest } from "../src/infrastructure/nodestone/protocol.js";
+import type { ParseRequest } from "./protocol.js";
 
 /** The page every operation reads, on the configured region's Lodestone. */
 export function pageUrl(input: ParseRequest, region: string): string {
@@ -66,7 +65,7 @@ export function pagePlan(input: ParseRequest): { files: string[]; keys: string[]
 
 /**
  * Every top-level selector key any operation parses. A new selector set must keep these, and all
- * they contain, with the same shape (sidecar/selectors.ts); other columns may change freely.
+ * they contain, with the same shape (selectors.ts); other columns may change freely.
  */
 export const PARSED_KEYS: readonly string[] = [
   ...new Set(

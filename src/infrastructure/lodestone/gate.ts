@@ -1,7 +1,7 @@
 /**
- * Process-wide Lodestone admission for the sidecar: request-start spacing (NODE-08), plus one shared
- * cooldown after the Lodestone throttles us (2.17.0). Before 2.17.0 a 429 only failed the request
- * that received it, so every queued request kept hitting a Lodestone that was already refusing.
+ * Process-wide Lodestone admission (in the bot since 2.21.0): request-start spacing (NODE-08), plus
+ * one shared cooldown after the Lodestone throttles us (2.17.0). Before 2.17.0 a 429 only failed the
+ * request that received it, so every queued request kept hitting a Lodestone that was already refusing.
  * Now the first 429 closes the gate for everyone: new starts are refused locally with the remaining
  * cooldown as retryAfter, without touching the Lodestone, and the cooldown doubles on each
  * consecutive 429 until any other Lodestone answer resets the escalation.

@@ -12,22 +12,20 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 | Drizzle ORM / node-postgres | 0.45.3 / 8.23.0 |
 | PostgreSQL | 18.4 |
 
-The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. The `nodestone` service is TaruBot's bounded Lodestone sidecar. Since 2.20.0 it parses pages with TaruBot's own parser, applying [`xivapi/lodestone-css-selectors`](https://github.com/xivapi/lodestone-css-selectors) directly (the Nodestone library it was named after is gone), and it follows the selectors' upstream HEAD live. See [the sidecar contract](docs/NODESTONE.md).
+The normal Compose services are `tarubot` and `postgres`. First-party production code is compiled ESM. The bot reads the Lodestone in process (since 2.21.0 there is no sidecar): TaruBot's own parser applies [`xivapi/lodestone-css-selectors`](https://github.com/xivapi/lodestone-css-selectors) directly in isolated workers, and follows the selectors' upstream HEAD live. See [the Lodestone adapter](docs/LODESTONE.md).
 
-**Production** runs on a Linode Docker host with [`docker-compose.production.yml`](docker-compose.production.yml). That file holds the bot and Nodestone only, pinned to one release and attached to Linode managed PostgreSQL. See [HOSTING.md](docs/HOSTING.md). The DigitalOcean App Platform setup below is superseded, because the Lodestone refuses DigitalOcean's addresses. It is kept validated as a fallback.
+**Production** runs on a Linode Docker host with [`docker-compose.production.yml`](docker-compose.production.yml). That file holds the bot only, pinned to one release and attached to Linode managed PostgreSQL. See [HOSTING.md](docs/HOSTING.md). DigitalOcean App Platform, where the cutover first went live, was retired in 2.21.0 because the Lodestone refuses DigitalOcean's addresses; [APP_PLATFORM.md](docs/APP_PLATFORM.md) remains as the record.
 
-For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) attaches the owner-provisioned **Managed PostgreSQL cluster** `tarubot-pg` (database/user `tarubot`) and defines a single bot worker, an internal Nodestone service, and a migration job. It uses the published images and provider-bound database credentials/CA. The app is created from a derived worker-free phase and the worker is added only at activation; a PostgreSQL writer lease keeps exactly one bot writer. See [APP_PLATFORM.md](docs/APP_PLATFORM.md) for provider prerequisites, deployment phases, and single-writer updates.
+Normal deployments pull **`ghcr.io/deconfined/tarubot:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
-Normal deployments pull **`ghcr.io/deconfined/tarubot:latest`** and **`ghcr.io/deconfined/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
-
-The sidecar checks the selector repository every 15 minutes and activates a new HEAD by itself; `/health` and its logs show the live revision. To refresh the copy bundled into the image as a fallback:
+The bot checks the selector repository every 15 minutes and activates a new HEAD by itself; `/health/ready` and its logs show the live revision. To refresh the set bundled with a release as the fallback:
 
 ```sh
 bun run selectors:check
 bun run selectors:update
 ```
 
-Merge the update PR and pull its published images. `--deploy` also rebuilds and restarts a local source build.
+Merge the update PR and pull its published image.
 
 ## Modular commands and events
 
@@ -106,7 +104,7 @@ Create `.env` using `.env.example` and supply the token, application ID, and dat
 
 ```sh
 docker compose pull
-docker compose up -d --wait postgres nodestone
+docker compose up -d --wait postgres
 docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
 docker compose run --rm --no-deps tarubot bun dist/scripts/register.js --guild YOUR_TEST_GUILD_ID
 ```
@@ -130,12 +128,12 @@ Every development startup posts the current responsibility-separated session pla
 
 For the supplied legacy data, follow the [migration runbook](docs/MIGRATION.md) before enabling effects. An imported guild has its own persisted activation flag as well as the process-wide `ENABLE_EFFECTS` setting, and starts with guest applications closed, the role layout off, and one first-activation grandfathering run owed.
 
-**Production maintenance tools** never use this checkout's `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file=PRODUCTION_ENV dist/scripts/TOOL.js`, with a production env file copied from [`production.env.example`](production.env.example) and an isolated Nodestone sidecar on `127.0.0.1:18080`. A deployment guard checks the application, test scope, guilds, and databases against one profile (production, rehearsal, or DevBot) before any I/O; see [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) and [MIGRATION.md](docs/MIGRATION.md) E0.
+**Production maintenance tools** never use this checkout's `.env`. They run from a clean clone of the deployed release as `env -i HOME="$HOME" PATH="$PATH" bun --env-file=PRODUCTION_ENV dist/scripts/TOOL.js`, with a production env file copied from [`production.env.example`](production.env.example). Tools that read the Lodestone parse in their own process. A deployment guard checks the application, test scope, guilds, and databases against one profile (production, rehearsal, or DevBot) before any I/O; see [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) and [MIGRATION.md](docs/MIGRATION.md) E0.
 
 To run the compiled bot or one-shot tools locally (development only), publish loopback-only dependency ports explicitly:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --wait postgres nodestone
+docker compose -f docker-compose.yml -f docker-compose.tools.yml up -d --wait postgres
 bun run build
 bun run start
 ```
@@ -172,12 +170,11 @@ The normal Compose configuration keeps dependency ports private. Use a separate 
 | `bun run jobs:retry GUILD_ID JOB_ID` | Retry delivery independently of a committed decision |
 | `bun run commands:list [--guild ID ...] [--declared-scope global\|ID]` | Read back every command scope; exits 0 only when the declared scope matches and every other scope is empty |
 | `bun run commands:clear-guild GUILD_ID --application APP_ID [--confirm FINGERPRINT]` | Dry-run, then fingerprint-confirmed removal of one guild scope's leftover commands |
-| `bun run app:spec PHASE INPUT OUTPUT` | Derive the `foundation`, `maintenance`, or `full` App Platform spec |
 | `bun dist/scripts/discord-inspect.js` | Read-only REST preflight: DevBot mode, or (production/rehearsal profile) intents, guilds, permissions, managed-role hierarchy, and channel access with `--guild ID --dump FILE`, plus repeatable `--role ID` for roles the dump does not name (the Officer role) |
 
 One-shot commands execute compiled scripts; run `bun run build` after source changes. The equivalent container commands use `bun dist/scripts/NAME.js`. The `bun run` forms are for development: production and rehearsal tools run the compiled files directly with `bun --env-file` (see above).
 
-Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, the database writer lease, and Discord connectivity; a second bot process against the same database stays unready until the first releases the lease. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations. The sidecar exposes `/health` on port 8080.
+Local probes are `/health/live` and `/health/ready` on port 3000 inside the bot container. Readiness depends on initialization, schema/database availability, the database writer lease, and Discord connectivity; a second bot process against the same database stays unready until the first releases the lease. Capability metrics include pending/blocked work, accepted-roster age, and degraded FCs; Lodestone outages preserve available local operations; readiness also reports the Lodestone gate and the live selectors (informational).
 
 The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs, and outbox deliveries remain in PostgreSQL across restarts. [Recovery and backup procedures](docs/OPERATIONS.md) explain inspection, retries, and restoration.
 
@@ -188,12 +185,11 @@ The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs,
 - `src/bot`: reusable module discovery, contracts, service injection, and interaction dispatch.
 - `src/commands`, `src/events`, `src/components`: independently loaded feature adapters.
 - `src/discord`: Discord effects, shared option builders, selectors, and reply presentation.
-- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, plus the typed adapter for the Lodestone sidecar.
+- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, the GitHub clients, and the Lodestone adapter: TaruBot's own selector-driven parser, isolated workers, live selectors, and transport controls.
 - `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
 - `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
-- `sidecar`: the Lodestone service: TaruBot's own selector-driven parser, isolated workers, live selectors, and transport controls.
 - `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.
 
 ## License
 
-TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. Third-party dependencies, including the `lodestone-css-selectors` data the sidecar parses with, retain their own licenses.
+TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. Third-party dependencies, including the `lodestone-css-selectors` data the parser applies, retain their own licenses.

@@ -38,8 +38,8 @@ import type { Actor } from "../../src/domain/policy.js";
 import { desiredAccess } from "../../src/domain/policy.js";
 import { Failure, json } from "../../src/domain/values.js";
 import { audit, Database, ensureUser, orm } from "../../src/infrastructure/postgres/database.js";
-import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
-import type { Roster } from "../../src/infrastructure/nodestone/client.js";
+import { Lodestone } from "../../src/infrastructure/lodestone/client.js";
+import type { Roster } from "../../src/infrastructure/lodestone/client.js";
 import { readDump } from "../../src/import/dump.js";
 import { importLegacy, mappings, type Snapshot } from "../../src/import/importer.js";
 import {
@@ -158,7 +158,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       dms.push({ user, message });
     },
   };
-  class FakeNodestone extends Nodestone {
+  class FakeLodestone extends Lodestone {
     // Explicit observation timestamps advance departure evidence without waiting a real minute.
     rosterValue: Roster | null = null;
     rosterFailure = false;
@@ -235,7 +235,6 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     DATABASE_URL: url,
     DISCORD_TOKEN: "test-only",
     DISCORD_APPLICATION_ID: "123",
-    NODESTONE_URL: "http://unused",
     LOG_LEVEL: "error",
     ENABLE_EFFECTS: true,
     TEST_GUILD_ID: "",
@@ -248,8 +247,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     GITHUB_REPORTS_TOKEN: "",
     GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
   };
-  const nodestone = new FakeNodestone("http://unused");
-  const service = new Service(db, discord, nodestone, config);
+  const lodestone = new FakeLodestone();
+  const service = new Service(db, discord, lodestone, config);
   /** Existing decision scenarios now submit the same bounded form contract as Discord visitors. */
   async function applicationInput(applicant: Actor) {
     const member = await discord.member(applicant.guildId, applicant.userId);
@@ -457,7 +456,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )
     )[0];
     expect(persisted?.token_hash).not.toBe(proof);
-    const restarted = new Service(db, discord, new FakeNodestone("http://unused"), config);
+    const restarted = new Service(db, discord, new FakeLodestone(), config);
     await Promise.all([restarted.verify(self, identity.id), service.verify(self, identity.id)]);
     expect(
       (
@@ -546,7 +545,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   }
   test("imported member protection, two absences, reappearance, and failed publication", async () => {
     const publish = async (appears: boolean, instant: Date) => {
-      nodestone.rosterValue = {
+      lodestone.rosterValue = {
         company: {
           id: fc,
           name: "Woven Souls",
@@ -618,9 +617,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         [fc],
       )
     )[0]?.last_successful_roster_at;
-    nodestone.rosterFailure = true;
+    lodestone.rosterFailure = true;
     await expect(publish(false, new Date(initial + 183000))).rejects.toThrow("incomplete");
-    nodestone.rosterFailure = false;
+    lodestone.rosterFailure = false;
     // Throttling is a wait, not degradation (2.17.0): the FC records it for /sync status, but the
     // queued officer notice is not re-enqueued, which would bump its generation.
     const notice = async () =>
@@ -632,11 +631,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0]?.generation;
     const noticed = await notice();
     expect(noticed).toBeNumber();
-    nodestone.rosterError = new Failure("rate_limited", "Lodestone rate limited.", 30);
+    lodestone.rosterError = new Failure("rate_limited", "Lodestone rate limited.", 30);
     await expect(publish(false, new Date(initial + 184000))).rejects.toMatchObject({
       code: "rate_limited",
     });
-    nodestone.rosterError = null;
+    lodestone.rosterError = null;
     expect(await notice()).toBe(noticed);
     expect(
       (
@@ -1795,7 +1794,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await service.assign(manager, "90031", leader, "Leader link");
     await service.assign(manager, "90032", officer, "Officer link");
     await service.assign(delegated, "90033", indirect, "Delegated membership assignment");
-    nodestone.rosterValue = {
+    lodestone.rosterValue = {
       company: {
         id: fc,
         name: "Setup FC",
@@ -1976,9 +1975,9 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         return { order: [...priority] };
       },
     };
-    const app = new Service(db, layoutPort, nodestone, config);
+    const app = new Service(db, layoutPort, lodestone, config);
     const run = dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort));
-    const disabled = new Service(db, layoutPort, nodestone, { ...config, ENABLE_EFFECTS: false });
+    const disabled = new Service(db, layoutPort, lodestone, { ...config, ENABLE_EFFECTS: false });
     await expect(
       dispatcher(
         disabled,
@@ -2026,7 +2025,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         return { order: [...priority] };
       },
     };
-    const app = new Service(db, layoutPort, nodestone, config);
+    const app = new Service(db, layoutPort, lodestone, config);
     const queue = new Queue(
       db,
       dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort)),
@@ -2067,7 +2066,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         return { order: [...priority] };
       },
     };
-    const app = new Service(db, layoutPort, nodestone, config);
+    const app = new Service(db, layoutPort, lodestone, config);
     const run = dispatcher(app, new Synchronization(app), new GuildAccess(app, accessPort));
     const queue = new Queue(db, run, () => {});
     const outcome = async (id: string) =>
@@ -2149,7 +2148,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           throw new Failure("forbidden", "Your highest role must be above the selected role.");
       },
     };
-    const app = new Service(db, port, nodestone, config);
+    const app = new Service(db, port, lodestone, config);
     const manager: Actor = { ...actor, guildId: layoutGuild, serverManager: true };
     const state = async () =>
       (
@@ -2268,7 +2267,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           return [];
         },
       },
-      nodestone,
+      lodestone,
       config,
     );
     const refresh = new Synchronization(app);
@@ -2366,7 +2365,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         ].map((member) => ({ ...member, guildId }));
       },
     };
-    const app = new Service(db, port, nodestone, config);
+    const app = new Service(db, port, lodestone, config);
     for (const id of [adopting, skipping])
       await db.orm.insert(t.guilds).values({ id, effects_enabled: true });
     const overrides = (guildId: string) =>
@@ -2689,7 +2688,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
 
   test("channel effects honor activation, setup exclusion, revision fencing and missing-room readback", async () => {
     const fixture = await accessFixture("666666666666666672");
-    const disabled = new Service(db, discord, nodestone, { ...config, ENABLE_EFFECTS: false });
+    const disabled = new Service(db, discord, lodestone, { ...config, ENABLE_EFFECTS: false });
     await expect(
       new GuildAccess(disabled, fixture.port).reconcile(fixture.guild.id, async () => {}),
     ).rejects.toMatchObject({ code: "disabled" });
@@ -2774,7 +2773,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
           return [];
         },
       },
-      nodestone,
+      lodestone,
       config,
     );
     const sync = new Synchronization(app);
@@ -3076,7 +3075,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     if (!rejoined) throw new Error("Missing rejoining visitor");
     rejoined.joinedAt = new Date();
     await events.memberJoined(fixture.guild.id, firstUser, rejoined.joinedAt);
-    const restarted = new Service(db, discord, nodestone, config);
+    const restarted = new Service(db, discord, lodestone, config);
     expect(await restarted.registrationGuestEligible(db.pool, fixture.guild, firstUser)).toBe(
       false,
     );
@@ -3174,7 +3173,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
    * observation instant lets departure confirmation (two absences 60 s apart) run without waiting.
    */
   async function publishRoster(fcId: string, roster: Roster["members"], observedAt = new Date()) {
-    nodestone.rosterValue = {
+    lodestone.rosterValue = {
       company: {
         id: fcId,
         name: "Isolated FC",
@@ -3263,7 +3262,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
             return [visitor];
           },
         },
-        nodestone,
+        lodestone,
         config,
       ),
     );
@@ -3546,7 +3545,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     return link.id;
   }
 
-  /** A roster member of the given FC, as Nodestone reports one. */
+  /** A roster member of the given FC, as the Lodestone adapter reports one. */
   const rosterMember = (id: string, fcId: string) => ({
     id,
     name: `Cutover ${id}`,
@@ -3882,7 +3881,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await events.memberJoined(id, cutover.roleless, new Date("2026-01-01T00:00:00Z"));
     await reconcileIn(id, cutover.roleless);
     expect(roles(cutover.roleless)).toEqual([]);
-    const restarted = new Synchronization(new Service(db, discord, nodestone, config));
+    const restarted = new Synchronization(new Service(db, discord, lodestone, config));
     const work = await enqueue(
       db.pool,
       "reconcile.user",
@@ -4572,7 +4571,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         await reconcileUser(db.pool, guildId, userId);
       },
     };
-    const app = new Service(db, echoPort, nodestone, config);
+    const app = new Service(db, echoPort, lodestone, config);
     const events: QueueEvent[] = [];
     const queue = new Queue(
       db,
@@ -4663,7 +4662,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         return "123456789";
       },
     };
-    const app = new Service(db, reviewPort, nodestone, config);
+    const app = new Service(db, reviewPort, lodestone, config);
     const synchronization = new Synchronization(app);
     const services = new Services();
     services.provide(applicationKey, app);
@@ -4825,7 +4824,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
             return observed;
           },
         },
-        nodestone,
+        lodestone,
         config,
       );
       await expect(app.apply(applicant, input)).rejects.toMatchObject({ code: "stale" });
@@ -4859,7 +4858,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       false,
       "Please ask an officer before reapplying.",
     );
-    const restarted = new Service(db, discord, nodestone, config);
+    const restarted = new Service(db, discord, lodestone, config);
     await expect(restarted.apply(applicant, input)).rejects.toMatchObject({ code: "cooldown" });
     await db.query("UPDATE guest_applications SET decided_at=now()-interval '2 days' WHERE id=$1", [
       application.id,
@@ -5944,7 +5943,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await service.configure(held, "officer_notifications_channel_id", "98206"),
     ).toMatchObject({ effectsMode: "awaiting_activation" });
     // ENABLE_EFFECTS=false holds every guild's work, whatever its own activation state.
-    const disabled = new Service(db, discord, nodestone, { ...config, ENABLE_EFFECTS: false });
+    const disabled = new Service(db, discord, lodestone, { ...config, ENABLE_EFFECTS: false });
     const live = await displayGuild("888888888888888808", "9230000000000098010");
     expect((await disabled.validate(live)).effectsMode).toBe("deployment_disabled");
     expect(
@@ -6144,7 +6143,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0];
 
     // A private profile is an answer, not an outage: the job completes and waits a profile interval.
-    nodestone.profileFailures.set(
+    lodestone.profileFailures.set(
       characterId,
       new Failure("private_profile", "The Lodestone profile is private."),
     );
@@ -6152,7 +6151,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(await state()).toMatchObject({ missing: null, paced_a_day: true, active: true });
 
     // The first 404 is recorded and the link stays.
-    nodestone.profileFailures.set(characterId, new Failure("not_found", "No such character."));
+    lodestone.profileFailures.set(characterId, new Failure("not_found", "No such character."));
     expect(await profileJob()).toMatchObject({ status: "missing", confirmed: false, links: 0 });
     const firstAt = (await state())?.missing;
     expect(firstAt).toBeInstanceOf(Date);
@@ -6161,12 +6160,12 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect((await state())?.missing?.getTime()).toBe(firstAt?.getTime());
     expect((await state())?.active).toBe(true);
     // Any sighting in between voids the first 404.
-    nodestone.profileFailures.delete(characterId);
+    lodestone.profileFailures.delete(characterId);
     expect(await profileJob()).toEqual({ status: "updated" });
     expect((await state())?.missing).toBeNull();
 
     // A fresh first 404, then another more than an hour later, ends the link.
-    nodestone.profileFailures.set(characterId, new Failure("not_found", "No such character."));
+    lodestone.profileFailures.set(characterId, new Failure("not_found", "No such character."));
     await profileJob();
     await db.query(
       "UPDATE characters SET profile_missing_at=now()-interval '61 minutes' WHERE id=$1",
@@ -6212,7 +6211,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     expect(notice?.payload.message).toContain(`<@${owner}>`);
     // With no active link left, the character is never refreshed again.
     expect(await profileJob()).toEqual({ skipped: "no present linked owner" });
-    nodestone.profileFailures.delete(characterId);
+    lodestone.profileFailures.delete(characterId);
   });
 
   /** A GitHub fake for issue reports (2.18.0): records calls; issues can be closed by tests. */
@@ -6263,7 +6262,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     const github = new FakeIssues();
     const logs = new RecentLogs();
     logs.write(JSON.stringify({ level: 30, msg: "TaruBot ready" }));
-    const reports = new IssueReports(config, db, nodestone, logs, github);
+    const reports = new IssueReports(config, db, lodestone, logs, github);
     reports.useStatus(() => ({ ready: true, writerLease: true }));
     const reporter: Actor = { ...actor, userId: "90031", officer: false };
     const submitted = await reports.user(
@@ -6375,7 +6374,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await db.query("UPDATE jobs SET status='succeeded' WHERE id=$1", [job]);
 
     // Without a token, reports are saved and wait: nothing is queued.
-    const offline = new IssueReports(config, db, nodestone, logs, null);
+    const offline = new IssueReports(config, db, lodestone, logs, null);
     expect(
       await offline.user(
         { ...reporter, userId: "90033" },
@@ -6390,7 +6389,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
 
   test("automatic reports group by fingerprint, comment hourly, reopen after close, and cap per day (2.18.0)", async () => {
     const github = new FakeIssues();
-    const reports = new IssueReports(config, db, nodestone, new RecentLogs(), github);
+    const reports = new IssueReports(config, db, lodestone, new RecentLogs(), github);
     const failed = {
       id: randomUUID(),
       kind: "reconcile.user",
@@ -6504,7 +6503,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
 
   test("trouble checks report stale rosters after 12 hours and a Lodestone that keeps failing (2.18.0)", async () => {
-    const reports = new IssueReports(config, db, nodestone, new RecentLogs(), new FakeIssues());
+    const reports = new IssueReports(config, db, lodestone, new RecentLogs(), new FakeIssues());
     const before = await db.query<{ last_successful_roster_at: Date | null }>(
       "SELECT last_successful_roster_at FROM free_companies WHERE id=$1",
       [fc],
@@ -6522,7 +6521,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     );
     await db.query("INSERT INTO guilds (id, fc_id) VALUES ($1, $2)", [freshGuild, fresh]);
     // No Lodestone answer for two hours, and the client is still trying.
-    Object.assign(nodestone, {
+    Object.assign(lodestone, {
       failingSince: new Date(Date.now() - 2 * 3600_000),
       lastFailure: "unavailable",
       lastAttemptAt: new Date(),
@@ -6550,7 +6549,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect(await occurrences(`%(\`${fresh}\`)%`)).toBe(1);
       expect(await occurrences("%Lodestone unreachable for over an hour%")).toBe(1);
     } finally {
-      Object.assign(nodestone, { failingSince: null, lastFailure: null, lastAttemptAt: null });
+      Object.assign(lodestone, { failingSince: null, lastFailure: null, lastAttemptAt: null });
       await db.query("UPDATE free_companies SET last_successful_roster_at=$2 WHERE id=$1", [
         fc,
         before[0]?.last_successful_roster_at ?? null,

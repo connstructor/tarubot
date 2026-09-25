@@ -4,7 +4,7 @@
 
 `.env.example` lists application settings. Bun and TypeScript are exactly pinned. Standard service ports are private; `docker-compose.tools.yml` explicitly publishes loopback-only dependency ports for local tooling.
 
-Normal deployments use published GHCR images. Pull updates with `docker compose pull`, then recreate with `docker compose up -d --wait`; follow the maintenance-window migration procedure when the schema changes. `TARUBOT_IMAGE_TAG` selects a matched latest/SemVer/SHA tag, and full `TARUBOT_IMAGE` / `NODESTONE_IMAGE` overrides support digest pinning. Local source builds explicitly add `docker-compose.build.yml`. See [CI_CD.md](CI_CD.md).
+Normal deployments use published GHCR images. Pull updates with `docker compose pull`, then recreate with `docker compose up -d --wait`; follow the maintenance-window migration procedure when the schema changes. `TARUBOT_IMAGE_TAG` selects a matched latest/SemVer/SHA tag, and a full `TARUBOT_IMAGE` override supports digest pinning. Local source builds explicitly add `docker-compose.build.yml`. See [CI_CD.md](CI_CD.md).
 
 | Setting | Default / purpose |
 | --- | --- |
@@ -14,7 +14,6 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `DATABASE_CA_CERT` | Optional PEM provider CA; enables verified PostgreSQL TLS and takes precedence over URL SSL switches |
 | `RESTORE_DATABASE_CA_CERT` | Optional CA for `check-restore`'s `RESTORE_DATABASE_URL` (a PITR fork); empty reuses `DATABASE_CA_CERT` |
 | `TARUBOT_ENVIRONMENT` | Maintenance-tool deployment profile: `production`, `rehearsal`, `devbot`, or empty to infer it; see [CONFIGURATION.md](CONFIGURATION.md#maintenance-tool-profiles) |
-| `NODESTONE_URL` | `http://nodestone:8080` inside Compose |
 | `ENABLE_EFFECTS` | `false`; process-wide delivery switch |
 | `TEST_GUILD_ID` | Optional development interaction restriction |
 | `PUBLIC_TEST_RESPONSES` | Public command/component replies in that test guild; false by base default, true in the DevBot overlay |
@@ -25,11 +24,9 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `GUEST_COOLDOWN_SECONDS` | 86,400; denied-application cooldown |
 | `HEALTH_PORT` | 3,000 inside the bot container |
 
-Request, worker, retry, body, pagination, and region settings are in [NODESTONE.md](NODESTONE.md). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
+Lodestone request, worker, retry, body, pagination, region and selector settings are in [LODESTONE.md](LODESTONE.md#settings). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
 
-Production runs on a Linode Docker host with [`docker-compose.production.yml`](../docker-compose.production.yml), attached to Linode managed PostgreSQL. [HOSTING.md](HOSTING.md) covers its layout, updates, backups, and rollback. The App Platform notes on this page describe the superseded setup.
-
-App Platform uses [`.do/app.yaml`](../.do/app.yaml), which attaches the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`). Follow [APP_PLATFORM.md](APP_PLATFORM.md) for provider prerequisites, bound credentials/CA, the worker-free deployment phases, and the update procedure that stops the old worker before pre-deploy migrations and a replacement worker start. Production maintenance tools run from a clean build of the deployed release with an explicit production env file ([MIGRATION.md](MIGRATION.md) E0), never from a checkout's `.env`.
+Production runs on a Linode Docker host with [`docker-compose.production.yml`](../docker-compose.production.yml), attached to Linode managed PostgreSQL. [HOSTING.md](HOSTING.md) covers its layout, updates, backups, and rollback.
 
 ## Inspect and repair
 
@@ -114,8 +111,6 @@ Every failure reply ends with `Code <code> · Ref <interaction ID>`. **Ref is th
 docker compose logs tarubot | grep '"operation":"1290000000000000001"'
 ```
 
-On App Platform, search the `tarubot` worker's runtime logs for the same string (control panel, or `doctl apps logs <app-id> tarubot --type run`).
-
 | Code | Members see | Cause | Operator action |
 | --- | --- | --- | --- |
 | `input`, `invalid_data` | Check your input | A malformed option: a typed name not picked from the member suggestions, a blank note, a bad cursor | None; the reply names the option and shows an example (every option has one since 2.15.0) |
@@ -133,7 +128,7 @@ On App Platform, search the `tarubot` worker's runtime logs for the same string 
 | `pending_proof` | Token not on the Lodestone yet | The Lodestone has not published the biography token yet | None; wait and use Check again |
 | `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | Please wait a moment (and the claim and apply limits) | A limit, contention, a temporary Discord change or shutdown | None; the reply gives the retry time |
 | `eligible` | No application needed | The visitor already qualifies for access | None |
-| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone, the Nodestone sidecar or Discord failed or returned something unusable, including a malformed Lodestone ID in sidecar output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check sidecar health and Discord status; logged at warn |
+| `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone or Discord failed or returned something unusable, including a malformed Lodestone ID in parsed output (`invalid_response`) or a member Discord sent without a join time (`incomplete`, naming that member) | Check readiness's `lodestone` object and Discord status; logged at warn |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names (Affected, and How to fix when TaruBot's role position or channel permissions are the cause; otherwise the reply's own text), then `/config validate` |
 | `disabled` | Discord changes paused | Effects are off (awaiting activation or `ENABLE_EFFECTS=false`; a job's `last_error` names which) | Activate the guild, or restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every activated guild, one row per dedupe key, and clears its paused diagnostic. Any `/config` change also requeues it; `activate.js --requeue` and `retry.js` (which refuses a job a newer active job already covers) are the fallbacks |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate; logged at error |
@@ -170,7 +165,7 @@ Members see labels (Role update, Server-wide role check, FC roster check, Depart
 Since 2.17.0 (REQUIREMENTS.md "Approved Lodestone amendments"):
 
 - **Pacing.** The scheduler queues a character's profile refresh at most once an hour, whatever happens to the job, by stamping `characters.profile_retry_at`. It never pulls a job that is backing off forward. Old failed `profile` rows from before 2.17.0 are history, and nothing needs retrying: the next scheduled refresh supersedes them.
-- **Throttling.** A Lodestone 429 closes the sidecar's gate for a shared cooldown (15 s, doubling to 5 min). Jobs wait it out as `↻ WAITING` without spending attempts. The sidecar logs `{"event":"lodestone_throttled",…}` once per 429, and its `/health` shows `lodestone.cooldownSeconds` and `strikes`.
+- **Throttling.** A Lodestone 429 closes the gate for a shared cooldown (15 s, doubling to 5 min). Jobs wait it out as `↻ WAITING` without spending attempts. The bot logs "The Lodestone throttled TaruBot" once per 429, and `/health/ready` shows `lodestone.cooldownSeconds` and `strikes` (the sidecar's `/health` before 2.21.0).
 - **Private profiles** complete as `{status: "private"}` and wait for the profile interval (`PROFILE_INTERVAL_SECONDS`). Links are unaffected, because membership comes from the roster.
 - **Deleted characters.** A 404 is recorded in `characters.profile_missing_at` (`{status: "missing", confirmed: false}`). A second 404 at least an hour later ends every active link, audited as `character.unlink` with a null actor and `automatic: "lodestone_not_found"`, and posts an officer notice per link. A profile read, a private answer or a roster listing in between clears the mark.
 
@@ -187,7 +182,7 @@ To undo an automatic unlink (for example, a character that reappears after a ren
 
 ## Live selectors
 
-Since 2.19.0 the sidecar keeps `xivapi/lodestone-css-selectors` at its latest commit by itself ([NODESTONE.md](NODESTONE.md#live-selectors-2190)). To see which set is live, check the sidecar's health: `selectors.revision`, with `source` `upstream` or `bundled`. Issue reports show it too. Each switch logs one `{"event":"selectors_updated","from":…,"to":…}` line. A new revision that fails its download or validation logs `selectors_rejected` with the reason; the active set stays, and the next check retries. Nothing needs doing on a switch. A persistent rejection means upstream changed the selector format and the parser may need attention.
+Since 2.19.0 TaruBot keeps `xivapi/lodestone-css-selectors` at its latest commit by itself ([LODESTONE.md](LODESTONE.md#live-selectors)); since 2.21.0 the bot does it in memory. To see which set is live, check readiness: `lodestone.selectors.revision`, with `source` `upstream` or `bundled`. Issue reports show it too. Each switch logs one "Lodestone selectors updated" line with `from` and `to`. A new revision that fails its download or validation logs "Lodestone selector revision rejected; the active set stays" with the reason, and the next check retries. After a restart the bundled set runs until the first check, moments later. Nothing needs doing on a switch. A persistent rejection means upstream changed the selector format and the parser may need attention.
 
 ## Issue reports
 
@@ -205,7 +200,7 @@ Since 2.18.0 (REQUIREMENTS.md "Approved issue-reporting amendments"), TaruBot op
 - Each day allows at most 10 new automatic issues and 50 automatic comments; reports beyond that wait for the next day's allowance.
 - Issues carry the labels `tarubot-report`, `source:user|error|job|trouble` and `env:production|devbot`, and titles start with the environment.
 
-**What a report contains:** the deployment and version, readiness, the Lodestone's reachability and the sidecar's health, active and recently failed jobs, the server's settings and roster state, and for member reports the member's links, main, nickname state, guest and officer standing, recent work and audit, plus the newest log records. Known secret shapes (tokens, Authorization values, URL passwords, PEM blocks) and the deployment's own secret values are removed first.
+**What a report contains:** the deployment and version, readiness, the Lodestone's reachability, gate and live selectors, active and recently failed jobs, the server's settings and roster state, and for member reports the member's links, main, nickname state, guest and officer standing, recent work and audit, plus the newest log records. Known secret shapes (tokens, Authorization values, URL passwords, PEM blocks) and the deployment's own secret values are removed first.
 
 **Delivery:** reports are rows in `issue_reports`, delivered by `issue.report` jobs. Without a token they are kept and sent once one is set and the bot restarts. To see what is waiting:
 
@@ -224,11 +219,11 @@ Exactly one bot process writes to a database. The bot enforces this with a Postg
 
 - **Startup.** After the schema check, the bot checks out one dedicated pool connection and runs `pg_try_advisory_lock(714882494)` every 5 seconds until it succeeds. It holds that connection for the life of the process; it is one of the pool's 12 connections. The queue does not start and the bot does not log in to Discord until the lease is held. Each attempt, and each probe of the holder, has the same 10-second client-side deadline as the lease check below. If the connection stops answering or fails while the bot waits, the bot logs an error, destroys that connection and exits with status 1, so its supervisor restarts it with a fresh connection instead of leaving it live but unready until TCP gives up.
 - **Schema check again.** Once it holds the lease, the bot checks the schema a second time before it logs in. A bot that passed the first check and then waited, for example an old release restarting while a migration ran, would otherwise take the lease after the migration committed and write with old code. On a mismatch it releases the lease and exits with status 1 (since 2.16.0).
-- **While waiting.** Each attempt logs `Waiting for the database writer lease…` with the holder's backend `holderPid`, at info for the first 60 seconds and at warn after that. `/health/live` stays 200, so App Platform's liveness check keeps the waiting process; `/health/ready` is 503 with `writerLease: false`, so the Compose health check reports it unhealthy (Compose does not restart it for that). An overlapping deployment therefore waits for the previous writer to stop instead of running beside it.
+- **While waiting.** Each attempt logs `Waiting for the database writer lease…` with the holder's backend `holderPid`, at info for the first 60 seconds and at warn after that. `/health/live` stays 200, so a liveness check keeps the waiting process; `/health/ready` is 503 with `writerLease: false`, so the Compose health check reports it unhealthy (Compose does not restart it for that). An overlapping deployment therefore waits for the previous writer to stop instead of running beside it.
 - **Shutdown.** SIGTERM wakes a waiting process at once, and it exits without logging in. A running writer unlocks after its workers and Discord client stop and before its pool closes, so the next writer acquires within one retry. A process that is killed releases the lease when PostgreSQL ends its session: at once for a normal kill, and after a lost host or network partition once the server's TCP keepalive gives up (about 60 seconds with the pool's session settings). Shutdown has a 27-second deadline, after which the process exits anyway: with status 0 for an ordinary stop, and with status 1 after a lost lease.
 - **Lost session.** If the lease connection ends (database restart, failover or a terminated backend), PostgreSQL frees the lock. The bot logs an error, shuts down and exits with status 1, so its supervisor restarts it and it waits for the lease again.
 - **Silent loss.** A connection can also die without any error reaching the bot, for example when a failover removes the old primary's host (advisory locks are not replicated to a promoted standby, so the lock is already gone) or a network path drops the idle socket (the old session may still hold the lock until the server's keepalive ends it). Every 30 seconds the bot therefore asks the lease connection itself whether it still holds the lock, with a 10-second client-side deadline. No answer, an error or a missing lock counts as a lost lease, so a silent loss is detected within about 40 seconds. The bot then stops, destroys that connection instead of unlocking over it, and exits with status 1 as above. The same failure can leave workers' pool connections hanging so the pool never closes; the shutdown deadline then still exits with status 1. The pool enables client TCP keepalive so the bot notices a vanished peer sooner, and sets server-side `tcp_keepalives_idle=30`, `tcp_keepalives_interval=10` and `tcp_keepalives_count=3` so PostgreSQL ends an orphaned session, and frees its lease, in about a minute.
-- **Stale holder.** If a restarted bot keeps logging the same `holderPid` for more than a few minutes while App Platform shows only the waiting instance, confirm the holder is idle from before the restart with `SELECT pid, state, backend_start, state_change, client_addr FROM pg_stat_activity WHERE pid = <holderPid>`, then run `SELECT pg_terminate_backend(<holderPid>)` as `tarubot`. The waiting writer acquires the lease on its next 5-second attempt.
+- **Stale holder.** If a restarted bot keeps logging the same `holderPid` for more than a few minutes while only the waiting instance runs, confirm the holder is idle from before the restart with `SELECT pid, state, backend_start, state_change, client_addr FROM pg_stat_activity WHERE pid = <holderPid>`, then run `SELECT pg_terminate_backend(<holderPid>)` as `tarubot`. The waiting writer acquires the lease on its next 5-second attempt.
 
 The lease needs a direct PostgreSQL connection; a transaction-mode pool (PgBouncer) cannot hold a session lock.
 
@@ -245,7 +240,7 @@ WHERE l.locktype = 'advisory' AND l.granted
 A single bigint advisory key appears in `pg_locks` as `classid` (high 32 bits), `objid` (low 32 bits) and `objsubid = 1`. A role without `pg_read_all_stats` sees null `client_addr` and `backend_start` for other roles' sessions; the `pid` row alone means a writer is connected. Import, activate and restore don't take the lease, so the gate is the operator's for them.
 
 **Migration guard (since 2.16.0).** `migrate.js` applies every pending migration in one transaction and, when anything is pending, takes the writer lease for that transaction with a transaction-scoped lock (`pg_try_advisory_xact_lock(714882494)`). That lock conflicts with a bot's session lock on the same key and ends at COMMIT or ROLLBACK.
-- **A running bot blocks it.** The run waits up to `MIGRATE_WRITER_WAIT_SECONDS` (default 90, at most 600) for a stopping bot, retrying every 2 seconds, then refuses with `busy`, naming the holder's database process, and changes nothing. So stop the bot before migrating, on every host: Compose, DevBot and App Platform.
+- **A running bot blocks it.** The run waits up to `MIGRATE_WRITER_WAIT_SECONDS` (default 90, at most 600) for a stopping bot, retrying every 2 seconds, then refuses with `busy`, naming the holder's database process, and changes nothing. So stop the bot before migrating, on every host: production and DevBot.
 - **With nothing pending,** it never touches the lease, so a deployment's pre-deploy job succeeds while the previous bot still runs.
 - **Restore point.** When it applies files, it prints `Migration writer lease acquired at <time>; applied <files>; committing at <time>.` from the database clock. No bot wrote after the first time, so it is the point-in-time-recovery restore point for that migration.
 
@@ -253,7 +248,7 @@ The gate above still comes first for a migration: the guard is a safety net, not
 
 ## Shutdown and restart
 
-The Compose stop grace period is 30 seconds. SIGTERM stops new interaction handling and scheduling, aborts outstanding Nodestone requests, waits up to 20 seconds for workers, then closes Discord/database resources. Persisted leases are recoverable after expiry. A worker must own its current lease before publishing results; superseded reconciliation is recomputed.
+The Compose stop grace period is 30 seconds. SIGTERM stops new interaction handling and scheduling, aborts outstanding Lodestone requests and parser workers, waits up to 20 seconds for workers, then closes Discord/database resources. Persisted leases are recoverable after expiry. A worker must own its current lease before publishing results; superseded reconciliation is recomputed.
 
 Use a maintenance window for migrations, final capture/import, command replacement/cutover, or restoration. Normal backups can run against the active database; a consistent dump uses PostgreSQL's snapshot semantics.
 
@@ -304,7 +299,7 @@ For actual recovery, stop the writer, preserve the newest available state, resto
 
 ## Managed PostgreSQL backups and recovery
 
-Production on App Platform uses the managed cluster's backups plus independent exports; [APP_PLATFORM.md](APP_PLATFORM.md#backups-pitr-and-recovery) describes the provider behavior (7-day daily backups and PITR, restores that fork a new cluster) and the repoint procedure.
+Production uses the managed cluster's backups plus independent exports; [HOSTING.md](HOSTING.md#backups-and-recovery) describes them. (The retired App Platform setup's provider notes remain in [APP_PLATFORM.md](APP_PLATFORM.md#backups-pitr-and-recovery).)
 
 **Independent export.** Take it before every maintenance window and on the owner's schedule, as `tarubot` over verified TLS with a PostgreSQL 18 client, and store it off the provider:
 

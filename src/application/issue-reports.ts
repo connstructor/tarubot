@@ -42,7 +42,7 @@ import {
 } from "../domain/reports.js";
 import { Failure } from "../domain/values.js";
 import type { GitHubIssues } from "../infrastructure/github/issues.js";
-import type { Nodestone } from "../infrastructure/nodestone/client.js";
+import type { Lodestone } from "../infrastructure/lodestone/client.js";
 import {
   type Connection,
   type Database,
@@ -57,7 +57,7 @@ import type { RecentLogs } from "./recent-logs.js";
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 /**
  * One fingerprint's context is collected at most this often. Collecting it reads the database
- * several times and asks the sidecar for its health, so a bug hit on every interaction only
+ * several times, so a bug hit on every interaction only
  * counts its repeats in between, keeping `latest` at most this stale.
  */
 const RENDER_INTERVAL_MS = 60 * 1000;
@@ -105,7 +105,7 @@ export class IssueReports {
   constructor(
     private readonly config: Configuration,
     private readonly db: Database,
-    private readonly nodestone: Nodestone,
+    private readonly lodestone: Lodestone,
     private readonly logs: RecentLogs,
     private readonly github: GitHubIssues | null,
   ) {
@@ -382,11 +382,11 @@ export class IssueReports {
   }
 
   /**
-   * The Lodestone unreachable, throttling or the sidecar full, with no answer for an hour, and
+   * The Lodestone unreachable or throttling, with no answer for an hour, and
    * still failing: the last attempt recent. One failure followed by a quiet hour is no outage.
    */
   private async checkLodestone(now: number): Promise<void> {
-    const reach = this.nodestone.reachability();
+    const reach = this.lodestone.reachability();
     if (!reach.failingSince || !reach.lastAttemptAt) return;
     if (now - reach.failingSince.getTime() < LODESTONE_DOWN_SECONDS * 1000) return;
     if (now - reach.lastAttemptAt.getTime() > LODESTONE_RECENT_ATTEMPT_SECONDS * 1000) return;
@@ -643,7 +643,7 @@ export class IssueReports {
       ]),
       `### What happened\n\n${input.what}`,
       await section("Readiness", async () => this.readiness()),
-      await section("Lodestone", () => this.lodestone()),
+      await section("Lodestone", async () => this.lodestoneState()),
       await section("Queue", () => this.queueState()),
       input.guildId ? await section("Server", () => this.guildState(input.guildId ?? "")) : "",
       input.guildId && input.userId
@@ -675,58 +675,37 @@ export class IssueReports {
     ]);
   }
 
-  /** The client's view of the Lodestone, and the sidecar's own health with its gate. */
-  private async lodestone(): Promise<string> {
-    const reach = this.nodestone.reachability();
-    const client = fields([
-      ["Last Lodestone answer", when(reach.lastAnswerAt)],
-      ["Last attempt", when(reach.lastAttemptAt)],
-      ["Failing since", when(reach.failingSince)],
-      ["Latest failure", reach.lastFailure ?? "—"],
-    ]);
-    let health: Record<string, unknown>;
-    try {
-      const response = await fetch(new URL("/health", this.config.NODESTONE_URL), {
-        signal: AbortSignal.timeout(2000),
-      });
-      health = (await response.json()) as Record<string, unknown>;
-    } catch {
-      return `${client}\n\n_The sidecar didn't answer its health check._`;
-    }
-    const gate = (health.lodestone ?? {}) as Record<string, unknown>;
-    // The live selector set (2.19.0): its commit, and whether it came from upstream or the bundle.
-    const live = (health.selectors ?? {}) as Record<string, unknown>;
-    const upstream = (health.upstream ?? {}) as Record<string, unknown>;
-    const components = Array.isArray(upstream.components)
-      ? (upstream.components as Record<string, unknown>[])
-      : [];
+  /** Whether the Lodestone has been answering, and the adapter's gate, parse slots and selectors. */
+  private lodestoneState(): string {
+    const reach = this.lodestone.reachability();
+    const state = this.lodestone.status();
+    const live = state.selectors;
     const sha = (value: unknown) => (typeof value === "string" ? `\`${value.slice(0, 7)}\`` : "—");
     return [
-      client,
-      fields(
+      fields([
+        ["Last Lodestone answer", when(reach.lastAnswerAt)],
+        ["Last attempt", when(reach.lastAttemptAt)],
+        ["Failing since", when(reach.failingSince)],
+        ["Latest failure", reach.lastFailure ?? "—"],
+        ["Parses running", state.parsing],
+        ["Waiting for a slot", state.waiting],
+        ["429 cooldown", duration(state.cooldownSeconds)],
+        ["429s in a row", state.strikes],
+        ["Selector upstream", state.upstream.status],
+        // The live selector set (2.19.0): its commit, and whether it came from upstream or the bundle.
         [
-          ["Ready", yesNo(health.ready === true)],
-          ["Parses running", health.active ?? "—"],
-          ["429 cooldown", duration(gate.cooldownSeconds)],
-          ["429s in a row", gate.strikes ?? "—"],
-          ["Upstream parsers", upstream.status ?? "—"],
-          [
-            "Selectors",
-            typeof live.revision === "string"
-              ? `${sha(live.revision)} (${live.source === "upstream" ? `live since ${typeof live.activatedAt === "string" ? when(new Date(live.activatedAt)) : "—"}` : "bundled"})`
-              : "—",
-          ],
+          "Selectors",
+          `${sha(live.revision)} (${live.source === "upstream" && live.activatedAt ? `live since ${when(new Date(live.activatedAt))}` : "bundled"})`,
         ],
-        ["Sidecar", "Value"],
-      ),
-      components.length
+      ]),
+      state.upstream.components.length
         ? table(
             ["Upstream", "Deployed", "Latest", "Current"],
-            components.map((row) => [
-              row.repository ?? row.package,
+            state.upstream.components.map((row) => [
+              row.repository,
               sha(row.deployed),
               sha(row.latest),
-              yesNo(row.current === true),
+              yesNo(row.current),
             ]),
           )
         : "",

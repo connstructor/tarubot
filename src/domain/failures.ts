@@ -66,7 +66,7 @@ export const FAILURE_CATEGORY = {
   stopping: "wait",
   // The user already has the access they asked for.
   eligible: "eligible",
-  // The Lodestone, its sidecar or Discord's API failed or returned something unusable.
+  // The Lodestone or Discord's API failed or returned something unusable.
   unavailable: "upstream",
   incomplete: "upstream",
   invalid_response: "upstream",
@@ -132,7 +132,7 @@ export function effectsPaused(deploymentEnabled: boolean): Failure {
  * Codes a queued job waits on instead of failing: ordering, locks, cooldowns, superseding inputs,
  * a lost lease, or Lodestone throttling. Shared by jobOutcome and the job-line presenter so both
  * agree on "waiting". Throttling is not the job's fault (2.17.0): a rate-limited job waits out the
- * sidecar's cooldown (its retryAfter) without spending an attempt, so a burst of 429s no longer ends
+ * gate's cooldown (its retryAfter) without spending an attempt, so a burst of 429s no longer ends
  * work as failed. Typed as strings because jobOutcome also tests its own non-Failure
  * classifications against it.
  */

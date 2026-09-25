@@ -428,8 +428,8 @@ function checkDatabase(
       return;
     }
     case "unmanaged":
-      // CI and other developers: no deployment-specific database. (The App Platform pre-deploy
-      // job and worker set TARUBOT_ENVIRONMENT=production, so they get the production rules.)
+      // CI and other developers: no deployment-specific database. (The production host's container
+      // sets TARUBOT_ENVIRONMENT=production, so its tools get the production rules.)
       return;
   }
 }

@@ -30,7 +30,7 @@ import { InteractionRouter, interactionRouterKey } from "./bot/router.js";
 import { Services } from "./bot/services.js";
 import { configuration } from "./config/env.js";
 import { DiscordGateway } from "./discord/gateway.js";
-import { Nodestone } from "./infrastructure/nodestone/client.js";
+import { Lodestone } from "./infrastructure/lodestone/client.js";
 import { Database } from "./infrastructure/postgres/database.js";
 import { dispatcher } from "./jobs/dispatch.js";
 import { Queue } from "./jobs/queue.js";
@@ -61,15 +61,16 @@ const [commands, components, events] = await Promise.all([
 ]);
 const db = new Database(config.DATABASE_URL);
 const gateway = new DiscordGateway();
-const nodestone = new Nodestone(config.NODESTONE_URL);
-const app = new Service(db, gateway, nodestone, config);
+// The Lodestone parser runs in this process (2.21.0); its own events join the bot's log.
+const lodestone = new Lodestone({ log: (level, fields, message) => log[level](fields, message) });
+const app = new Service(db, gateway, lodestone, config);
 const sync = new Synchronization(app);
 const access = new GuildAccess(app, new DiscordGuildAccess(gateway.client));
 // Issue reports (2.18.0): without a token they are saved, and sent once one is configured.
 const reports = new IssueReports(
   config,
   db,
-  nodestone,
+  lodestone,
   recentLogs,
   config.GITHUB_REPORTS_TOKEN
     ? new GitHubIssues(config.GITHUB_REPORTS_TOKEN, config.GITHUB_REPORTS_REPO)

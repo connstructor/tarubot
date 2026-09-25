@@ -1,11 +1,6 @@
 # Explicit source-build override for contributors; normal deployments use published GHCR images.
 # DevBot: docker compose -f docker-compose.yml -f docker-compose.devbot.yml -f docker-compose.build.yml ...
 services:
-  nodestone:
-    image: tarubot-nodestone:local
-    build:
-      context: .
-      target: nodestone
   tarubot:
     image: tarubot:local
     build:

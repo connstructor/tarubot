@@ -12,13 +12,13 @@ Use the development overlay consistently for this running instance:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml pull
-docker compose -f docker-compose.yml -f docker-compose.devbot.yml up -d --wait tarubot nodestone
+docker compose -f docker-compose.yml -f docker-compose.devbot.yml up -d --wait --remove-orphans tarubot
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml logs -f tarubot
 ```
 
 The Compose service is named `tarubot`; its actual Discord identity comes from the configured application/token and is checked on startup.
 
-These commands use published GHCR images, `ghcr.io/deconfined/tarubot` and `ghcr.io/deconfined/tarubot-nodestone`. The GitHub account was named `connstructor` until 2026-09-24, and image paths under that name no longer resolve. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
+These commands use the published GHCR image `ghcr.io/deconfined/tarubot` (until 2.20.0 also `ghcr.io/deconfined/tarubot-nodestone`, the parser sidecar; since 2.21.0 the parser runs in the bot, and `--remove-orphans` clears the old container). The GitHub account was named `connstructor` until 2026-09-24, and image paths under that name no longer resolve. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
 
 ## Completed on 2026-09-22
 

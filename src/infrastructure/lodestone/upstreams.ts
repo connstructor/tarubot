@@ -1,7 +1,7 @@
 /**
- * Track the one upstream the sidecar depends on: xivapi/lodestone-css-selectors. Since 2.20.0 the
+ * Track the one upstream the parser depends on: xivapi/lodestone-css-selectors. Since 2.20.0 the
  * parser is TaruBot's own code, so there is no parser repository to follow; the selectors follow
- * upstream HEAD live (sidecar/selectors.ts), and bun.lock pins only the bundled fallback.
+ * upstream HEAD live (selectors.ts), and bun.lock pins only the bundled fallback.
  */
 import { z } from "zod";
 
@@ -60,7 +60,7 @@ export function lockedRevisions(raw: unknown): Record<string, string> {
 }
 
 /**
- * An upstream the sidecar follows live rather than through releases (2.19.0: the selectors). The
+ * An upstream the bot follows live rather than through releases (2.19.0: the selectors). The
  * monitor hands it each new HEAD; activate() returns the revision active afterwards, which stays the
  * previous one when the new HEAD couldn't be downloaded or validated.
  */
@@ -136,7 +136,7 @@ export class UpstreamMonitor {
     }, seconds * 1000);
   }
 
-  /** Stop monitoring and cancel pending GitHub requests during sidecar shutdown. */
+  /** Stop monitoring and cancel pending GitHub requests during shutdown. */
   stop(): void {
     this.cancellation.abort();
     if (this.timer) clearInterval(this.timer);

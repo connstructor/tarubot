@@ -10,7 +10,7 @@ import {
   character,
   markRosterLeader,
   type CharacterIdentity,
-} from "../../src/infrastructure/nodestone/client.js";
+} from "../../src/infrastructure/lodestone/client.js";
 
 test("bot-only officers cannot provision or delegate officer authority", () => {
   expect(() =>

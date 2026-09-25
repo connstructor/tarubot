@@ -4,7 +4,7 @@
 
 ## 1. Where we stopped
 
-The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)).
+The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)). After launch, 2.17.0 (Lodestone hardening), 2.18.0 and 2.18.1 (issue reports) were deployed to DevBot and production, and production runs **2.18.1**. 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser) are merged; **2.21.0** moves the parser into the bot, removes the sidecar and retires App Platform. None of the three is deployed yet: 2.21.0 carries all of them.
 
 | Layer | State at handoff |
 | --- | --- |
@@ -126,9 +126,9 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - `/health` and issue reports show the live revision.
   - Parser workers now get the process environment explicitly.
 - **Next (owner request).** Drop Nodestone and parse with the selectors directly (2.20.0), then the robust, disposable host and SSH deploys.
-- **Status.** [PR #21](https://github.com/deconfined/tarubot/pull/21) open. No migration and no command change: a restart of the sidecar and bot on each deployment.
+- **Status.** Merged ([PR #21](https://github.com/deconfined/tarubot/pull/21), `e6558af`) on 2026-09-25 after two review rounds (restore and nested-key validation, the cleanup race, a bounded download reader). Not deployed separately: 2.21.0 carries it.
 
-**Update, 2.20.0 (current version):**
+**Update, 2.20.0:**
 - **Why.** The owner: "get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing internally."
 - **Change.**
   - `sidecar/lodestone.ts` is a first-party, selector-driven parser on linkedom, and the worker fetches through the server's gate.
@@ -136,8 +136,19 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - The upstream monitor follows only the selectors, and `selectors:check` and `selectors:update` replace `nodestone:*`.
   - The service, image and env names are unchanged.
 - **Parity.** The 2.19.0 Nodestone build and this build gave identical output and URLs on 6 live pages in 7 cases (profile ± biography, FC, member pages 1 and 3, search hit, empty search), and the new worker is about twice as fast. The image built and parsed live pages.
-- **Branch.** `feat/first-party-parser-2.20.0` is stacked on 2.19.0; rebase it onto `main` once PR #21 merges.
-- **Status.** Committed locally; not yet pushed.
+- **Also.** A new selector set only has to keep the columns the parser reads (`PARSED_KEYS`), at any depth.
+- **Status.** Merged ([PR #22](https://github.com/deconfined/tarubot/pull/22), `632936a`) on 2026-09-25 after CI and the Claude review passed. Not deployed separately: 2.21.0 carries it.
+
+**Update, 2.21.0 (current version):**
+- **Why.** The owner asked what the sidecar still bought once the parser was TaruBot's own, then decided: "Remove the sidecar. I would rather reduce complexity and places where things can break." With the sidecar gone App Platform could not serve as a fallback, and the owner chose to retire it too.
+- **Change.**
+  - The Lodestone adapter runs in the bot (`src/infrastructure/lodestone/`). The bot fetches each page under the same network policy (region, gate, body bound, private-profile detection) and hands a fresh worker the page and the operation's selector files; the worker only parses and is terminated at the deadline.
+  - Parse slots wait instead of refusing as `busy`. The live selectors are held in memory; nothing is written to disk.
+  - Removed: the `nodestone` Compose service and image, the HTTP API, `NODESTONE_URL` and the other `NODESTONE_*`/`PAGE_REGION` settings (now `LODESTONE_*`), the worker build step (linkedom and the selectors are runtime dependencies), and App Platform's spec, phase tool, tests and CI check.
+  - `/health/ready` carries a `lodestone` object (gate, slots, selectors, upstream), and issue reports read it directly.
+- **Deploy.** A restart with `up -d --wait --remove-orphans` (removes the old sidecar container). No migration and no command change. It brings 2.19.0 and 2.20.0.
+- **Branch.** `feat/in-process-lodestone-2.21.0`, rebased onto `main` after PR #22 merged.
+- **Status.** PR open; not yet deployed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -179,7 +190,7 @@ Keep these owner-approved decisions intact:
 
 - **Manual guest applications are for unverified visitors only.** Trusted verified/imported/assigned non-FC users retain automatic Guest eligibility in every guild under the freshness policy (ROLE-07), with or without onboarding; FC members retain Member precedence. Access is the union over a user's linked characters. Explicit Guest revocation remains authoritative.
 - **Launch decisions (2026-09-23):**
-  - Production uses App Platform with the managed cluster, and exactly one database writer (the writer lease).
+  - Production uses App Platform with the managed cluster, and exactly one database writer (the writer lease). *(Hosting superseded the same day: the Linode host, [HOSTING.md](HOSTING.md); App Platform retired in 2.21.0.)*
   - First activation of the imported guild grants a durable `grandfathered` Guest to every non-member present, once.
   - The role-layout switch is off for imported guilds and on for DevBot.
   - `/apply` and onboarding are off at launch, and `/setup` is not run in production. From 2.15.0 the import keeps the legacy review channel with the guest-application switch off; reopening after launch is `/config guest_applications enabled:true`, which validates that stored channel first, so a legacy channel that is gone needs `channel:#…` in the same call.
@@ -203,7 +214,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge and deploy 2.19.0 and 2.20.0 (restarts only). Then make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge 2.21.0, then deploy it to DevBot and production with `--remove-orphans` (restarts only). Then make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
@@ -278,7 +289,7 @@ The 2.12.1 maintenance change passed build, type checking, lint, formatting, Sem
 | Access policy | `src/application/access-facts.ts`, `src/application/guild-access.ts`, `src/discord/guild-access.ts`, `src/domain/policy.ts` |
 | Persistence boundary | `src/infrastructure/postgres/schema.ts`, `database.ts`, `connection.ts`; [PERSISTENCE.md](PERSISTENCE.md) |
 | Launch policy and cutover (2.13.0) | `src/application/activation.ts`, `src/application/grandfathering.ts`, `src/domain/grandfathering.ts`, `scripts/preview.ts`, `scripts/activate.ts`; the layout gate in `src/jobs/dispatch.ts`; `migrations/005_launch_access_policy.sql` |
-| Production tooling and hosting | `src/config/deployment.ts`, `scripts/commands.ts`, `scripts/discord-inspect.ts`, `src/discord/inspection.ts`, `scripts/app-spec.ts`, `.do/app.yaml`, `production.env.example`; the writer lease in `src/application/lifecycle.ts` |
+| Production tooling and hosting | `src/config/deployment.ts`, `scripts/commands.ts`, `scripts/discord-inspect.ts`, `src/discord/inspection.ts`, `docker-compose.production.yml`, `production.env.example`; the writer lease in `src/application/lifecycle.ts` |
 | Guest-application switch and resets (2.15.0) | `src/domain/guest-application.ts`, `src/commands/configuration/config.command.ts`, `Service.guestReset` in `src/application/service.ts`, `officerReset` in `src/application/role-administration.ts`, `src/commands/configuration/officer.command.ts`, `src/commands/guests/guest.command.ts`; `migrations/006_guest_application_switch.sql` |
 | Member autocomplete and input Examples (2.15.0) | `src/discord/autocomplete.ts`, `src/discord/selectors.ts`, `src/discord/presenters/failure.ts`; `tests/unit/member-autocomplete.test.ts`, `tests/unit/failure-reply.test.ts` |
 | Regression evidence | `tests/unit/guest-application.test.ts`, `tests/integration/persistence.test.ts`, [VERIFICATION.md](VERIFICATION.md) |
@@ -299,7 +310,7 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
 ## 6. Repository workflow reminders
 
 - Repository: `/home/connstruct/src/tarubot` (Linux, since 2026-09-24); GitHub: `deconfined/tarubot` (the account was `connstructor` until 2026-09-24; images are `ghcr.io/deconfined/*`, and the old image paths no longer resolve). `origin` should use `https://github.com/deconfined/tarubot.git`. Work within this repository. Docker here needs the `docker` group; without it, run Docker commands through `sg docker -c '…'`.
-- Use Bun and the existing discovered command/event/component modules. Initialize `vendor/nodestone` before installing/building. Nodestone updates go through `bun run nodestone:update` and include the submodule pointer, lockfile, and revision metadata together.
+- Use Bun and the existing discovered command/event/component modules. There is no submodule (since 2.20.0) and no sidecar (since 2.21.0). Refresh the bundled selectors with `bun run selectors:update`, committing the lockfile and `src/infrastructure/lodestone/upstream-revisions.json` together.
 - Every coherent change, including documentation, increments SemVer/changelog and synchronized version references. Use feature branches and PRs; never commit directly to main or bypass required checks.
 - Commit verified milestones with the configured SSH signing key. Do not push, rewrite history, or change Git configuration without explicit authorization.
 - Signing key: `~/.ssh/id_git` (ED25519 `SHA256:Y7SmEUtV87C2xwDvDSYNS/f/BV3gT3yt2tkxCKkJTcc`, with `gpg.format=ssh`, verified locally through `~/.ssh/allowed_signers`). It must also be registered on GitHub as a *Signing Key* so pushed commits show Verified; check verification on the PR before merging. If signing fails, ask the owner; never substitute an unsigned commit. Check the latest commit with:
@@ -309,7 +320,7 @@ Take a fresh backup before every DevBot update. Keep `.env`, supplied dumps, bac
   ```
 
 - Applied migrations are immutable. Use Drizzle and `orm(client)` for application transactions, keeping state/audit/outbox together and remote I/O outside those transactions.
-- DevBot always uses `-f docker-compose.devbot.yml` and database `tarubot_dev`; pin matching published bot/sidecar tags. Source builds explicitly add `-f docker-compose.build.yml`. Never point destructive tests at DevBot; test databases end in `_test`.
+- DevBot always uses `-f docker-compose.devbot.yml` and database `tarubot_dev`; pin the published bot tag. Source builds explicitly add `-f docker-compose.build.yml`. Never point destructive tests at DevBot; test databases end in `_test`.
 - The old stash `On feat/lobby-access: WIP lobby access before Drizzle persistence migration` was in the previous machine's clone; `git stash list` is empty in this one. That feature was subsequently integrated; if the stash turns up, do not reapply it blindly or discard it without permission.
 - Start future major-version work only after v2 is settled and Taru is online, unless the owner reprioritizes. See [ROADMAP.md](ROADMAP.md).
 

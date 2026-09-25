@@ -4,8 +4,17 @@
  * separately on live pages (docs/VERIFICATION.md); these pin each rule with synthetic HTML.
  */
 import { describe, expect, test } from "bun:test";
-import { columnName, parsePage, translateRegex } from "../../sidecar/lodestone.js";
-import { PARSED_KEYS, pagePlan, pageUrl, SELECTOR_FILES } from "../../sidecar/pages.js";
+import {
+  columnName,
+  parsePage,
+  translateRegex,
+} from "../../src/infrastructure/lodestone/parser.js";
+import {
+  PARSED_KEYS,
+  pagePlan,
+  pageUrl,
+  SELECTOR_FILES,
+} from "../../src/infrastructure/lodestone/pages.js";
 
 const SERVER = {
   selector: ".world",
@@ -57,7 +66,7 @@ describe("names, regexes and URLs", () => {
     ] as const;
     for (const input of operations) {
       for (const file of pagePlan(input).files) expect(SELECTOR_FILES).toContain(file as never);
-      // New selector sets must keep every key an operation parses (sidecar/selectors.ts).
+      // New selector sets must keep every key an operation parses (selectors.ts).
       for (const key of pagePlan(input).keys) expect(PARSED_KEYS).toContain(key);
     }
     // The biography is read only when asked for (proof verification).

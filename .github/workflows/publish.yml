@@ -35,8 +35,6 @@ jobs:
         include:
           - target: tarubot
             suffix: ""
-          - target: nodestone
-            suffix: "-nodestone"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +52,7 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
-          # Publish immutable identities first; latest advances only after both images succeed.
+          # Publish immutable identities first; latest advances only after publication succeeds.
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.verify.outputs.version }}
@@ -91,7 +89,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      packages: write # retag both images as latest in GHCR
+      packages: write # retag the image as latest in GHCR
     steps:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -99,17 +97,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Advance both latest tags after successful publication
-        # Registry tags cannot be updated atomically together; version/SHA pins select an exact pair.
+      - name: Advance the latest tag after successful publication
+        # Since 2.21.0 there is one image: the Lodestone parser runs in the bot.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Re-running an older successful workflow must not replace a newer main image.
           current=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
           if [ "$current" != "$GITHUB_SHA" ]; then
-            echo "::notice::Main has advanced; retaining the current latest tags."
+            echo "::notice::Main has advanced; retaining the current latest tag."
             exit 0
           fi
-          for image in "ghcr.io/${GITHUB_REPOSITORY,,}" "ghcr.io/${GITHUB_REPOSITORY,,}-nodestone"; do
-            docker buildx imagetools create --tag "$image:latest" "$image:sha-${GITHUB_SHA}"
-          done
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create --tag "$image:latest" "$image:sha-${GITHUB_SHA}"

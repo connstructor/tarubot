@@ -7,7 +7,7 @@
 3. Merge after the required **CI result** check and the **CodeQL** code-scanning gate pass. The **Protect Main** ruleset requires `CI result` from GitHub Actions on an up-to-date branch, signed commits, and no new high-severity security alerts or error-level CodeQL results. CodeQL analyzes both JavaScript/TypeScript and GitHub Actions workflows on PRs, main updates, and a weekly schedule with the `security-extended` query suite, plus the `code-quality` suite for JavaScript/TypeScript (the Actions query pack has no quality queries); it excludes upstream/generated dependencies. GitHub's separate Code Quality product is not available for this repository, so quality results report through code scanning.
 4. **Publish containers** revalidates the merged commit, builds both image targets, and pushes them to GHCR. Pull requests have read-only repository permissions; only publication jobs receive `packages: write`.
 
-Actions are pinned to full commits, and the repository's Actions settings require full-SHA pins. Dependabot proposes updates to those pins and their version comments. No checkout needs submodules since 2.20.0, which replaced Nodestone with a first-party parser. No checkout persists its credentials. Registry login uses the workflow's `GITHUB_TOKEN`; no stored publishing PAT or Discord/database production credentials are needed by CI.
+Actions are pinned to full commits, and the repository's Actions settings require full-SHA pins. Dependabot proposes updates to those pins and their version comments. No checkout needs submodules since 2.20.0, which replaced Nodestone with a first-party parser; since 2.21.0 there is one image, because that parser runs inside the bot. No checkout persists its credentials. Registry login uses the workflow's `GITHUB_TOKEN`; no stored publishing PAT or Discord/database production credentials are needed by CI.
 
 The **Validate version and changelog** step runs last in the checks job. A PR without a version increment still fails, but only after every other step of that job has reported; the container builds depend on that job, so they run once the version commit is pushed.
 
@@ -33,8 +33,8 @@ Dependabot (`.github/dependabot.yml`) proposes updates, and a maintainer complet
 
 Dependabot does not manage:
 
-- `lodestone-css-selectors`. The sidecar follows its HEAD live; refresh the bundled fallback with `bun run selectors:update` on a feature branch. (Nodestone was removed in 2.20.0.)
-- The CI PostgreSQL service image and the digest-pinned `digitalocean/doctl` image in `ci.yml`, because Dependabot reads only `uses:` lines in workflows.
+- `lodestone-css-selectors`. The bot follows its HEAD live; refresh the bundled set with `bun run selectors:update` on a feature branch. (Nodestone was removed in 2.20.0.)
+- The CI PostgreSQL service image in `ci.yml`, because Dependabot reads only `uses:` lines in workflows.
 - PostgreSQL major versions. A new major image starts an empty cluster, so plan the upgrade as a migration.
 
 Until GitHub's Dependabot updater can read Bun 1.4 lockfiles ([dependabot-core#16026](https://github.com/dependabot/dependabot-core/issues/16026)), the Bun packages job fails with `DependencyFileNotSupported`. The advisory **Dependency audit** workflow runs `bun audit` against every locked package, including transitive ones, weekly and on PRs that change `package.json` or `bun.lock`. Until Dependabot recovers, apply package updates through a normal feature branch.
@@ -44,7 +44,7 @@ Until GitHub's Dependabot updater can read Bun 1.4 lockfiles ([dependabot-core#1
 1. Read the linked release notes and the results of the checks that ran before the version check.
 2. Check out the branch with `gh pr checkout <number>`, then run `bun install --frozen-lockfile`.
 3. Make the changes listed for that row in the table above.
-4. Raise the version and record it: increment `package.json` above `main` (a patch for compatible updates, minor or major when behavior or compatibility changes), add a `## X.Y.Z — Dependency updates` entry and the current-version sentence to `CHANGELOG.md`, set `tag: &release` in `.do/app.yaml`, and update the version references in `test-plans/current.json` and the current-version statements in `docs/APP_PLATFORM.md`, `docs/CONFIGURATION.md`, and `docs/PERSISTENCE.md`.
+4. Raise the version and record it: increment `package.json` above `main` (a patch for compatible updates, minor or major when behavior or compatibility changes), add a `## X.Y.Z — Dependency updates` entry and the current-version sentence to `CHANGELOG.md`, and update the version references in `test-plans/current.json` and the current-version statements in `docs/CONFIGURATION.md` and `docs/PERSISTENCE.md`.
 5. Run `bun run typecheck`, `bun run lint`, `bun run format:check`, `bun run build`, `bun run test:unit`, and `bun run test:contract`.
 6. Commit with a signed, imperative message such as `Release dependency updates in 2.12.3`. Do not include `[dependabot skip]`, which lets Dependabot force-push over the commit.
 7. Push to the Dependabot branch and merge once **CI result** and **CodeQL** pass.
@@ -64,9 +64,8 @@ Distinct source commits have independent, non-cancelling publication and reusabl
 | Image | Purpose |
 | --- | --- |
 | `ghcr.io/deconfined/tarubot` | Discord bot and one-shot application tools |
-| `ghcr.io/deconfined/tarubot-nodestone` | Isolated Lodestone parser service |
 
-Both images support AMD64 and ARM64. Each successful publication supplies:
+The image supports AMD64 and ARM64. Until 2.20.0 a second image, `ghcr.io/deconfined/tarubot-nodestone`, held the Lodestone parser service; since 2.21.0 the parser runs inside the bot, and that image is no longer published (its old tags stay in GHCR). Each successful publication supplies:
 
 - `latest` for the newest passing `main` publication.
 - The manifest SemVer, for example `2.8.3`.
@@ -87,7 +86,7 @@ docker compose pull
 docker compose up -d --wait
 ```
 
-The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.3` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` and `NODESTONE_IMAGE` can override complete references, including immutable `@sha256:` digests.
+The default is `latest`. To pin a matched release, set `TARUBOT_IMAGE_TAG=2.8.3` or `sha-FULL_COMMIT_SHA` in `.env`, then pull and recreate. `TARUBOT_IMAGE` can override the complete reference, including immutable `@sha256:` digests.
 
 Fresh installations still need explicit schema migration and command registration; see [README.md](../README.md#configure-and-start). Follow the migration runbook when an upgrade changes the schema. Image publication does not automatically restart deployment hosts or modify their databases.
 
@@ -105,13 +104,13 @@ For the existing DevBot database and editable startup plan:
 docker compose -f docker-compose.yml -f docker-compose.devbot.yml -f docker-compose.build.yml up -d --build --wait
 ```
 
-That override uses `tarubot:local` and `tarubot-nodestone:local`. Registry deployments use the plan packaged in the image; the source-build override mounts `test-plans/` for local editing.
+That override uses `tarubot:local`. Registry deployments use the plan packaged in the image; the source-build override mounts `test-plans/` for local editing.
 
-`bun run selectors:update --deploy` is an explicit source-checkout operation and uses the build override for the sidecar. For registry deployments, refresh the bundled selectors on a feature branch, merge its passing PR, then pull the resulting published images. The running sidecar already follows the selectors' HEAD.
+To refresh the bundled selectors, run `bun run selectors:update` on a feature branch, merge its passing PR, then pull the resulting published image. The running bot already follows the selectors' HEAD.
 
 ## PostgreSQL test data
 
-The checks also derive the worker-free `foundation` and `maintenance` App Platform phases with `scripts/app-spec.ts` into `.cache/ci/app-platform/`, then validate `.do/app.yaml` and both derived files using a version/digest-pinned doctl container with networking disabled. This validates the App Platform schema without credentials or resource creation. Unit checks keep its image references in step with the package version and verify attachment of the managed PostgreSQL cluster (no pool or private-URL binding, a CA wherever the database URL is bound), the single effect-enabled worker, private routing, and credential scope; the managed-privileges integration test runs every migration with only the documented managed-cluster grants. See [APP_PLATFORM.md](APP_PLATFORM.md).
+The checks also validate the Compose models, and the managed-privileges integration test runs every migration with only the documented managed-cluster grants. (Until 2.21.0 they also derived and validated the App Platform phases; see [APP_PLATFORM.md](APP_PLATFORM.md).)
 
 CI runs the full integration suite with deterministic **synthetic** data generated under `.cache/ci/legacy.sql`. It exercises the migration schema, fixture counts, ownership links, known/unknown opening balances, and the same persistence/recovery scenarios without uploading the supplied database dump.
 
