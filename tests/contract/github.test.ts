@@ -353,7 +353,8 @@ describe("GitHub App sign-in (2.26.0)", () => {
 
   test("finds the installation, then mints a token narrowed to this repository's issues", async () => {
     const { app, server, seen } = fakeGitHub([
-      () => Response.json({ id: 164885413, account: { login: "deconfined" } }),
+      // A made-up installation ID; the real one is looked up at runtime and never needed here.
+      () => Response.json({ id: 4242, account: { login: "deconfined" } }),
       () =>
         Response.json({ token: "ghs_minted", expires_at: "2026-09-25T13:00:00Z" }, { status: 201 }),
     ]);
@@ -363,7 +364,7 @@ describe("GitHub App sign-in (2.26.0)", () => {
         { method: "GET", path: "/repos/deconfined/tarubot/installation", body: null },
         {
           method: "POST",
-          path: "/app/installations/164885413/access_tokens",
+          path: "/app/installations/4242/access_tokens",
           body: { repositories: ["tarubot"], permissions: { issues: "write" } },
         },
       ]);
@@ -380,6 +381,13 @@ describe("GitHub App sign-in (2.26.0)", () => {
     const cases: [(() => Response)[], string][] = [
       // A refused JWT, or the app not installed on the repository, needs the operator.
       [[() => new Response("", { status: 401 })], "configuration"],
+      [
+        [
+          () =>
+            Response.json({ message: "Resource not accessible by integration" }, { status: 403 }),
+        ],
+        "configuration",
+      ],
       [[() => new Response("", { status: 404 })], "configuration"],
       [[() => Response.json({ id: 1 }), () => new Response("", { status: 422 })], "configuration"],
       // Outages are unavailable; an unreadable 2xx is invalid_response.
@@ -411,6 +419,54 @@ describe("GitHub App sign-in (2.26.0)", () => {
         await server.stop(true);
       }
     }
+  });
+
+  test("GitHub's rate limits on the sign-in are waits, classified as the issue client does", async () => {
+    // /suggest records nothing for a rate limit, so the member isn't charged for GitHub's refusal.
+    const cases: [() => Response, number | undefined][] = [
+      [() => new Response("", { status: 429, headers: { "retry-after": "42" } }), 42],
+      [
+        () =>
+          new Response("", {
+            status: 403,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 120),
+            },
+          }),
+        undefined,
+      ],
+      // A bare 403 whose message names a secondary rate limit asks for at least a minute.
+      [
+        () =>
+          Response.json(
+            { message: "You have exceeded a secondary rate limit. Please wait a few minutes." },
+            { status: 403 },
+          ),
+        60,
+      ],
+    ];
+    for (const [answer, retryAfter] of cases)
+      for (const at of ["installation", "token"] as const) {
+        const { app, server } = fakeGitHub(
+          at === "installation" ? [answer] : [() => Response.json({ id: 4242 }), answer],
+        );
+        try {
+          const error = await app.installationToken().then(
+            () => new Error("Expected a failure"),
+            (caught: unknown) => caught,
+          );
+          expect(error).toBeInstanceOf(Failure);
+          expect(error).toMatchObject({
+            code: "rate_limited",
+            message: "GitHub is rate limiting TaruBot's app sign-in.",
+            ...(retryAfter === undefined ? {} : { retryAfter }),
+          });
+          expect((error as Failure).retryAfter).toBeGreaterThan(0);
+        } finally {
+          await server.stop(true);
+        }
+      }
   });
 
   test("a timeout, before or after GitHub answers, is never a plain error", async () => {

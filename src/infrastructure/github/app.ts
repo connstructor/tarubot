@@ -9,13 +9,13 @@
  * so there is nothing to refresh; the key itself has no expiry and is rotated on the app's page.
  *
  * Failures map to catalog codes. No message ever carries the key, the JWT or the token, and
- * GitHub's own response text is never read into one.
+ * GitHub's own response text only tells a rate limit from a refusal; it is never read into one.
  */
 import { createPrivateKey, type KeyObject, sign } from "node:crypto";
 import { z } from "zod";
 import { project } from "../../config/project.js";
 import { Failure } from "../../domain/values.js";
-import type { Request } from "./issues.js";
+import { rateLimitWait, type Request } from "./issues.js";
 
 /** `GET /repos/{repository}/installation`: the app's installation on that repository. */
 const installationSchema = z.object({ id: z.number().int().positive() });
@@ -125,14 +125,19 @@ export class GitHubApp {
       }
       throw new Failure("invalid_response", "GitHub's app sign-in answer was unreadable.");
     }
-    await response.body?.cancel().catch(() => {});
+    // GitHub's rate limits (a 429, or a 403 that says so) are classified as the issue client
+    // classifies them, so /suggest reads them as a wait and records nothing. A body that can't be
+    // read is no rate limit, and the status below decides.
+    const wait = await rateLimitWait(response).catch(() => null);
+    if (wait !== null)
+      throw new Failure("rate_limited", "GitHub is rate limiting TaruBot's app sign-in.", wait);
     // A refused JWT, a missing installation or a refused token request needs the operator.
     if ([401, 403, 404, 422].includes(response.status))
       throw new Failure(
         "configuration",
         `GitHub refused TaruBot's GitHub App (${response.status}); check GITHUB_APP_CLIENT_ID, GITHUB_APP_PRIVATE_KEY and the app's installation on ${this.repository}.`,
       );
-    // Outages, rate limits and anything unexpected: nothing was posted, try later.
+    // Outages and anything unexpected: nothing was posted, try later.
     throw new Failure(
       "unavailable",
       `GitHub answered TaruBot's app sign-in with ${response.status}.`,

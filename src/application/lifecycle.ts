@@ -54,6 +54,12 @@ export interface LifecycleOptions {
    * reporter's trouble checks and delivery sweep. Its errors are reported, never fatal.
    */
   readonly tick: () => Promise<void>;
+  /**
+   * Work outside the queue that must finish before the lease is handed over, awaited beside the
+   * queue's stop and within the same bound: since 2.26.0, a /suggest post still at GitHub, whose
+   * audit row the next writer's limits count. Must never reject.
+   */
+  readonly drain: () => Promise<void>;
 }
 const LIFECYCLE_DEFAULTS: LifecycleOptions = {
   leaseRetryMs: 5000,
@@ -65,6 +71,7 @@ const LIFECYCLE_DEFAULTS: LifecycleOptions = {
   stopDeadlineMs: 27000,
   exit: (code) => process.exit(code),
   tick: async () => {},
+  drain: async () => {},
 };
 
 /** Only pg_locks identifies the holder (shared with migrate()'s refusal). */
@@ -464,7 +471,8 @@ export class ApplicationLifecycle {
     if (this.monitor) clearInterval(this.monitor);
     if (this.leaseCheck) clearInterval(this.leaseCheck);
     this.app.lodestone.stop();
-    await Promise.race([this.queue.stop(), Bun.sleep(20000)]);
+    // Workers and any drained work (a /suggest post) finish while the gateway can still reply.
+    await Promise.race([Promise.all([this.queue.stop(), this.options.drain()]), Bun.sleep(20000)]);
     await this.gateway.client.destroy();
     await this.health.stop(true);
     // Hand the lease over only once this process's workers and gateway have stopped writing.

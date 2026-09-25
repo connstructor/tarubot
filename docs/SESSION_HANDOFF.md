@@ -184,14 +184,15 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
 
 **Update, 2.26.0 (current version on its branch; issue #32):**
-- **Why.** Issue #32 asked for public feature suggestions from Discord. The owner answered the plan's questions on 2026-09-25 ([decision comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5836092045)) and clarified in chat that anyone with server access (the Member or Guest role) may post. REQUIREMENTS.md "Approved public-suggestion amendments (2026-09-25)" records it.
+- **Why.** Issue #32 asked for public feature suggestions from Discord. The owner answered the plan's questions on 2026-09-25 ([decision comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5836092045)) and clarified in chat that anyone with server access (the Member or Guest role) may post, recorded in a [follow-up comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5836108245). REQUIREMENTS.md "Approved public-suggestion amendments (2026-09-25)" records it.
 - **Change.**
   - `/suggest idea:…` posts at once as a public issue in `deconfined/tarubot` (labels `enhancement`, `from-discord`) and replies with its link. Only the cleaned text and the version go public; `src/domain/suggestions.ts` holds the cleaning, format and final check.
   - Only in the FC's server (production's guild list, DevBot's test guild), for holders of the bound Member or Guest role. Limits: one an hour and three a day per member, ten a day in total, counted from `audit` rows; an attempt GitHub didn't confirm counts.
   - Production posts as the TaruBot GitHub App (App ID 5076273) with `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY`, minting an installation token per post. DevBot previews into `deconfined/tarubot-reports` with its reports token.
   - `claude.yml` never starts the agent for an issue carrying the suggestion marker. `GITHUB_REPORTS_REPO` may no longer name the public repository.
   - No migration; 21 roots / 45 paths.
-- **Status.** Branch `feat/suggest-2.26.0`; not yet pushed. It follows 2.24.3 (#29) and 2.25.0 (#30) in the agreed release order, then #31 is 2.27.0. Deploying it is a restart plus the app settings in the host's `.env`, registration and a probe ([DEV_GUILD.md](DEV_GUILD.md#2260-rollout-plan-suggest-not-yet-run)).
+  - Review fixes in the same release: the link rule also removes a domain followed only by a port, query or fragment, `localhost` with a port or path, and IPv4 addresses; the app sign-in classifies GitHub's rate limits as waits; shutdown drains a post in progress before releasing the writer lease.
+- **Status.** Branch `feat/suggest-2.26.0`; not yet pushed. When it is rebased onto 2.25.0 (#30, migration 009), the "requires" sentences in CONFIGURATION.md and PERSISTENCE.md must name `009` instead of `008_issue_reports.sql`, still with "adds no migration". It follows 2.24.3 (#29) and 2.25.0 (#30) in the agreed release order, then #31 is 2.27.0. Deploying it is a restart plus the app settings in the host's `.env`, registration and a probe ([DEV_GUILD.md](DEV_GUILD.md#2260-rollout-plan-suggest-not-yet-run)).
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 

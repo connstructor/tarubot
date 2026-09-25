@@ -3,8 +3,9 @@
  * invisible characters normalising removes, the fixed point `clean` reaches on nested markup, a
  * seeded fuzz of the whole pipeline, the exact public example the owner approved, the final
  * check's refusals, who may suggest, where each deployment posts, the settings guard, the
- * workflow guard, and how Suggestions translates GitHub's answers (with a fake database; the
- * PostgreSQL behaviour is in tests/integration/persistence.test.ts).
+ * workflow guard, how Suggestions translates GitHub's answers, the refusals' log levels, and the
+ * shutdown drain (with a fake database; the PostgreSQL behaviour is in
+ * tests/integration/persistence.test.ts).
  *
  * Invisible characters are written as \u{…} escapes, never literally, so reviewers can see them.
  * Token-shaped samples are assembled at runtime, so secret scanners never see a literal one.
@@ -35,6 +36,7 @@ import {
   TITLE_LIMIT,
   wrap,
 } from "../../src/domain/suggestions.js";
+import { classifyFailure } from "../../src/domain/failures.js";
 import { Failure } from "../../src/domain/values.js";
 import { GitHubIssues } from "../../src/infrastructure/github/issues.js";
 import { orm } from "../../src/infrastructure/postgres/database.js";
@@ -81,12 +83,40 @@ describe("cleaning rules", () => {
       "discord.com/channels/1036062273631952955/1/2",
       "na.finalfantasyxiv.com/lodestone/character/12345678/",
       "hc-ping.com/0123-4567",
+      // A query, a fragment or a port after a domain, without a path (2.26.0 review).
+      "example.com?invite=abc",
+      "mysite.io#secret-anchor",
+      "discord.gg?code",
+      "tarubot.example:8080",
+      "example.com:8080/private/path",
+      // localhost with a port or path, and IPv4 addresses, bare or with a port or path.
+      "localhost:3000/health/ready",
+      "localhost:3000",
+      "localhost/x",
+      "192.168.1.10",
+      "192.168.1.10/admin",
+      "192.168.1.10:8080",
+      // A name in front of a linked host goes with it, so it can't survive as `name＠`.
+      "john@example.com?subject=hi",
+      "a@b.com/x",
+      "user@192.168.1.10",
     ])
       expect(cleaned(`see ${link} please`)).toBe("see [link removed] please");
     // A bare domain carries no ID: "the discord.gg invite" is an ordinary phrase.
     const bare = pipeline("Show the discord.gg invite in the welcome channel");
     expect(bare.text).toBe("Show the discord.gg invite in the welcome channel");
     expect(() => assertPublic(bare.text, bare.title, bare.body)).not.toThrow();
+    // Nor do these: a word before a colon or a question mark, bare localhost, a three-part
+    // version, a longer dotted number, and a clock time.
+    for (const phrase of [
+      "Could we support Node.js? It would help",
+      "Node.js: it would help",
+      "run it on localhost first",
+      "since version 2.26.0 and v1.2.3.4",
+      "a build number 1.2.3.4567",
+      "at 10.30:00 today",
+    ])
+      expect(cleaned(phrase)).toBe(phrase);
   });
 
   test("email addresses, long IDs and every @ go", () => {
@@ -273,6 +303,9 @@ describe("seeded fuzz", () => {
       digits,
       digits,
       ...["discord.gg/", "https://", "www.", ".com/", "a.b", "x@y.z", "token ", "Bearer "].map(
+        (fragment) => () => fragment,
+      ),
+      ...[".io?", "#a", ":8080", "?x=1", "192.168.1.10", "localhost", "1.2."].map(
         (fragment) => () => fragment,
       ),
       ...["\u{AD}", "\u{200B}", "\u{180B}", "\u{17B4}", "\u{E0041}", "\u{FF20}", "\u{D800}"].map(
@@ -556,8 +589,14 @@ const MEMBER: Actor = {
   roleIds: ["70001"],
 };
 
-/** Suggestions over the fake database, a scripted GitHub and a recording reporter. */
-function harness(create: (title: string, body: string) => Promise<{ number: number }>) {
+/**
+ * Suggestions over the fake database, a scripted GitHub and a recording reporter; with
+ * `switchedOn` false, no target, as when the owner's off switch is thrown.
+ */
+function harness(
+  create: (title: string, body: string) => Promise<{ number: number }>,
+  switchedOn = true,
+) {
   const pool = new FakePool();
   const reports: [unknown, string][] = [];
   const app: unknown = Object.create(Service.prototype);
@@ -578,7 +617,7 @@ function harness(create: (title: string, body: string) => Promise<{ number: numb
       },
     }),
   };
-  const suggestions = new Suggestions(app, target, (error, operation) => {
+  const suggestions = new Suggestions(app, switchedOn ? target : null, (error, operation) => {
     reports.push([error, operation]);
   });
   return { suggestions, pool, reports, creates };
@@ -622,6 +661,29 @@ describe("posting", () => {
       detail: { kind: "option", option: "idea" },
     });
     expect(creates).toEqual([]);
+  });
+
+  test("the off switch and a foreign server are routine refusals, never private reports", async () => {
+    // The router logs a failure at its classified level, and main.ts's reporter opens a private
+    // issue report only at error level; both refusals must stay at info.
+    const off = harness(async () => ({ number: 1 }), false);
+    const on = harness(async () => ({ number: 1 }));
+    for (const [suggestions, actor, message] of [
+      [off.suggestions, MEMBER, "Suggestions are switched off on this TaruBot right now."],
+      [
+        on.suggestions,
+        { ...MEMBER, guildId: "999999999999999999" },
+        "Suggestions can be sent only from the Free Company server this TaruBot serves.",
+      ],
+    ] as const) {
+      const error = await suggestions
+        .submit(actor, "An idea long enough to post")
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "forbidden", message });
+      expect(classifyFailure(error)).toMatchObject({ category: "forbidden", level: "info" });
+    }
+    expect([...off.reports, ...on.reports]).toEqual([]);
+    expect([...off.creates, ...on.creates]).toEqual([]);
   });
 
   test("GitHub's answers: refusals record nothing, anything unclear counts", async () => {
@@ -692,5 +754,38 @@ describe("posting", () => {
       "start Second idea",
       "end Second idea",
     ]);
+  });
+
+  test("shutdown drains the post in progress and refuses the ones that haven't started", async () => {
+    const release = Promise.withResolvers<void>();
+    let calls = 0;
+    const { suggestions, pool } = harness(async () => {
+      calls++;
+      await release.promise;
+      return { number: calls };
+    });
+    const inFlight = suggestions.submit(MEMBER, "First idea for the bot");
+    const queued = suggestions.submit({ ...MEMBER, userId: "400000000000000002" }, "Second idea");
+    // Let the first submission reach GitHub, where it waits until released.
+    while (calls === 0) await Bun.sleep(1);
+    let drained = false;
+    const draining = suggestions.drain().then(() => {
+      drained = true;
+    });
+    await Bun.sleep(20);
+    expect(drained).toBe(false);
+    release.resolve();
+    await draining;
+    // The post finished, audit row included, before the drain resolved; the queued one never
+    // reached GitHub and tells the member to retry after the restart.
+    expect((await inFlight).number).toBe(1);
+    expect(pool.inserts).toHaveLength(1);
+    await expect(queued).rejects.toMatchObject({ code: "stopping" });
+    // One that arrives after the drain began is refused the same way.
+    await expect(
+      suggestions.submit({ ...MEMBER, userId: "400000000000000003" }, "Third idea, late"),
+    ).rejects.toMatchObject({ code: "stopping" });
+    expect(calls).toBe(1);
+    expect(classifyFailure(await queued.catch((caught: unknown) => caught)).level).toBe("info");
   });
 });

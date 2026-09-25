@@ -126,6 +126,8 @@ const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue
     await heartbeat.tick();
     await reports.tick();
   },
+  // A /suggest post still at GitHub finishes, and records its row, before the lease is released.
+  drain: () => suggestions.drain(),
 });
 reports.useStatus(() => lifecycle.status());
 heartbeat.useStatus(() => lifecycle.status());

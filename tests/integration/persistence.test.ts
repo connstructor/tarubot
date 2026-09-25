@@ -22,6 +22,7 @@ import { Suggestions, type SuggestionTarget } from "../../src/application/sugges
 import { project } from "../../src/config/project.js";
 import { suggestionReply } from "../../src/discord/presenters/utility.js";
 import { SUGGESTION_HEADER } from "../../src/domain/suggestions.js";
+import { classifyFailure } from "../../src/domain/failures.js";
 import { RecentLogs } from "../../src/application/recent-logs.js";
 import { GitHubIssues, type IssueRef } from "../../src/infrastructure/github/issues.js";
 import {
@@ -6823,14 +6824,18 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     });
     const foreign = await suggestions.submit(manager, idea("foreign")).catch((error) => error);
     expect(foreign).toMatchObject({ code: "forbidden", detail: undefined });
-    // The off switch: forbidden, and never a private report.
+    // The off switch: forbidden too. The router logs each refusal at its classified level, and
+    // main.ts opens a private report only at error level, so both must classify at info.
     const off = suggestionHarness(null);
-    await expect(
-      off.suggestions.submit(suggester("300000000000000003", [CANARY_MEMBER_ROLE]), idea("off")),
-    ).rejects.toMatchObject({
+    const switchedOff = await off.suggestions
+      .submit(suggester("300000000000000003", [CANARY_MEMBER_ROLE]), idea("off"))
+      .catch((error) => error);
+    expect(switchedOff).toMatchObject({
       code: "forbidden",
       message: expect.stringContaining("switched off"),
     });
+    for (const refusal of [foreign, switchedOff])
+      expect(classifyFailure(refusal)).toMatchObject({ category: "forbidden", level: "info" });
     expect(off.reports).toEqual([]);
     // An allowlisted server with no configuration gets the setup card.
     await expect(
@@ -6929,10 +6934,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     let userSequence = 20;
     const next = () => suggester(`3000000000000000${userSequence++}`, [CANARY_MEMBER_ROLE]);
 
-    // GitHub's rate limit: nothing was created, so no row, and the member waits.
-    {
+    // GitHub's rate limit, on the create or on the app's sign-in: nothing was created, so no
+    // row, and the member waits.
+    for (const where of ["create", "client"] as const) {
       const { suggestions, target } = suggestionHarness();
-      target?.createFailures.push(new Failure("rate_limited", "GitHub is rate limiting.", 42));
+      const limited = new Failure("rate_limited", "GitHub is rate limiting.", 42);
+      if (where === "create") target?.createFailures.push(limited);
+      else target?.clientFailures.push(limited);
       await expect(suggestions.submit(next(), idea("rate limited"))).rejects.toMatchObject({
         code: "rate_limited",
         retryAfter: 42,
@@ -6951,7 +6959,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       await expect(suggestions.submit(next(), idea("refused"))).rejects.toMatchObject({ code });
       expect(await actions()).toEqual([]);
     }
-    // An outage while creating, or while minting the client: unconfirmed, and a retry waits.
+    // An outage while creating, or while minting the client: unconfirmed, and a retry waits. The
+    // sign-in case posted nothing, but shares the one path and card by design.
     for (const where of ["create", "client"] as const) {
       const { suggestions, target } = suggestionHarness();
       const member = next();

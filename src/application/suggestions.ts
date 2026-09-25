@@ -12,7 +12,8 @@
  * Unlike /issue, nothing is saved first: an idea is easy to retype, and posting in the request the
  * router already deferred needs no table, job or migration. Submissions run one at a time in this
  * process (only the writer-lease holder serves interactions), so the limits are exact without
- * holding a database connection across the GitHub calls.
+ * holding a database connection across the GitHub calls. Shutdown drains them before the lease is
+ * handed over (`drain`), so a post still at GitHub records its row before the next writer counts.
  */
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Configuration } from "../config/env.js";
@@ -100,6 +101,8 @@ export function suggestionTarget(config: Configuration): SuggestionTarget | null
 export class Suggestions {
   /** The end of the one-at-a-time chain; a failed submission never blocks the next. */
   private tail: Promise<unknown> = Promise.resolve();
+  /** Set once shutdown drains the chain: submissions that haven't started are refused. */
+  private draining = false;
 
   constructor(
     private readonly app: Service,
@@ -135,6 +138,10 @@ export class Suggestions {
     // a private report; it runs before the limits, and repeats group into one report.
     assertPublic(text, title, body);
     return this.serial(async () => {
+      // A restart is under way: nothing new reaches GitHub, and the member's card ("TaruBot is
+      // restarting right now") asks them to try again shortly.
+      if (this.draining)
+        throw new Failure("stopping", "Shutdown began before this suggestion was sent.");
       await this.limits(actor);
       const posted = await this.publish(actor, target, title, body);
       // Written after the post: if it fails, the member still gets their link, the owner a
@@ -203,9 +210,12 @@ export class Suggestions {
 
   /**
    * Mint the client (production's token) and create the issue. Only three failures prove nothing
-   * was created: GitHub's rate limit, a rejected request and a refused credential. Anything else,
-   * a plain error included (a timeout while reading a created issue's answer arrives as one), may
-   * have posted, so it is recorded as `suggestion.unconfirmed`, which every limit counts.
+   * was created: GitHub's rate limit, a rejected request and a refused credential, whether at the
+   * app's sign-in or at the create. Anything else, a plain error included (a timeout while reading
+   * a created issue's answer arrives as one), may have posted, so it is recorded as
+   * `suggestion.unconfirmed`, which every limit counts. An outage during the sign-in is treated the
+   * same way although nothing could have been posted yet, deliberately: one path and one card,
+   * at the cost of an hour's wait after a GitHub outage.
    */
   private async publish(
     actor: Actor,
@@ -251,6 +261,21 @@ export class Suggestions {
       url: `https://github.com/${target.repository}/issues/${number}`,
       repository: target.repository,
     };
+  }
+
+  /**
+   * For shutdown: refuse submissions that haven't started, then resolve once the one in progress
+   * has finished, its audit row or failure report included. The lifecycle awaits this before it
+   * releases the writer lease and closes the pool, so the next writer's limits count that post.
+   * A submission that joins while draining is waited for too. Never rejects.
+   */
+  async drain(): Promise<void> {
+    this.draining = true;
+    let tail: Promise<unknown>;
+    do {
+      tail = this.tail;
+      await tail;
+    } while (tail !== this.tail);
   }
 
   /** Run `work` after every earlier submission has finished, whatever its outcome. */

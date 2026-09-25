@@ -5,8 +5,8 @@
  *
  * 1. `normalise`: compatibility forms folded (NFKC) and every invisible or control character
  *    removed, so a disguised ID, link or mention becomes visible to the rules below;
- * 2. `clean`: the shared PUBLIC_PATTERNS list (Discord markup, links, email addresses, credential
- *    shapes, long ID numbers and every `@`), applied until nothing changes;
+ * 2. `clean`: the shared PUBLIC_PATTERNS list (Discord markup, links and IP addresses, email
+ *    addresses, credential shapes, long ID numbers and every `@`), applied until nothing changes;
  * 3. `suggestionTitle` and `suggestionBody`: the fixed public format, with the text fenced;
  * 4. `assertPublic`: a final check over all three, which fails only if the steps above have a bug.
  *
@@ -79,10 +79,14 @@ export function normalise(raw: string): string {
  * One list drives both `clean` and `assertPublic`, so the check can't be stricter than the cleaner.
  * - Discord markup: member, role and channel mentions become words; custom emoji keep their name
  *   and command mentions their path, without the IDs.
- * - Links (rule f): any scheme URL, `www.…`, or a domain followed by a path, scheme or not, so
- *   `discord.gg/…`, `discord.com/channels/…` and Lodestone character pages all go. A bare domain
- *   (`discord.gg`) carries no ID and stays. Links run before the credential shapes, so a ping URL
- *   or a URL with credentials goes whole.
+ * - Links (rule f): any scheme URL; `www.…`; a domain or `localhost` followed by a port, a path, or
+ *   a query or fragment (`?x`, `#x`), scheme or not, so `discord.gg/…`, `discord.gg?…`,
+ *   `discord.com/channels/…`, `example.com:8080` and Lodestone character pages all go; and any
+ *   IPv4 address, with whatever port, path, query or fragment follows it. A `user@` in front goes
+ *   with the link, so an email address followed by a path or query can't leave its name behind.
+ *   A bare domain (`discord.gg`) or `localhost` carries no ID and stays, and so does a word
+ *   before a colon or a question mark ("Node.js: …", "Node.js?"). Links run before the credential
+ *   shapes, so a ping URL or a URL with credentials goes whole.
  * - Email addresses, then the issue reporter's credential shapes (never the deployment's own
  *   secret values), then runs of 17 or more digits in any script (Discord and Lodestone IDs).
  * - Every `@` last: a GitHub @mention notifies that account, and `@claude` would ask the agent.
@@ -97,7 +101,7 @@ export const PUBLIC_PATTERNS: readonly (readonly [RegExp, string])[] = [
   [/<a?:(\w{1,32}):\d+>/gu, ":$1:"],
   [/<\/([-\w ]{1,100}):\d+>/gu, "/$1"],
   [
-    /[a-z][a-z\d+.-]{0,31}:\/\/\S*|www\.\S*|(?:[a-z\d-]{1,63}\.)+[a-z]{2,63}\/\S*/giu,
+    /[a-z][a-z\d+.-]{0,31}:\/\/\S*|www\.\S*|(?:[\p{L}\p{N}._%+-]{1,64}@)?(?:(?:[a-z\d-]{1,63}\.)+[a-z]{2,63}|\blocalhost)(?::\d{1,5}|\/|[?#]\S)\S*|(?:[\p{L}\p{N}._%+-]{1,64}@)?\b\d{1,3}(?:\.\d{1,3}){3}\b(?:(?::\d{1,5}|\/|[?#]\S)\S*)?/giu,
     "[link removed]",
   ],
   [/[\p{L}\p{N}._%+-]{1,64}@[\p{L}\p{N}-]{1,63}(?:\.[\p{L}\p{N}-]{1,63})+/gu, "[email removed]"],
