@@ -962,6 +962,31 @@ const CHANNEL_FIELDS = {
   changelog_channel_id: { label: "Changelog channel", noun: "changelog channel" },
 } as const;
 
+/**
+ * The Visibility field's text for a changelog channel members may not read, by its audience in an
+ * onboarding guild (2.25.0). The set receipt shows the unmanaged text (a hidden channel gets the
+ * warning description instead), and the no-op card for a repeat shows either, so choosing the
+ * same channel again still says what /config validate warns about.
+ */
+const CHANGELOG_VISIBILITY: Readonly<Record<Exclude<ChangelogAudience, "members">, string>> = {
+  hidden:
+    "Onboarding keeps this channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read.",
+  unmanaged:
+    "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
+};
+
+/**
+ * A changelog change's Visibility field: present only for a channel onboarding hides or doesn't
+ * manage. With onboarding off there is no audience, since server admins own the permissions.
+ */
+const changelogVisibility = (change: SavedChange): FieldSpec | null =>
+  change.field === "changelog_channel_id" &&
+  change.value !== null &&
+  change.audience !== undefined &&
+  change.audience !== "members"
+    ? { name: "Visibility", value: CHANGELOG_VISIBILITY[change.audience] }
+    : null;
+
 /** Whether a saved field is one of the role bindings. */
 const isRole = (field: string): field is keyof typeof ROLE_FIELDS =>
   Object.hasOwn(ROLE_FIELDS, field);
@@ -991,7 +1016,8 @@ const officerAccess = (rank: string | null): string =>
 /**
  * A repeated setting that changed nothing (C4 no-op, info): the same role or channel chosen again,
  * or a clear of something already unset. Rebinding the Officer role adopts nobody. It still
- * re-queues held work, which it reports.
+ * re-queues held work, which it reports. A repeated changelog channel onboarding hides or doesn't
+ * manage keeps its Visibility field (2.25.0): the card stays info, since nothing changed.
  */
 function unchangedReply(
   change: SavedChange,
@@ -1015,7 +1041,7 @@ function unchangedReply(
       description: target
         ? `${marker("unchanged")} ${target} was already the ${noun}.${officer}`
         : `${marker("unchanged")} No ${noun} was set.`,
-      fields: [heldWork(change.requeued, change.effectsMode)],
+      fields: [changelogVisibility(change), heldWork(change.requeued, change.effectsMode)],
       footer: revisionFooter(change.guild),
     },
     options,
@@ -1314,19 +1340,13 @@ function channelChangeReply(
         footer,
       });
     // Setting a channel posts nothing now; the first post comes with the next update that has
-    // something for members (owner decisions 2 and 3).
+    // something for members (owner decisions 2 and 3). A hidden channel returned above, so the
+    // Visibility field here is only ever the unmanaged one.
     return done("channel.changelog", {
       tone: "success",
       title: "Changelog channel set",
       description: `From the next update on, TaruBot posts what's new for members in ${channel}. Members and guests need to be able to read this channel.`,
-      fields: [
-        change.audience === "unmanaged" && {
-          name: "Visibility",
-          value:
-            "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
-        },
-        held,
-      ],
+      fields: [changelogVisibility(change), held],
       footer,
     });
   }

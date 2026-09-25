@@ -3,7 +3,7 @@
   "objective": "2.25.0 posts what's new for members in a channel officers choose with /config changelog, when the bot starts on a newer version. Setting a channel posts nothing at once, and an update with nothing for members posts nothing. Migration 009 and one new command path.",
   "user": [
     "/config changelog channel:#<plain members channel> (not officer-chat, the lobby or community-updates): a success receipt, and /config validate shows an OK Changelog line.",
-    "/config changelog channel:#officer-chat: the warning receipt, and a [WARN] Changelog line in /config validate. Then set it back to the plain channel.",
+    "/config changelog channel:#officer-chat: the warning receipt, and a [WARN] Changelog line in /config validate. The same command again: the no-change card, still with a Visibility warning. Then set it back to the plain channel.",
     "After the assistant's first restart: exactly one post in that channel, 'TaruBot updated to v2.25.0' with one field. After the second restart: no new post."
   ],
   "assistant": [

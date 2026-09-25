@@ -57,7 +57,7 @@ export const CHANGELOG_POST: ChangelogPostView = {
   notes: [
     {
       version: "2.25.0",
-      note: "Officers can now pick a channel where TaruBot posts a short note about what's new after each update.",
+      note: "Officers can now pick a channel where TaruBot shares what's new for members when an update changes something for them.",
     },
   ],
   url: "https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md",

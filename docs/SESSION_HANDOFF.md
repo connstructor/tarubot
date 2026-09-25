@@ -181,7 +181,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.**
   - #7: the parser worker ignores any message with an origin; Bun gives a parent's messages an empty one.
   - #8: `isDefinition` checks null before `typeof`.
-- **Status.** Branch `feat/code-scanning-2.24.2`; not yet pushed. A restart deploys it.
+- **Status.** Merged ([PR #28](https://github.com/deconfined/tarubot/pull/28), `4a64609`). A restart deploys it.
 
 **Update, 2.25.0 (current version):**
 - **Why.** Issue #30: post what's new when the bot starts on a new version. The owner approved the plan and decided its four questions on 2026-09-25 ([comment](https://github.com/deconfined/tarubot/issues/30#issuecomment-5835854639); REQUIREMENTS.md "Approved changelog amendments"): member notes are a short list in the code, optional per release; nothing is posted when an update has nothing for members; setting a channel waits for the next update; onboarding servers only get a warning about a channel members can't read.
@@ -191,7 +191,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - Receipts, `/config show` and `/config validate` cover the channel, with warnings for a channel onboarding hides or doesn't manage. CLAUDE.md step 2 asks for a member note when a release changes something members notice.
 - **Release order** (agreed 2026-09-25): #29 as 2.24.3, then 2.25.0, then #32 as 2.26.0 and #31 as 2.27.0 (migration 010). SSH deploys take the next free minor after #31.
 - **Deploy.** The migration procedure (stop, back up, migrate, `up`), then register the commands and read them back; [DEV_GUILD.md](DEV_GUILD.md#2250-rollout-plan-update-posts-not-yet-run) has DevBot's plan. Nothing posts on the deploy. There is no image rollback across migration 009.
-- **Status.** Branch `feat/changelog-posts-2.25.0`; not yet pushed. The container run (`test:docker`) is still to do.
+- **Status.** Branch `feat/changelog-posts-2.25.0`; not yet pushed. One review round is folded in (the member note's wording, the repeat receipt's Visibility field, the paused no-post test). The container run (`test:docker`) is still to do.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -257,7 +257,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge and deploy 2.24.2 (a restart), then 2.24.3 (#29) and 2.25.0 (update posts, migration 009, a command registration) in that order. Then finish the robust, disposable host (owner decision, 2026-09-25): the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done; the SSH deploy workflow from GitHub Actions remains.
+4. Deploy 2.24.2 if it isn't yet (a restart), then merge and deploy 2.24.3 (#29) and 2.25.0 (update posts, migration 009, a command registration) in that order. Then finish the robust, disposable host (owner decision, 2026-09-25): the heartbeat (2.22.0), rebuild runbook and settings copy (2.23.0) and daily backups (2.24.0) are done; the SSH deploy workflow from GitHub Actions remains.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:

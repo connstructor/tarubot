@@ -6972,7 +6972,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect((await stored(guildId))?.version).toBe("2.0.0");
     });
 
-    test("with Discord changes paused, a post with something to say parks as disabled", async () => {
+    test("with Discord changes paused, only a post with something to say parks as disabled", async () => {
       const guildId = reserved(8);
       await changelogGuild(guildId, "2.0.0", false);
       const jobId = await announceChangelog(db.pool, guildId);
@@ -6980,6 +6980,26 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect((await jobRow(jobId))?.status).toBe("disabled");
       expect(postsFor(guildId)).toEqual([]);
       expect((await stored(guildId))?.version).toBe("2.0.0");
+      // Still paused, the other no-post outcomes complete before the effects gate too, so a
+      // paused server never parks a job with nothing to send. A parked row isn't merged, so each
+      // announce is a new row, as a paused restart's is.
+      const empty = await announceChangelog(db.pool, guildId);
+      expect(empty).not.toBe(jobId);
+      await perform(empty, {});
+      expect(await jobRow(empty)).toEqual({
+        status: "succeeded",
+        result: { skipped: "nothing for members", version: project.version },
+      });
+      expect((await stored(guildId))?.version).toBe(project.version);
+      const announced = await announceChangelog(db.pool, guildId);
+      await perform(announced);
+      expect(await jobRow(announced)).toEqual({
+        status: "succeeded",
+        result: { skipped: "already announced" },
+      });
+      // Neither sent anything, and the first row stays parked.
+      expect(postsFor(guildId)).toEqual([]);
+      expect((await jobRow(jobId))?.status).toBe("disabled");
     });
 
     test("two guilds each get their own post, once", async () => {

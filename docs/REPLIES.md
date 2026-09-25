@@ -18,7 +18,7 @@ The approved mockups are authoritative. Where this document and an approved card
 | `presenters/labels.ts` | Link and grant provenance, application states |
 | `presenters/controls.ts` | Every approved button, built through the custom-ID codec in `src/discord/custom-ids.ts` |
 | `presenters/failure.ts` | The one failure presenter |
-| `presenters/<group>.ts` | `characters`, `ledger`, `configuration`, `guests`, `synchronization`, `utility`, `version` |
+| `presenters/<group>.ts` | `characters`, `ledger`, `configuration`, `guests`, `synchronization`, `utility`, `version`, `changelog` (the update post, 2.25.0) |
 
 Commands parse options, call one service method and return that method's presenter reply. They never format text, catch failures, set `flags` or set `allowedMentions`. `Command.execute` and `Component.execute` are typed to return only a `Presented` (and `beforeModal` a `Presented` or `null`), and the router refuses anything else at runtime as an unexpected failure, so no JSON dump or raw option object can reach Discord. Presenters import application results as types only and never touch persistence (`reply-guard.test.ts`).
 
@@ -97,7 +97,7 @@ Completion words (applied, posted, sent, secured) belong only to `✓ DONE`, and
 
 The approved job line (errors-and-style#28) is shared by `/guest status`, `/sync status` and `/ledger balance`:
 
-- **Members** see the marker, a label and plain words: `` `↻ WAITING` Ledger post (retrying in 7 minutes) ``. They never see job IDs, attempts or diagnostics. The labels are in `JOB_KIND` (`jobs.ts`): Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice.
+- **Members** see the marker, a label and plain words: `` `↻ WAITING` Ledger post (retrying in 7 minutes) ``. They never see job IDs, attempts or diagnostics. The labels are in `JOB_KIND` (`jobs.ts`): Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice.
 - **Officers** see the marker, the raw job kind and the 8-character job ID, then the attempt and the next time, with the stored diagnostic quoted underneath and cut to 150 characters: `` `↻ WAITING` reconcile.user `1a2b3c4d` · attempt 3 · next in 7 minutes ``.
 - At most 10 lines are shown, then "…and N more". Long officer lists split across fields named "Needs attention (1/2)", each sized to the 1,024-character budget (C7).
 
@@ -207,7 +207,7 @@ These kinds replace the 2.14.0 `channel.applications_open`, `channel.application
 - **Set** (success), "Changelog channel set": "From the next update on, TaruBot posts what's new for members in #channel. Members and guests need to be able to read this channel." Setting a channel posts nothing at once (decision 3). In a server where onboarding manages visibility and has no record of the channel, a **Visibility** field reads "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it." The wording covers both causes: a channel created since the last repair pass, and the Community Updates channel, which onboarding never manages.
 - **Hidden** (warning), also "Changelog channel set", when onboarding keeps the channel from members and guests (the lobby, the officer room, or a staff-only channel). Its whole description is two sentences: "Onboarding keeps #channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read." The bot never makes the channel visible (decision 4).
 - **Unset** (success), "Changelog posts turned off": "Updates released while no channel is set aren't posted later. Set a channel again to resume posts."
-- Repeats are the "Changelog channel already set" or "already unset" no-op card, and a paused save is the #26 card with the receipt's sentence, as for the other channels.
+- Repeats are the "Changelog channel already set" or "already unset" no-op card, and a paused save is the #26 card with the receipt's sentence, as for the other channels. A repeated channel that onboarding hides or doesn't manage keeps the info no-op card and adds a **Visibility** field: "Onboarding keeps this channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read.", or the unmanaged text above. Choosing the same channel again (for example, to release a blocked post) still says what `/config validate` warns about.
 - `/config show` has a **Changelog** field after Guest applications: the channel, or "Not set". The collapsed Channels field ends "Changelog: not set".
 - `/config validate` lists it after Officer notifications: `[OK] Changelog #channel`, `[FAIL] Changelog #channel: …`, or `[OFF] Changelog: not set, so update posts are skipped`. Where onboarding manages visibility, a passing check becomes `[WARN] Changelog #channel: hidden from members and guests by onboarding`, or `…: not managed by onboarding, so check that members and guests can read it`. A failing check stays `[FAIL]`.
 

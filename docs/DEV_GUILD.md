@@ -404,7 +404,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`), then run `migrate.js` against `tarubot_dev`.
 4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.25.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on.
 5. `register.js --guild 1040379370159743139`, then `commands.js list`: clean, with the one new `/config` path.
-6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
+6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line, and choosing it again gives the no-change card with a Visibility field; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
 7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
 
 ### Remaining unverified-visitor form checks (on hold until after launch)

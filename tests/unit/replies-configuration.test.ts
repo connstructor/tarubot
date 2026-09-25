@@ -919,6 +919,34 @@ describe("/config changelog (2.25.0)", () => {
       { tone: "info", title: "Changelog channel already set", timestamp: false },
     );
     expect(again.description).toBe(`\`= NO CHANGE\` ${mention} was already the changelog channel.`);
+    // A channel onboarding shows to members (or a guild without onboarding) adds nothing.
+    expect(fieldOf(again, "Visibility")).toBeUndefined();
+    // Repeating a channel members may not read keeps the info no-op card, with the warning as a
+    // Visibility field: choosing it again (say, to release a blocked post) still says so.
+    const repeat = (audience: "hidden" | "unmanaged") =>
+      expectHouseStyle(
+        changeReply(
+          configChange("changelog_channel_id", CHANNEL.changelog, {
+            previous: CHANNEL.changelog,
+            rebound: true,
+            audience,
+            guild: withChangelog(),
+          }),
+          officer,
+          { now },
+        ),
+        { tone: "info", title: "Changelog channel already set", timestamp: false },
+      );
+    const hiddenAgain = repeat("hidden");
+    expect(hiddenAgain.description).toBe(
+      `\`= NO CHANGE\` ${mention} was already the changelog channel.`,
+    );
+    expect(fieldOf(hiddenAgain, "Visibility")).toBe(
+      "Onboarding keeps this channel hidden from members and guests, so they won't see update posts there. Choose a channel they can read.",
+    );
+    expect(fieldOf(repeat("unmanaged"), "Visibility")).toBe(
+      "Onboarding doesn't manage this channel (a new channel joins at the next repair pass), so make sure members and guests can read it.",
+    );
     const unset = onlyEmbed(
       changeReply(configChange("changelog_channel_id", null, { rebound: true }), officer, { now }),
     );

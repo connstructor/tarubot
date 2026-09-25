@@ -11,5 +11,5 @@
  */
 export const RELEASE_NOTES: Readonly<Record<string, string>> = {
   "2.25.0":
-    "Officers can now pick a channel where TaruBot posts a short note about what's new after each update.",
+    "Officers can now pick a channel where TaruBot shares what's new for members when an update changes something for them.",
 };
