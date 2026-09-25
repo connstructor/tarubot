@@ -13,6 +13,7 @@ import { ApplicationCommandOptionType } from "discord.js";
 import type { APIEmbed } from "discord.js";
 import {
   applicationKey,
+  issueReportsKey,
   roleAdministrationKey,
   synchronizationKey,
 } from "../../src/application/keys.js";
@@ -39,6 +40,8 @@ import ledgerCommand from "../../src/commands/ledger/ledger.command.js";
 import refreshCommand from "../../src/commands/synchronization/refresh.command.js";
 import syncCommand from "../../src/commands/synchronization/sync.command.js";
 import channelCommand from "../../src/commands/utility/channel.command.js";
+import { IssueReports } from "../../src/application/issue-reports.js";
+import issueCommand from "../../src/commands/utility/issue.command.js";
 import pingCommand from "../../src/commands/utility/ping.command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
 import { Presented } from "../../src/discord/presenters/reply.js";
@@ -683,6 +686,45 @@ test("every guest, sync and utility command returns its presenter's one embed", 
   }
 });
 
+test("/issue passes the member, reporter, Ref and description to the issue reporter (2.18.0)", async () => {
+  const calls: unknown[][] = [];
+  const reports: unknown = Object.create(IssueReports.prototype);
+  if (!(reports instanceof IssueReports)) throw new Error("Invalid issue reports fixture");
+  Object.assign(reports, {
+    user: async (actor: Actor, reporter: string, ref: string, description: string) => {
+      calls.push([actor.userId, reporter, ref, description]);
+      return { delivery: "queued", ref };
+    },
+  });
+  await open?.close();
+  const fixture = interactionFixture();
+  open = fixture;
+  const interaction = fixture.slash("issue", [
+    text("description", "My Member role disappeared after I ran /main."),
+  ]);
+  const result = await issueCommand.execute?.({
+    client: fixture.client,
+    services: new Services().provide(issueReportsKey, reports),
+    allowsGuild: () => true,
+    isStopping: () => false,
+    report: () => {},
+    resolveActor: async () => MEMBER,
+    actor: MEMBER,
+    viewer: viewerOf(MEMBER, "1290000000000000001"),
+    interaction,
+  });
+  if (!(result instanceof Presented)) throw new Error("/issue returned no reply");
+  expect(result.options.embeds[0]?.title).toBe("Report received");
+  expect(calls).toEqual([
+    [
+      MEMBER.userId,
+      interaction.user.username,
+      interaction.id,
+      "My Member role disappeared after I ran /main.",
+    ],
+  ]);
+});
+
 test("a member naming someone else on /guest status is refused before any read", async () => {
   const { app, calls } = stubService({ guestStatus: G.record });
   const error = await run(
@@ -1125,11 +1167,13 @@ test("the path tables return one embed for every registered command path", async
     ),
   );
   const paths = await registeredPaths();
-  // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24).
-  expect(paths).toHaveLength(43);
+  // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24), plus /issue
+  // (2.18.0).
+  expect(paths).toHaveLength(44);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
-  // and /version reads GitHub, which version.test stubs; every other path is exercised above.
-  expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "version"]);
+  // /version reads GitHub, which version.test stubs, and /issue has its own test below; every
+  // other path is exercised above.
+  expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "issue", "version"]);
 });
 
 test("every registered command keeps its private default visibility", async () => {

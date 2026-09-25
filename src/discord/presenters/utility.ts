@@ -1,9 +1,10 @@
 /**
- * Utility presenters: /ping and /channel (guests-sync-utility#50–#53). Both are neutral reference
- * replies with no service behind them, so they have no failure states of their own. Pure.
+ * Utility presenters: /ping and /channel (guests-sync-utility#50–#53), neutral reference replies
+ * with no service behind them, and /issue's confirmation (2.18.0). Pure.
  */
 import { ChannelType } from "discord.js";
 import { code, mentionChannel, plain } from "./format.js";
+import type { IssueSubmitted } from "../../application/issue-reports.js";
 import { reply, type Presented, type ReplySpec } from "./reply.js";
 
 /**
@@ -15,6 +16,8 @@ const TIMESTAMP = {
   "ping.unmeasured": false,
   "channel.details": false,
   "channel.unavailable": false,
+  "issue.received": false,
+  "issue.saved": false,
 } as const satisfies Record<string, boolean>;
 
 /** A utility reply state; tests catalogue one case per kind. */
@@ -104,5 +107,35 @@ export function channelReply(channel: ChannelFacts): Presented {
       },
       id,
     ],
+  });
+}
+
+/** What a report carries, said plainly, because it leaves Discord for the maintainers. */
+const REPORT_CONTENTS =
+  "Your description, your linked characters and settings in this server, your recent TaruBot activity, and TaruBot's health and recent logs.";
+
+/**
+ * /issue (2.18.0): the report was saved and is on its way to TaruBot's maintainers (success), or
+ * saved until issue reporting is connected on this deployment (pending). Either way it says what
+ * the report carries, and the Ref ties the reply to the report.
+ */
+export function issueReply(submitted: IssueSubmitted): Presented {
+  const included = { name: "Sent with it", value: REPORT_CONTENTS };
+  if (submitted.delivery === "saved")
+    return card("issue.saved", {
+      tone: "pending",
+      title: "Report saved",
+      description:
+        "Thanks. Issue reporting isn't connected on this TaruBot yet, so your report is saved and goes to the maintainers once it is.",
+      fields: [included],
+      footer: `Ref ${submitted.ref}`,
+    });
+  return card("issue.received", {
+    tone: "success",
+    title: "Report received",
+    description:
+      "Thanks. Your report is on its way to TaruBot's maintainers, with a snapshot of TaruBot's state right now.",
+    fields: [included],
+    footer: `Ref ${submitted.ref}`,
   });
 }

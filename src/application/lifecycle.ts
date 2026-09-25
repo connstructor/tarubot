@@ -48,6 +48,11 @@ export interface LifecycleOptions {
   readonly stopDeadlineMs: number;
   /** Ends the process: after shutdown when a held lease's session was lost, or at the deadline. */
   readonly exit: (code: number) => void;
+  /**
+   * Periodic work after each scheduler pass while the bot holds the lease: since 2.18.0, the issue
+   * reporter's trouble checks and delivery sweep. Its errors are reported, never fatal.
+   */
+  readonly tick: () => Promise<void>;
 }
 const LIFECYCLE_DEFAULTS: LifecycleOptions = {
   leaseRetryMs: 5000,
@@ -58,6 +63,7 @@ const LIFECYCLE_DEFAULTS: LifecycleOptions = {
   // Below the 30 s grace period supervisors allow between SIGTERM and SIGKILL.
   stopDeadlineMs: 27000,
   exit: (code) => process.exit(code),
+  tick: async () => {},
 };
 
 /** Only pg_locks identifies the holder (shared with migrate()'s refusal). */
@@ -389,11 +395,21 @@ export class ApplicationLifecycle {
       this.databaseReady = false;
       throw error;
     }
+    // Reporting trouble must never make the scheduler itself look failed.
+    await this.options.tick().catch((error: unknown) => this.report(error, "issue reports"));
   }
 
-  /** Report application readiness without turning a Lodestone outage into a process failure. */
-  private probe(request: Request): Response {
-    const liveness = new URL(request.url).pathname === "/health/live";
+  /** What /health/ready reports, for issue reports' context as well as the probe. */
+  status(): {
+    live: boolean;
+    ready: boolean;
+    database: boolean;
+    writerLease: boolean;
+    discord: boolean;
+    effects: boolean;
+    publicTestResponses: boolean;
+    capabilities: unknown;
+  } {
     const available =
       !this.stopping &&
       this.ready &&
@@ -401,21 +417,24 @@ export class ApplicationLifecycle {
       this.databaseReady &&
       this.db.healthy &&
       this.gateway.client.isReady();
-    return Response.json(
-      {
-        live: !this.stopping,
-        ready: available,
-        database: this.databaseReady && this.db.healthy,
-        // False while another writer holds the lease; liveness is unaffected.
-        writerLease: this.leaseHeld,
-        discord: this.gateway.client.isReady(),
-        effects: this.config.ENABLE_EFFECTS,
-        publicTestResponses:
-          Boolean(this.config.TEST_GUILD_ID) && this.config.PUBLIC_TEST_RESPONSES,
-        capabilities: this.capabilities,
-      },
-      { status: liveness || available ? 200 : 503 },
-    );
+    return {
+      live: !this.stopping,
+      ready: available,
+      database: this.databaseReady && this.db.healthy,
+      // False while another writer holds the lease; liveness is unaffected.
+      writerLease: this.leaseHeld,
+      discord: this.gateway.client.isReady(),
+      effects: this.config.ENABLE_EFFECTS,
+      publicTestResponses: Boolean(this.config.TEST_GUILD_ID) && this.config.PUBLIC_TEST_RESPONSES,
+      capabilities: this.capabilities,
+    };
+  }
+
+  /** Report application readiness without turning a Lodestone outage into a process failure. */
+  private probe(request: Request): Response {
+    const liveness = new URL(request.url).pathname === "/health/live";
+    const status = this.status();
+    return Response.json(status, { status: liveness || status.ready ? 200 : 503 });
   }
 
   /** Stop admission once, cancel upstream work, and leave uncompleted leases recoverable. */

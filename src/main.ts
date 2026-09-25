@@ -1,5 +1,5 @@
 /** Composition root: create capabilities once, discover modules, then connect the bot. */
-import { pino } from "pino";
+import { multistream, pino } from "pino";
 import { GuildEvents } from "./application/guild-events.js";
 import { GuildAccess } from "./application/guild-access.js";
 import { DiscordGuildAccess } from "./discord/guild-access.js";
@@ -8,18 +8,22 @@ import {
   databaseKey,
   gatewayKey,
   guildEventsKey,
+  issueReportsKey,
   lifecycleKey,
   synchronizationKey,
   roleAdministrationKey,
   versionInformationKey,
 } from "./application/keys.js";
+import { IssueReports } from "./application/issue-reports.js";
 import { ApplicationLifecycle } from "./application/lifecycle.js";
-import { createReporter } from "./application/reporting.js";
+import { RecentLogs } from "./application/recent-logs.js";
+import { createReporter, type Reporter } from "./application/reporting.js";
 import { Service } from "./application/service.js";
 import { Synchronization } from "./application/synchronization.js";
 import { RoleAdministration } from "./application/role-administration.js";
 import { VersionInformation } from "./application/version-information.js";
 import { GitHubHistory } from "./infrastructure/github/client.js";
+import { GitHubIssues } from "./infrastructure/github/issues.js";
 import type { BotContext } from "./bot/context.js";
 import { bindEvents, loadCommands, loadComponents, loadEvents } from "./bot/discovery.js";
 import { InteractionRouter, interactionRouterKey } from "./bot/router.js";
@@ -32,14 +36,22 @@ import { dispatcher } from "./jobs/dispatch.js";
 import { Queue } from "./jobs/queue.js";
 
 const config = configuration();
-const log = pino({
-  level: config.LOG_LEVEL,
-  redact: ["token", "biography", "authorization", "password", "interaction.token"],
-});
+// Issue reports include the newest log records (info and above, after this redaction).
+const recentLogs = new RecentLogs();
+const log = pino(
+  {
+    level: config.LOG_LEVEL,
+    redact: ["token", "biography", "authorization", "password", "interaction.token"],
+  },
+  multistream([
+    { level: config.LOG_LEVEL, stream: process.stdout },
+    { level: "info", stream: recentLogs },
+  ]),
+);
 // Error objects may contain transport credentials or page bodies; the reporter logs only the
 // catalog code, error class and approved Failure messages. Interactions pass their classified
 // level; lifecycle, gateway-event, queue-worker and shutdown reports keep the error default.
-const report = createReporter(log);
+const logReport = createReporter(log);
 
 // Discovery is independent of login, database connections, and feature construction.
 const [commands, components, events] = await Promise.all([
@@ -49,10 +61,26 @@ const [commands, components, events] = await Promise.all([
 ]);
 const db = new Database(config.DATABASE_URL);
 const gateway = new DiscordGateway();
-const app = new Service(db, gateway, new Nodestone(config.NODESTONE_URL), config);
+const nodestone = new Nodestone(config.NODESTONE_URL);
+const app = new Service(db, gateway, nodestone, config);
 const sync = new Synchronization(app);
 const access = new GuildAccess(app, new DiscordGuildAccess(gateway.client));
-const queue = new Queue(db, dispatcher(app, sync, access), (event) => {
+// Issue reports (2.18.0): without a token they are saved, and sent once one is configured.
+const reports = new IssueReports(
+  config,
+  db,
+  nodestone,
+  recentLogs,
+  config.GITHUB_REPORTS_TOKEN
+    ? new GitHubIssues(config.GITHUB_REPORTS_TOKEN, config.GITHUB_REPORTS_REPO)
+    : null,
+);
+// Every error-level report (an unexpected failure) also becomes an issue report, grouped by kind.
+const report: Reporter = (error, operation, options = {}) => {
+  logReport(error, operation, options);
+  if ((options.level ?? "error") === "error") void reports.error(error, operation, options.scope);
+};
+const queue = new Queue(db, dispatcher(app, sync, access, reports), (event) => {
   if (event.type === "worker") return report(event.error, event.job?.id ?? "queue");
   // Classified attempts log at their own level: expected waits stay at debug unless they stall.
   // Only identifiers, codes, approved diagnostics and timings are logged, never payloads or tokens.
@@ -75,8 +103,14 @@ const queue = new Queue(db, dispatcher(app, sync, access), (event) => {
     },
     "Job attempt outcome classified; inspect scoped work status.",
   );
+  // A job that ended failed at error level is reported; repeats of a kind group into one issue.
+  if (outcome.status === "failed" && outcome.level === "error")
+    void reports.jobFailed(job, outcome);
 });
-const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue, log, report);
+const lifecycle = new ApplicationLifecycle(config, db, gateway, app, sync, queue, log, report, {
+  tick: () => reports.tick(),
+});
+reports.useStatus(() => lifecycle.status());
 const services = new Services()
   .provide(applicationKey, app)
   .provide(synchronizationKey, sync)
@@ -85,6 +119,7 @@ const services = new Services()
   .provide(roleAdministrationKey, new RoleAdministration(app, gateway, access))
   .provide(versionInformationKey, new VersionInformation(new GitHubHistory()))
   .provide(guildEventsKey, new GuildEvents(db))
+  .provide(issueReportsKey, reports)
   .provide(lifecycleKey, lifecycle);
 const context: BotContext = {
   client: gateway.client,

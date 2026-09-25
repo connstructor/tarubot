@@ -7,6 +7,7 @@ import * as t from "../infrastructure/postgres/schema.js";
 import type { Service } from "../application/service.js";
 import type { Synchronization } from "../application/synchronization.js";
 import type { GuildAccess } from "../application/guild-access.js";
+import type { IssueReports } from "../application/issue-reports.js";
 import { effectsPaused } from "../domain/failures.js";
 import { Failure } from "../domain/values.js";
 import { managedRoleOrder } from "../domain/role-layout.js";
@@ -17,6 +18,7 @@ export function dispatcher(
   app: Service,
   sync: Synchronization,
   access: GuildAccess,
+  reports?: IssueReports,
 ): (job: Job, guard: () => Promise<void>) => Promise<unknown> {
   return async (job, guard) => {
     if (job.payload_version !== 1)
@@ -25,6 +27,13 @@ export function dispatcher(
         "Unsupported job payload version. Use a compatible application image.",
       );
     if (job.kind === "roster") return sync.roster(job, guard);
+    if (job.kind === "issue.report") {
+      // Delivery to the private reports repository (2.18.0); guild-independent like rosters.
+      const input = z.object({ fingerprint: z.string() }).parse(job.payload);
+      if (!reports)
+        throw new Failure("configuration", "Issue reports aren't wired in this process.");
+      return reports.deliver(input.fingerprint, guard);
+    }
     if (job.kind === "channels.access") {
       if (!job.guild_id)
         throw new Failure("invalid_job", "Missing guild for access reconciliation.");

@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)", and "Approved Lodestone amendments (2026-09-24)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", and "Approved issue-reporting amendments (2026-09-24)".
 
 ## Project map
 
@@ -17,6 +17,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `access-facts.ts` and `rank-policy.ts`: eligibility inputs.
   - `lifecycle.ts`: readiness, startup, and the database writer lease.
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
+  - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
@@ -28,7 +29,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
 - `src/import/`: the legacy MariaDB importer. Imports keep the legacy review channel with the guest-application switch off, and start with layout off and grandfathering pending.
 - `scripts/`: one-shot operator tools: migrate, register, commands (scope read-back and cleanup), snapshot, import, acquire, preview, activate, retry, check-restore, discord-inspect, discord-smoke, and app-spec (App Platform phases).
 - `sidecar/` and `vendor/nodestone`: the bounded Lodestone parser service. Update it only through `bun run nodestone:update`.
-- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `007_profile_checks.sql`; 2.16.x required `006_guest_application_switch.sql`).
+- `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `008_issue_reports.sql`; 2.17.x required `007_profile_checks.sql`).
 
 ## Commands
 
@@ -108,6 +109,10 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Guild configuration changes (`/config` fields, officer rank, FC unlink, `/setup`, activation) bump `guilds.revision` and queue a full repair pass (`reconcile.guild`). A repeat that matches what is saved is a no-op (no revision bump, audit or repair pass) for `/config officer_rank` (the saved rank, or `unset_rank` with none set), `/config guest_applications`, `/config fc link` naming the linked FC, and an `activate.js` rerun on a live guild without `--requeue`. Role and channel fields save again even when unchanged. The exception is `/config role_layout`: it bumps the revision (fencing in-flight work) but queues no repair pass. Enabling queues one `roles.layout` pass, disabling queues nothing, and repeating the current value changes nothing (no revision bump and no audit).
 - `/config guest_applications` saves `enabled`, `channel` and `unset_channel` in one revision with one repair pass, auditing each changed setting. It validates the channel that will take applications (a named one, or the stored one, such as an imported legacy channel, when the call switches applications on), never when switching off or unsetting, and refuses with the "Server settings changed" conflict if, under the row lock, the change would leave applications on with a channel other than the one it validated. No `/config` option is named `clear`: unsetting uses `unset_channel`, `unset_role` or `unset_rank`.
 - Member overrides (`/officer grant|revoke|reset`, `/guest grant|revoke|reset`) leave the revision alone and queue `reconcile.user` for that member. The `/officer` trio needs a server manager (Manage Server and Manage Roles), and while an Officer role is bound each first runs `validateRole` on it: the bot must manage it and the manager's highest role must be above it (the server owner is exempt). The `/guest` trio needs bot officer access. `/officer reset` deletes the officer override so the rank decides, and like a revoke it works for a member who left. `/guest reset` lifts the revocation and ends every active grant of any provenance (kept as history); grandfathering still counts ended grants (basis `existing_grant`), so a reset before first activation stands. A reset with nothing to remove audits and queues nothing.
+- Issue reports (2.18.0):
+  - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
+  - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
+  - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` needs the owner to add the token.
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
 - `/setup` enables onboarding, switches guest applications on (adopting the officer room as the review channel when none is set, and validating a kept one first), and adopts every Officer-role holder.
 - Leave the old `feat/lobby-access` stash alone. It has been superseded. It exists only in the original Mac clone; this Linux clone has no stashes.

@@ -58,6 +58,9 @@ services:
       LODESTONE_ATTEMPTS: ${LODESTONE_ATTEMPTS:-3}
       LODESTONE_MAX_PAGES: ${LODESTONE_MAX_PAGES:-100}
       NODESTONE_RESPONSE_BYTES: ${NODESTONE_RESPONSE_BYTES:-8000000}
+      # Issue reports (2.18.0): the token lives in the host's .env; empty saves reports unsent.
+      GITHUB_REPORTS_TOKEN: ${GITHUB_REPORTS_TOKEN:-}
+      GITHUB_REPORTS_REPO: ${GITHUB_REPORTS_REPO:-deconfined/tarubot-reports}
     depends_on:
       nodestone:
         condition: service_started

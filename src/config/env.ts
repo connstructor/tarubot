@@ -26,6 +26,13 @@ const schema = z.object({
   VERIFICATION_SECONDS: z.coerce.number().int().min(60).max(86400).default(1800),
   GUEST_COOLDOWN_SECONDS: z.coerce.number().int().min(0).default(86400),
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  // Issue reports (2.18.0): a fine-grained token limited to the reports repository's issues. Empty
+  // keeps reports in the database, unsent, until a token is configured and the bot restarts.
+  GITHUB_REPORTS_TOKEN: z.string().default(""),
+  GITHUB_REPORTS_REPO: z
+    .string()
+    .regex(/^[A-Za-z\d-]+\/[A-Za-z\d._-]+$/u, "owner/repository")
+    .default("deconfined/tarubot-reports"),
 });
 export type Configuration = z.infer<typeof schema>;
 /** Report setting names and expected formats while avoiding raw environment values. */

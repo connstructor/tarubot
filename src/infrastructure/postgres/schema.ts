@@ -352,3 +352,23 @@ export const channelAccessPolicies = pgTable(
   },
   (table) => [primaryKey({ columns: [table.guild_id, table.channel_id] })],
 );
+/**
+ * Issue reports (migration 008): one row per fingerprint, saved before delivery so nothing is lost
+ * while GitHub or the token is unavailable. See src/application/issue-reports.ts.
+ */
+export const issueReports = pgTable("issue_reports", {
+  fingerprint: text("fingerprint").primaryKey(),
+  source: text("source").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  latest: text("latest"),
+  guild_id: externalId("guild_id"),
+  user_id: externalId("user_id"),
+  occurrences: integer("occurrences").notNull().default(1),
+  posted_occurrences: integer("posted_occurrences").notNull().default(0),
+  issue_number: integer("issue_number"),
+  issue_created_at: instant("issue_created_at"),
+  posted_at: instant("posted_at"),
+  first_at: instant("first_at").notNull().defaultNow(),
+  last_at: instant("last_at").notNull().defaultNow(),
+});

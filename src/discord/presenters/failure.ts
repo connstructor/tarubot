@@ -89,6 +89,7 @@ export const FAILURE_CONCEPTS = [
   "pending_proof",
   "wait.claims_own",
   "wait.apply",
+  "wait.issue",
   "wait.retry",
   "eligible",
   "upstream.lodestone",
@@ -187,6 +188,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     "/assign member:123456789012345678 reason:Confirmed in voice chat forename:Example surname:Character world:Diabolos",
   ],
   unassign: ["/unassign member:123456789012345678 character:99000001 reason:Linked by mistake"],
+  issue: ["/issue description:My Member role disappeared after I ran /main this morning."],
   characters: ["/characters member:123456789012345678"],
   "guest approve": ["/guest approve application:3f2b8c1e-5d4a-4b3c-9e2f-1a0b9c8d7e6f"],
   "guest deny": [
@@ -947,6 +949,13 @@ function waitView(s: Situation): FailureView {
       concept: "wait.apply",
       title: "You can apply again later",
       lead: s.message ?? "Your last application was declined recently.",
+    };
+  if (limit === "issue")
+    return {
+      ...base,
+      concept: "wait.issue",
+      title: "You can send another report later",
+      lead: s.message ?? "A report was sent a few minutes ago.",
     };
   return {
     ...base,

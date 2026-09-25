@@ -60,6 +60,9 @@ services:
       LODESTONE_ATTEMPTS: ${LODESTONE_ATTEMPTS:-3}
       LODESTONE_MAX_PAGES: ${LODESTONE_MAX_PAGES:-100}
       NODESTONE_RESPONSE_BYTES: ${NODESTONE_RESPONSE_BYTES:-8000000}
+      # Issue reports (2.18.0): empty saves reports without sending them.
+      GITHUB_REPORTS_TOKEN: ${GITHUB_REPORTS_TOKEN:-}
+      GITHUB_REPORTS_REPO: ${GITHUB_REPORTS_REPO:-deconfined/tarubot-reports}
     depends_on:
       # Local capabilities can operate while Lodestone is degraded; storage must be ready.
       postgres:

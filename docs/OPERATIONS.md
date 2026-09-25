@@ -185,6 +185,35 @@ SELECT id, name, world, profile_at, profile_retry_at, profile_missing_at
 
 To undo an automatic unlink (for example, a character that reappears after a rename or transfer glitch), the owner claims and verifies the character again, or an officer runs `/assign`.
 
+## Issue reports
+
+Since 2.18.0 (REQUIREMENTS.md "Approved issue-reporting amendments"), TaruBot opens issues in the private repository `GITHUB_REPORTS_REPO` (default `deconfined/tarubot-reports`) with `GITHUB_REPORTS_TOKEN`.
+
+**What opens an issue:**
+- `/issue` from any member: one per member per 10 minutes, twenty per server per day.
+- Every error-level report: unexpected failures in interactions, events, the lifecycle and the queue worker.
+- Every job that ends failed at error level, except `issue.report` itself.
+- Every five minutes, repeated trouble: a linked FC whose roster hasn't been accepted for 12 hours, and no Lodestone answer for an hour.
+
+**How it's grouped:**
+- Automatic reports share an issue per fingerprint of what failed and where. Repeats are counted, and a comment posts the count, with the newest context, at most hourly.
+- A repeat after the issue was closed opens a new issue that names the old one. Close an issue once it's fixed; a recurrence then shows up as new.
+- Each day allows at most 10 new automatic issues and 50 automatic comments; reports beyond that wait for the next day's allowance.
+- Issues carry the labels `tarubot-report`, `source:user|error|job|trouble` and `env:production|devbot`, and titles start with the environment.
+
+**What a report contains:** the deployment and version, readiness, the Lodestone's reachability and the sidecar's health, active and recently failed jobs, the server's settings and roster state, and for member reports the member's links, main, nickname state, guest and officer standing, recent work and audit, plus the newest log records. Known secret shapes (tokens, Authorization values, URL passwords, PEM blocks) and the deployment's own secret values are removed first.
+
+**Delivery:** reports are rows in `issue_reports`, delivered by `issue.report` jobs. Without a token they are kept and sent once one is set and the bot restarts. To see what is waiting:
+
+```sql
+SELECT source, title, occurrences, posted_occurrences, issue_number, last_at
+  FROM issue_reports
+ WHERE issue_number IS NULL OR occurrences > posted_occurrences
+ ORDER BY last_at DESC;
+```
+
+A refused token (401/403/404) fails the delivery job with `configuration`; fix the token or repository and retry the job. GitHub's rate limits and outages wait and retry on their own.
+
 ## Single database writer
 
 Exactly one bot process writes to a database. The bot enforces this with a PostgreSQL session advisory lock, the **writer lease**, key **`714882494`** (`WRITER_LEASE_LOCK`, defined in `src/infrastructure/postgres/database.ts` and used by the lifecycle and by `migrate()`). Other fixed keys are transaction locks: `714882490` serializes migrations, `714882491` character claims, and `714882492` legacy import.

@@ -235,7 +235,8 @@ export type FailureDetail =
   /** Which limit refused the request, and when it lifts if known. */
   | {
       readonly kind: "limit";
-      readonly limit: "claims_own" | "claims_all" | "apply";
+      /** `issue`: /issue's per-member and per-server limits (2.18.0). */
+      readonly limit: "claims_own" | "claims_all" | "apply" | "issue";
       readonly until?: Date;
     }
   /** The recorded balance and the requested amount, both exact. */

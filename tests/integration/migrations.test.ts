@@ -428,6 +428,57 @@ describe.skipIf(!url)("migration 007 profile checks", () => {
   });
 });
 
+const ISSUE_REPORTS = "008_issue_reports.sql";
+
+describe.skipIf(!url)("migration 008 issue reports", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  test("the reports table accepts the four sources only, and indexes pending delivery", async () => {
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE SCHEMA m008_rehearsal");
+      await client.query("SET LOCAL search_path TO m008_rehearsal");
+      for (const file of (await migrationFiles()).filter((name) => name <= ISSUE_REPORTS))
+        await client.query(await migration(file));
+      await client.query(
+        "INSERT INTO issue_reports (fingerprint, source, title, body) VALUES ('a', 'trouble', 't', 'b')",
+      );
+      const [row] = (
+        await client.query<{ occurrences: number; posted_occurrences: number }>(
+          "SELECT occurrences, posted_occurrences FROM issue_reports",
+        )
+      ).rows;
+      expect(row).toEqual({ occurrences: 1, posted_occurrences: 0 });
+      const indexes = (
+        await client.query<{ indexname: string }>(
+          "SELECT indexname FROM pg_indexes WHERE schemaname='m008_rehearsal' AND tablename='issue_reports' ORDER BY 1",
+        )
+      ).rows.map((index) => index.indexname);
+      expect(indexes).toEqual([
+        "issue_reports_guild_recent",
+        "issue_reports_pending",
+        "issue_reports_pkey",
+        "issue_reports_user_recent",
+      ]);
+      await client.query("SAVEPOINT bad_source");
+      await expect(
+        client.query(
+          "INSERT INTO issue_reports (fingerprint, source, title, body) VALUES ('b', 'other', 't', 'b')",
+        ),
+      ).rejects.toThrow();
+      await client.query("ROLLBACK TO SAVEPOINT bad_source");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+});
+
 describe.skipIf(!url)("the migration guard (writer lease)", () => {
   if (!url) return;
   const db = new Database(url);

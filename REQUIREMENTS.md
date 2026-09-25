@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -92,6 +92,12 @@ The cutover went live on App Platform, and then every profile refresh failed the
 
 **Production host.** Production runs on a Linode Docker host with `docker-compose.production.yml`: the published GHCR bot and Nodestone images, pinned to one release, with no bundled database. It is attached to the owner-provisioned Linode managed PostgreSQL cluster `tarubot-pgsql` (PostgreSQL 18, database and user `tarubot`) over verified TLS on its direct port. Connection pools are never used. The single-writer lease (MIG-13), the production tool profile, and the rule that every provider, token and registration change is a separately authorized owner step all stand unchanged. Updates are a `git pull`, a pinned image tag, and Compose. A release with a migration stops the bot first and takes an independent backup ([docs/HOSTING.md](docs/HOSTING.md)).
 
+**Follow-up (owner decision, 2026-09-25).** The owner asked whether App Platform for the bot and database, with Nodestone elsewhere behind an API key, would be more robust. Nodestone's outgoing address is a single point either way, and the split would add a public, authenticated endpoint and a second provider, so the owner kept production on the Linode host and asked that it be made robust and disposable:
+- rebuildable from Git and an encrypted copy of `.env` kept off the host, with a rebuild runbook;
+- alerting from outside the host: the issue reporter, plus a heartbeat that notices a silent host;
+- a deploy workflow over SSH from GitHub Actions;
+- confirmed managed-database backup retention and point-in-time recovery, with scheduled off-site encrypted dumps.
+
 **App Platform.** The App Platform spec, its phases and their CI validation stay in the repository as the record and as a fallback, in case DigitalOcean's addresses are admitted again. DEPLOY-DO-01 remains satisfied, but it no longer describes production. The approved GitHub deploy-workflow proposal targeted App Platform. It is on hold until it is re-planned for the Compose host.
 
 ### Approved Lodestone amendments (2026-09-24)
@@ -112,6 +118,41 @@ Any sighting in between voids the first 404: a profile read, a private profile, 
 **Refresh pacing.** Scheduled profile refreshes of one character are at least an hour apart, whatever the outcome. Periodic scheduling never pulls a job that is backing off forward, and a startup catch-up is spread over a minute.
 
 **Release order.** 2.17.0 ships these decisions with migration `007_profile_checks.sql`. The GitHub issue reporter and `/issue` follow in 2.18.0, then OPS-10/OPS-11.
+
+### Approved issue-reporting amendments (2026-09-24)
+
+The owner asked for "an 'unexpected behavior handler' that will auto-open a GitHub issue when something goes wonky, and include as much context as possible", and for "an /issue command … that accepts a user comment, same data state collection". Their answers set the policy below. Release 2.18.0 implements it with migration `008_issue_reports.sql`.
+
+**Where reports go.** Reports open issues in the private repository `deconfined/tarubot-reports` (`GITHUB_REPORTS_REPO`). They use a fine-grained token limited to that repository's issues (`GITHUB_REPORTS_TOKEN`), which the running bot holds. Maintenance tools never do. Each issue is labelled `tarubot-report`, `source:…` and `env:production|devbot`, and its title starts with the environment.
+
+**/issue.** Every member can report a problem in their own words. There is one report per member per 10 minutes, and at most 20 per server in any 24 hours; each refusal says when to try again. The reply says what the report carries. The member's text goes into the issue as a fenced block, so it can't @mention anyone on GitHub.
+
+**Automatic reports.** Three kinds of trouble open issues:
+- unexpected errors: every error-level report from interactions, events, the lifecycle and the queue worker;
+- jobs that end failed at error level;
+- repeated trouble: a linked FC's roster not accepted for 12 hours, or no Lodestone answer for an hour.
+
+Each is grouped by a fingerprint of what failed and where, so the same trouble is one issue:
+- repeats are counted, and a comment posts the count at most hourly;
+- a repeat after the issue was closed opens a new issue that refers back to it;
+- each day allows at most 10 new automatic issues and 50 comments.
+
+The issue reporter never reports its own delivery failures.
+
+**Context.** Each report carries, as far as each read succeeds:
+- the deployment and version;
+- readiness;
+- the Lodestone's reachability and the sidecar's health;
+- the queue's active work and recent failures;
+- the server's TaruBot settings and FC roster state;
+- for `/issue` and member-scoped work, the member's links, main, nickname state, guest and officer standing, recent work and audit;
+- the newest log records.
+
+Known secret shapes and the deployment's own secret values are removed from everything before it is stored.
+
+**Durability.** A report is saved in PostgreSQL first and delivered by a job, so a GitHub outage loses nothing. Without a token, reports are saved and `/issue` says so. They are sent once a token is configured.
+
+**Command surface.** `/issue` brings the command surface to 20 roots and 44 paths (AC-23). It must be registered after the deployment.
 
 ## 1. Purpose and interpretation
 
@@ -713,7 +754,7 @@ Verification must cover observable behavior, policy invariants, concurrency, and
 | AC-20 | Crashes after commit, during roster acquisition, during approval, and during notification delivery resume persisted work with the same committed application decisions, entry identities, and confirmed membership evidence. |
 | AC-21 | Lodestone operations obey concurrency/rate/deadline bounds, terminate timed-out underlying work, and keep Discord interaction acknowledgement responsive. Library fixtures cover missing selectors, explicit zero, malformed numbers, 404, maintenance, rate limits, and network exceptions. |
 | AC-22 | Docker images build reproducibly, Compose validates, PostgreSQL data survives container recreation, and the bot recovers from database/Discord reconnects. Health probes operate independently of Lodestone acquisition. Graceful shutdown and backup restoration are exercised. A second bot process against the same database waits for the writer lease, stays unready, and takes over only after the first releases it or loses its session. |
-| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (19 root commands / 43 paths, including `/config role_layout`, `/officer reset`, and `/guest reset`). |
+| AC-23 | The deployed command inventory matches Section 4, and the bot operates with the intents and explicit permissions specified in OPS-12 (20 root commands / 44 paths since 2.18.0, including `/config role_layout`, `/officer reset`, `/guest reset`, and `/issue`). |
 | AC-24 | A user with several trusted links becomes Member when any is a confirmed FC member, receives Officer when any holds the configured rank (except through a bot-only officer's assignment), and is Guest when none is in the FC, with onboarding enabled or disabled. Unknown/stale evidence creates no new role, removing the last link removes derived Guest, and onboarding-disabled guilds receive no channel-visibility work. |
 | AC-25 | First activation of an imported guild grandfathers exactly the previewed set of current non-member humans, once; reruns and later activations add nothing. Bots, Member-eligible users, existing grant holders (including users whose grant `/guest reset` ended), and revoked users are excluded. A mismatched plan checksum, a stale roster, or a linked FC character awaiting departure confirmation rolls activation back unchanged. Grandfathered grants survive refresh/restart/rejoin, yield to Member precedence and explicit revocation, and can be restored by an explicit grant. |
 | AC-26 | With the role-layout switch off, startup, activation, setup, role configuration, role events, refresh, and requeued work make no hoist/position writes, and layout work completes as skipped. Enabling it (manager-only, audited, revision-fenced) queues one pass that converges; disabling during a pass supersedes it before any further write. |
