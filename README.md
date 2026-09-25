@@ -12,7 +12,7 @@ A Bun/TypeScript Discord bot for Final Fantasy XIV Free Companies. It verifies c
 | Drizzle ORM / node-postgres | 0.45.3 / 8.23.0 |
 | PostgreSQL | 18.4 |
 
-The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. Nodestone runs as a separately built, bounded HTTP sidecar, compiled from the **`vendor/nodestone` Git submodule**. Its update workflow follows upstream HEAD; each checked build records exact parser and selector revisions. See [the sidecar contract](docs/NODESTONE.md).
+The normal Compose services are `tarubot`, `nodestone`, and `postgres`. First-party production code is compiled ESM. The `nodestone` service is TaruBot's bounded Lodestone sidecar. Since 2.20.0 it parses pages with TaruBot's own parser, applying [`xivapi/lodestone-css-selectors`](https://github.com/xivapi/lodestone-css-selectors) directly (the Nodestone library it was named after is gone), and it follows the selectors' upstream HEAD live. See [the sidecar contract](docs/NODESTONE.md).
 
 **Production** runs on a Linode Docker host with [`docker-compose.production.yml`](docker-compose.production.yml). That file holds the bot and Nodestone only, pinned to one release and attached to Linode managed PostgreSQL. See [HOSTING.md](docs/HOSTING.md). The DigitalOcean App Platform setup below is superseded, because the Lodestone refuses DigitalOcean's addresses. It is kept validated as a fallback.
 
@@ -20,14 +20,14 @@ For **DigitalOcean App Platform**, [`.do/app.yaml`](.do/app.yaml) attaches the o
 
 Normal deployments pull **`ghcr.io/deconfined/tarubot:latest`** and **`ghcr.io/deconfined/tarubot-nodestone:latest`**. They need the Compose configuration and environment, rather than a source checkout. Feature branches run PR checks; merges to `main` publish tested AMD64/ARM64 images. See [CI_CD.md](docs/CI_CD.md) for tags, first-publication package access, and source-build overrides.
 
-The sidecar checks both upstream repositories hourly and exposes update availability through `/health` and its logs. Refresh, verify, and deploy current upstream sources with:
+The sidecar checks the selector repository every 15 minutes and activates a new HEAD by itself; `/health` and its logs show the live revision. To refresh the copy bundled into the image as a fallback:
 
 ```sh
-bun run nodestone:check
-bun run nodestone:update --deploy
+bun run selectors:check
+bun run selectors:update
 ```
 
-For registry deployments, run dependency updates in a source checkout, merge the verified update PR, and pull its published images. The `--deploy` form performs an explicit local source rebuild using the Compose build override.
+Merge the update PR and pull its published images. `--deploy` also rebuilds and restarts a local source build.
 
 ## Modular commands and events
 
@@ -45,10 +45,9 @@ Drizzle ORM provides typed table mappings and queries over the existing node-pos
 
 ## Development install and check
 
-Clone with `git clone --recurse-submodules REPOSITORY_URL`, or initialize the submodule in an existing checkout before installing dependencies. Run these commands from this directory:
+Clone the repository, then run these commands from this directory:
 
 ```sh
-git submodule update --init --recursive
 bun install --frozen-lockfile
 bun run build
 bun run typecheck
@@ -189,13 +188,12 @@ The bot handles SIGTERM with a 30-second container stop period. Decisions, jobs,
 - `src/bot`: reusable module discovery, contracts, service injection, and interaction dispatch.
 - `src/commands`, `src/events`, `src/components`: independently loaded feature adapters.
 - `src/discord`: Discord effects, shared option builders, selectors, and reply presentation.
-- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, plus typed Nodestone HTTP adaptation.
+- `src/infrastructure`: Drizzle/PostgreSQL schema and connection boundary, plus the typed adapter for the Lodestone sidecar.
 - `src/jobs`: recoverable work leases, deduplication, and outbox dispatch.
 - `src/import`: bounded MySQL/MariaDB dump decoding and atomic import.
-- `sidecar`: Nodestone worker isolation, source compatibility transformations, and transport controls.
-- `vendor/nodestone`: upstream parser Git submodule, required for local and Docker builds.
+- `sidecar`: the Lodestone service: TaruBot's own selector-driven parser, isolated workers, live selectors, and transport controls.
 - `migrations`, `scripts`, `tests`, `docs`: schema, operational tooling, verification, and runbooks.
 
 ## License
 
-TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. The Nodestone submodule and other third-party dependencies retain their own licenses.
+TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. Third-party dependencies, including the `lodestone-css-selectors` data the sidecar parses with, retain their own licenses.

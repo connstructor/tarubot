@@ -1,31 +1,33 @@
-/** One isolated parser operation; the parent supplies bounded transport and owns its lifetime. */
-import axios from "axios";
-import { Character, CharacterSearch, FCMembers, FreeCompany } from "nodestone-upstream";
+/**
+ * One isolated parser operation (2.20.0: TaruBot's own parser, no Nodestone). The worker asks the
+ * parent for the page, because the parent is the only network policy authority (region allowlist,
+ * start spacing, the 429 gate, body bounds and private-profile detection), then parses it with the
+ * active selector set. The parent terminates the worker at its deadline, which ends CPU-bound parsing
+ * too.
+ */
 import { z } from "zod";
 import { requestSchema } from "../src/infrastructure/nodestone/protocol.js";
+import { pagePlan, pageUrl, parsePage } from "./lodestone.js";
+import { selectorFile } from "./selector-runtime.js";
 
-/** Validate messages from the parent before presenting them to the dependency transport. */
+/** The parent's answer to a fetch: the page, or a sanitized failure category. */
 const replySchema = z.union([
   z.object({ type: z.literal("http"), body: z.string(), status: z.number() }),
   z.object({ type: z.literal("http_error"), code: z.string(), retryAfter: z.number() }),
 ]);
+// A worker handles one operation, so exactly one fetch is pending at a time.
 let respond: ((value: unknown) => void) | undefined;
-// A worker executes one parser request at a time, so exactly one transport reply is pending.
 
-// Nodestone controls URLs and parsing. Its transport delegates to the sidecar's
-// bounded fetch, so disconnects and deadlines abort actual network work.
-axios.defaults.adapter = async (config) => {
+/** Ask the parent to fetch `url`, and wait for its validated reply. */
+async function fetchPage(url: string): Promise<z.infer<typeof replySchema>> {
   const pending = new Promise<unknown>((resolve) => {
     respond = resolve;
   });
-  postMessage({ type: "fetch", url: config.url });
-  const reply = replySchema.parse(await pending);
-  if (reply.type === "http_error")
-    throw new Error(JSON.stringify({ code: reply.code, retryAfter: reply.retryAfter }));
-  return { data: reply.body, status: reply.status, statusText: "", headers: {}, config };
-};
+  postMessage({ type: "fetch", url });
+  return replySchema.parse(await pending);
+}
 
-/** Route transport replies versus new parser input, retaining only sanitized failure categories. */
+/** Route fetch replies versus a new operation; failures keep only their category. */
 self.onmessage = async (event: MessageEvent<unknown>) => {
   if (replySchema.safeParse(event.data).success) {
     respond?.(event.data);
@@ -33,53 +35,17 @@ self.onmessage = async (event: MessageEvent<unknown>) => {
   }
   try {
     const input = requestSchema.parse(event.data);
-    const params: Record<string, string> = {};
-    // Only the minimal params/query fields used by the pinned parser API cross this bridge.
-    const query: Record<string, string> = {};
-    let parser: Character | CharacterSearch | FCMembers | FreeCompany;
-    switch (input.operation) {
-      case "profile":
-        // Biography data is fetched only for proof verification, never routine display refreshes.
-        parser = new Character();
-        params.characterId = input.id;
-        query.columns = `Name,Server,FreeCompany${input.biography ? ",Bio" : ""}`;
-        break;
-      case "fc":
-        parser = new FreeCompany();
-        params.fcId = input.id;
-        query.columns = "ID,Name,Tag,Server,ActiveMemberCount";
-        break;
-      case "members":
-        parser = new FCMembers();
-        params.fcId = input.id;
-        query.page = String(input.page);
-        query.columns = "Root,Entry,PageInfo";
-        break;
-      case "search":
-        parser = new CharacterSearch();
-        query.name = input.name;
-        query.server = input.world;
-        query.page = String(input.page);
-        query.columns = "Root,Entry,PageInfo,NoResultsFound";
-        break;
+    // The parent passes its environment to each worker, including the validated region.
+    const reply = await fetchPage(pageUrl(input, process.env.PAGE_REGION || "na"));
+    if (reply.type === "http_error") {
+      postMessage({ type: "result", ok: false, code: reply.code, retryAfter: reply.retryAfter });
+      return;
     }
-    const data: unknown = await parser.parse({ params, query });
-    // The application adapter performs semantic validation; raw parser fields stay untrusted here.
+    const data = parsePage(input, reply.body, pagePlan(input).files.map(selectorFile));
+    // The bot's adapter validates every field; parsed values stay untrusted until then.
     postMessage({ type: "result", ok: true, data });
-  } catch (error) {
-    let code = "invalid_response";
-    let retryAfter = 0;
-    if (error instanceof Error) {
-      try {
-        const details = z
-          .object({ code: z.string(), retryAfter: z.number() })
-          .parse(JSON.parse(error.message));
-        code = details.code;
-        retryAfter = details.retryAfter;
-      } catch {
-        /* Parser diagnostics deliberately exclude raw page content. */
-      }
-    }
-    postMessage({ type: "result", ok: false, code, retryAfter });
+  } catch {
+    // Page text never leaves the worker in a diagnostic.
+    postMessage({ type: "result", ok: false, code: "invalid_response", retryAfter: 0 });
   }
 };

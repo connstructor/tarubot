@@ -1,9 +1,12 @@
-/** Track parser code and selectors independently; deployed revisions remain observable. */
+/**
+ * Track the one upstream the sidecar depends on: xivapi/lodestone-css-selectors. Since 2.20.0 the
+ * parser is TaruBot's own code, so there is no parser repository to follow; the selectors follow
+ * upstream HEAD live (sidecar/selectors.ts), and bun.lock pins only the bundled fallback.
+ */
 import { z } from "zod";
 
-/** Parser code is a submodule; selectors retain their independently updated Git dependency. */
+/** The selector repository, as a Git dependency that bun.lock pins for the bundled fallback. */
 export const upstreams = [
-  { package: "nodestone-upstream", repository: "xivapi/nodestone" },
   { package: "lodestone-css-selectors", repository: "xivapi/lodestone-css-selectors" },
 ] as const;
 
@@ -46,18 +49,13 @@ export async function latestRevision(repository: string, signal: AbortSignal): P
 /** Read only the selected Git resolutions from Bun's generated JSONC lockfile. */
 export function lockedRevisions(raw: unknown): Record<string, string> {
   const lock = z.object({ packages: z.record(z.string(), z.array(z.unknown())) }).parse(raw);
-  const parser = z.string().parse(lock.packages["nodestone-upstream"]?.[0]);
-  if (!parser.endsWith("@file:vendor/nodestone"))
-    throw new Error("Nodestone must resolve from the vendor/nodestone submodule.");
   return Object.fromEntries(
-    upstreams
-      .filter((upstream) => upstream.package !== "nodestone-upstream")
-      .map((upstream) => {
-        const resolution = z.string().parse(lock.packages[upstream.package]?.[0]);
-        const commit = /#([0-9a-f]{7,40})$/.exec(resolution)?.[1];
-        if (!commit) throw new Error(`Missing Git revision for ${upstream.package} in bun.lock.`);
-        return [upstream.package, commit];
-      }),
+    upstreams.map((upstream) => {
+      const resolution = z.string().parse(lock.packages[upstream.package]?.[0]);
+      const commit = /#([0-9a-f]{7,40})$/.exec(resolution)?.[1];
+      if (!commit) throw new Error(`Missing Git revision for ${upstream.package} in bun.lock.`);
+      return [upstream.package, commit];
+    }),
   );
 }
 

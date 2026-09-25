@@ -8,7 +8,6 @@
       "!**/dist",
       "!**/artifacts",
       "!**/bun.lock",
-      "!vendor/nodestone",
       "!tarubot_backup.sql",
       "!REQUIREMENTS.md"
     ]

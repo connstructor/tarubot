@@ -304,9 +304,7 @@ if (import.meta.main) {
           service: "nodestone",
           event: "upstream_status",
           ...state,
-          // Selectors update themselves; only a parser update still needs a release.
-          updateCommand:
-            state.status === "update_available" ? "bun run nodestone:update --deploy" : undefined,
+          // update_available now means a live selector activation failed; selectors_rejected says why.
         }),
       );
     },

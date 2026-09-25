@@ -1,6 +1,43 @@
 # Version history
 
-The current application version is **2.19.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.20.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.20.0 — TaruBot's own Lodestone parser, without Nodestone
+
+The owner: "get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing internally." The sidecar had wrapped the `xivapi/nodestone` library through:
+- a Git submodule;
+- seven source patches;
+- an Axios adapter that bridged its fetches into our bounded transport;
+- a stubbed logger;
+- and, since 2.19.0, an import rewrite to make selectors live.
+
+We used four of its operations. 2.20.0 replaces it with a first-party parser, keeping the sidecar's HTTP contract, so the bot doesn't change. There is no migration and no command change. The Compose service `nodestone`, the image `tarubot-nodestone` and `NODESTONE_URL` keep their names.
+
+- **Parser (`sidecar/lodestone.ts`).** A pure, selector-driven parser on linkedom. It builds each operation's URL and applies the `lodestone-css-selectors` definitions with the semantics TaruBot relied on:
+  - raw `innerHTML` or attributes;
+  - named regex groups spread into the record, with our own `(?P<` translation;
+  - groups and `ROOT` lists with malformed rows kept;
+  - the page root required;
+  - the same `Pagination` fields;
+  - query values encoded once.
+- **Worker.** `sidecar/worker.ts` fetches through the server's gate and parses with the live selector set.
+- **Removed:**
+  - the `vendor/nodestone` submodule and `.gitmodules`;
+  - `sidecar/transforms.ts` and the import rewrite;
+  - `scripts/nodestone-source.ts` and `nodestone-update.ts`;
+  - the `nodestone-upstream` and `axios` dependencies, and with them `regex-translator`, `express` and `lodash`;
+  - the submodule steps in the Dockerfile, CI and publish checkouts, Dependabot and Biome.
+- **Added:** `linkedom` 0.16.11, pinned as a build dependency bundled into the worker.
+- **Selectors only.** The upstream monitor follows only `xivapi/lodestone-css-selectors`. `bun run selectors:check` and `selectors:update` replace the `nodestone:*` scripts and refresh just the bundled fallback, now the 6 files the parser reads.
+- **Parity.**
+  - Before removing Nodestone, the 2.19.0 build and this build parsed 6 live Lodestone pages in 7 cases through their workers (`execute()`). The cases were a profile with and without the biography, the FC page, member pages 1 and 3 (50 and 5 entries), a search hit and an empty search. Output and requested URLs were identical.
+  - The first-party worker took 53–85 ms per operation against Nodestone's 105–180 ms.
+  - The image built with its tests inside and parsed three live pages through `/v1/parse`.
+- **Tests.** `tests/unit/lodestone-parser.test.ts` pins every parsing rule, the URLs, the regex translation and the column names. The worker contract suite, including the older Nodestone parity cases, private profiles, the gate and live selectors, passes unchanged. The upstream tests follow the selector-only monitor.
+- **Docs:**
+  - NODESTONE.md, retitled "Lodestone sidecar";
+  - the owner's decision in REQUIREMENTS.md (SCOPE-03 and the 2026-09-22 tracking decision superseded);
+  - AGENTS.md, CLAUDE.md, README.md, CI_CD.md, CONFIGURATION.md, MIGRATION.md and the backlog.
 
 ## 2.19.0 — Live Lodestone selectors
 

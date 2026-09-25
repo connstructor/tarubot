@@ -15,7 +15,6 @@ The importer reads MySQL/MariaDB dump syntax as data. Its reader handles escaped
 ### Fixture rehearsal (local, no credentials)
 
 ```sh
-git submodule update --init --recursive
 bun install --frozen-lockfile
 bun run build
 bun run test:docker
@@ -52,10 +51,10 @@ Every supplied ownership record needs explicit destination guilds, and every sou
 
 ```sh
 mkdir -p ~/tarubot-cutover/work/{rehearsal,backups} && chmod -R go-rwx ~/tarubot-cutover
-git clone --recurse-submodules https://github.com/deconfined/tarubot.git ~/tarubot-cutover/src
+git clone https://github.com/deconfined/tarubot.git ~/tarubot-cutover/src   # releases before 2.20.0 also need --recurse-submodules
 cd ~/tarubot-cutover/src
 ln -s ../work work   # clone-relative work/ is ~/tarubot-cutover/work, which the pg container mounts at /work
-git checkout RELEASE_MERGE_SHA && git submodule update --init --recursive
+git checkout RELEASE_MERGE_SHA   # before 2.20.0: && git submodule update --init --recursive
 jq -r .version package.json   # must print X.Y.Z
 bun install --frozen-lockfile && bun run build
 ```

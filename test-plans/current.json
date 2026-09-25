@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.19.0 live Lodestone selectors",
-  "objective": "Check that the sidecar keeps xivapi/lodestone-css-selectors at its latest commit by itself: 2.19.0 loads selectors at runtime, activates each new upstream HEAD after validating it, and shows the live revision in /health and issue reports. No migration and no command change.",
+  "title": "Session: 2.20.0 TaruBot's own Lodestone parser",
+  "objective": "Check 2.20.0, which replaces Nodestone with TaruBot's own parser while keeping everything else the same: characters, rosters and searches read exactly as before (identical output was verified on live pages). No migration and no command change.",
   "user": [
-    "Approve the restart, then run `/claim` or `/refresh` as usual; answers read as before.",
-    "Optional: run `/issue` and check the Lodestone section shows the selectors commit.",
-    "Say if anything parses differently."
+    "Approve the restart, then run `/claim` by name and world, `/characters` and `/sync status`; everything reads as before.",
+    "Optional: `/refresh force:true` as an officer, and check the roster count still matches the FC.",
+    "Say if any name, world or rank looks different."
   ],
   "assistant": [
-    "Restart DevBot and production on 2.19.0 with the owner's go-ahead (no migration, no registration).",
-    "Check the sidecar's /health: selectors at the latest upstream commit and the upstream status current.",
-    "Record both restarts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "Deploy 2.19.0 and 2.20.0 to DevBot and production with the owner's go-ahead (restarts, no migration).",
+    "Check the sidecar's /health (selectors current), one roster acquisition and one profile refresh in the logs.",
+    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.19.0 on schema 008.",
-    "Parse with the live selector set, following upstream HEAD every 15 minutes.",
+    "Run compiled 2.20.0 on schema 008 with the first-party Lodestone parser.",
+    "Follow the selectors' upstream HEAD live and parse every page exactly as before.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

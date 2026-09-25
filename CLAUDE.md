@@ -28,16 +28,17 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
 - `src/import/`: the legacy MariaDB importer. Imports keep the legacy review channel with the guest-application switch off, and start with layout off and grandfathering pending.
 - `scripts/`: one-shot operator tools: migrate, register, commands (scope read-back and cleanup), snapshot, import, acquire, preview, activate, retry, check-restore, discord-inspect, discord-smoke, and app-spec (App Platform phases).
-- `sidecar/` and `vendor/nodestone`: the bounded Lodestone parser service.
-  - Parser code updates only through `bun run nodestone:update`, which also refreshes the bundled selector fallback.
-  - Since 2.19.0, selectors follow `xivapi/lodestone-css-selectors` HEAD live: `sidecar/selectors.ts` downloads and validates them, and `selector-runtime.ts` loads them in each worker.
-  - The owner wants Nodestone replaced by a first-party parser (planned for 2.20.0).
+- `sidecar/`: the bounded Lodestone service. It keeps the Compose service `nodestone`, the image `tarubot-nodestone` and `NODESTONE_URL`, but no longer uses Nodestone (2.20.0).
+  - `lodestone.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages.
+  - `worker.ts` fetches through the server's gate and parses the page.
+  - Selectors follow upstream HEAD live: `selectors.ts` downloads and validates them, and `selector-runtime.ts` loads them per worker.
+  - `bun run selectors:update` only refreshes the bundled fallback.
 - `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `008_issue_reports.sql`; 2.17.x required `007_profile_checks.sql`).
 
 ## Commands
 
 ```sh
-git submodule update --init --recursive && bun install --frozen-lockfile
+bun install --frozen-lockfile
 bun run typecheck && bun run lint && bun run format:check && bun run build
 bun run test:unit && bun run test:contract          # fast, no database
 bun run test:docker                                  # full suite: disposable PostgreSQL + supplied tarubot_backup.sql

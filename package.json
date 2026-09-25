@@ -1,6 +1,6 @@
 {
   "name": "tarubot",
-  "version": "2.19.0",
+  "version": "2.20.0",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -38,8 +38,8 @@
     "test:docker": "bun scripts/test-docker.ts",
     "test:fixture": "bun tests/fixtures/legacy.ts",
     "ci:version": "bun scripts/ci-version.ts",
-    "nodestone:check": "bun scripts/nodestone-update.ts --check",
-    "nodestone:update": "bun scripts/nodestone-update.ts --update"
+    "selectors:check": "bun scripts/selectors-update.ts --check",
+    "selectors:update": "bun scripts/selectors-update.ts --update"
   },
   "dependencies": {
     "discord.js": "14.27.0",
@@ -53,9 +53,8 @@
     "@biomejs/biome": "2.5.14",
     "@types/bun": "1.4.2",
     "@types/pg": "8.23.1",
-    "axios": "1.20.0",
+    "linkedom": "0.16.11",
     "lodestone-css-selectors": "git+https://github.com/xivapi/lodestone-css-selectors.git#HEAD",
-    "nodestone-upstream": "file:vendor/nodestone",
     "typescript": "7.0.2"
   }
 }

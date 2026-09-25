@@ -117,7 +117,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Change.** Single records are now two-column tables, times read `YYYY-MM-DD HH:MM:SS UTC`, and booleans read yes/no. The sidecar is a table with an upstream-component table, and log lines are compact, without the routine noise. Member reports carry no occurrence footer. Every fence starts its own line, and a test enforces it. A sample was checked through GitHub's Markdown renderer.
 - **Status.** Merged ([PR #20](https://github.com/deconfined/tarubot/pull/20), `6a3973d`, after one review round) and deployed on 2026-09-25 to DevBot (03:58 UTC) and production (03:59 UTC). The owner then rotated the reports token, and both `.env` files and containers were updated. Test report #3 was delivered as issue #2 and rendered correctly.
 
-**Update, 2.19.0 (current version):**
+**Update, 2.19.0:**
 - **Why.** The owner: "xivapi/lodestone-css-selectors should ALWAYS be the latest version available." The sidecar ran `1e9dd65`, while upstream was at `a96d68b`, because `bun.lock` pinned the selectors and the build bundled them.
 - **Change.**
   - Selectors now load at runtime in each parser worker.
@@ -126,7 +126,18 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - `/health` and issue reports show the live revision.
   - Parser workers now get the process environment explicitly.
 - **Next (owner request).** Drop Nodestone and parse with the selectors directly (2.20.0), then the robust, disposable host and SSH deploys.
-- **Status.** Committed locally; not yet pushed. No migration and no command change: a restart of the sidecar and bot on each deployment.
+- **Status.** [PR #21](https://github.com/deconfined/tarubot/pull/21) open. No migration and no command change: a restart of the sidecar and bot on each deployment.
+
+**Update, 2.20.0 (current version):**
+- **Why.** The owner: "get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing internally."
+- **Change.**
+  - `sidecar/lodestone.ts` is a first-party, selector-driven parser on linkedom, and the worker fetches through the server's gate.
+  - Removed: the Nodestone submodule, its patches (`transforms.ts`), `axios` and `regex-translator`.
+  - The upstream monitor follows only the selectors, and `selectors:check` and `selectors:update` replace `nodestone:*`.
+  - The service, image and env names are unchanged.
+- **Parity.** The 2.19.0 Nodestone build and this build gave identical output and URLs on 6 live pages in 7 cases (profile ± biography, FC, member pages 1 and 3, search hit, empty search), and the new worker is about twice as fast. The image built and parsed live pages.
+- **Branch.** `feat/first-party-parser-2.20.0` is stacked on 2.19.0; rebase it onto `main` once PR #21 merges.
+- **Status.** Committed locally; not yet pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -192,7 +203,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge and deploy 2.19.0 and 2.20.0 (restarts only). Then make the host robust and disposable (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:

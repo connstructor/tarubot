@@ -21,6 +21,20 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.20.0** (the first-party parser; Nodestone removed) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/lodestone-parser.test.ts`:
+- column names and Python-group translation;
+- each operation's URL, with values encoded once;
+- the files each operation reads being in the bundled and live set;
+- raw `innerHTML` and attributes, with regex groups spread;
+- nulls for missing elements and empty groups, and `''` for a missing attribute;
+- the root narrowing, lists keeping malformed rows, pagination, and a missing root refused.
+
+The worker contract suite passed unchanged. `bun run test:unit` passed **1,144 tests** and `bun run test:contract` **25**. The full container run passed **1,267 tests / 37,351 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+
+**Live-page parity.** Before removing Nodestone, its 2.19.0 build and the 2.20.0 build parsed the same live Lodestone pages through their workers (`execute()`, with the fetch bridge serving the saved page). There were 7 cases: a profile with and without the biography, the Woven Souls FC page, member pages 1 and 3 (50 and 5 entries), a search with one hit, and an empty search. Canonical output and requested URLs were identical in every case. The first-party worker took 53–85 ms per operation against Nodestone's 105–180 ms. The pages were kept outside the repository, since member lists name real players.
+
+**Image.** `docker build --target nodestone` built with the in-image build and tests. The container's `/health` reported the bundled selectors at `a96d68b` and a current upstream. It parsed the live FC page (105 members), a profile with its FC, and member page 1 (50 entries, page 1 of 3) through `/v1/parse`.
+
 **2.19.0** (live Lodestone selectors) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.19.0 above 2.18.1). New cases:
 - structural validation, including a real upstream regex that Nodestone can't compile, and a set that lost a key;
 - activation of a new revision pinned to its commit, with an atomic pointer, cleanup, a no-op repeat and a restore after restart;

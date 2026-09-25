@@ -19,7 +19,7 @@ The owner additionally requested a development startup announcement in `#chat`, 
 
 The owner additionally requested automatic separate member-list display for those four configured roles and descending hierarchy **FC Leader → Officer → Member → Guest** in one consecutive block, without unrelated roles interleaved. Setup must reuse existing canonical roles, including unprefixed Member and Guest roles, before creating new ones; it may rename adopted roles while retaining their IDs, permissions, and assignments. Durable layout reconciliation applies this presentation policy at startup, setup, role-configuration changes, role events, and guild refresh, respecting current effect activation, Discord hierarchy, and the guild's role-layout switch (CFG-07).
 
-On 2026-09-22 the owner required ongoing tracking of the latest upstream Nodestone code and CSS selectors, and subsequently required Nodestone as a Git submodule for solution builds. `vendor/nodestone` supplies the parser source through a local dependency; selectors remain an independent Git dependency. A checked update workflow follows both upstream HEADs and advances the submodule pointer, lockfile, and build metadata; deployed images retain exact revision identities and parser-source fingerprints for reproducibility. The sidecar periodically reports upstream freshness so parser dependencies are not silently left on old revisions.
+(Superseded on 2026-09-25: the sidecar follows the selectors live since 2.19.0, and since 2.20.0 it parses with TaruBot's own parser, with no Nodestone. See "Approved Lodestone amendments".) On 2026-09-22 the owner required ongoing tracking of the latest upstream Nodestone code and CSS selectors, and subsequently required Nodestone as a Git submodule for solution builds. `vendor/nodestone` supplies the parser source through a local dependency; selectors remain an independent Git dependency. A checked update workflow follows both upstream HEADs and advances the submodule pointer, lockfile, and build metadata; deployed images retain exact revision identities and parser-source fingerprints for reproducibility. The sidecar periodically reports upstream freshness so parser dependencies are not silently left on old revisions.
 
 The owner additionally requires modular extension points: command definitions/handlers and gateway event handlers live in separate discoverable modules, loaded dynamically rather than listed in a central dispatch switch. Command deployment and runtime use the same discovered definitions. First-party code, scripts, tests, and supported configuration formats must carry explanatory comments; strict JSON configuration has companion documentation.
 
@@ -125,7 +125,9 @@ Any sighting in between voids the first 404: a profile read, a private profile, 
 - the build's bundled copy is the fallback;
 - parser code stays release-managed.
 
-Release 2.19.0 implements this. The owner also asked to go further and drop Nodestone, parsing the Lodestone with the selectors directly; that is planned for 2.20.0.
+Release 2.19.0 implements this.
+
+**No Nodestone (owner decision, 2026-09-25).** "Get rid of Nodestone entirely, pull xivapi/lodestone-css-selectors for ourselves, and do the parsing internally." In 2.20.0 the sidecar parses pages with TaruBot's own parser, which applies the selector definitions directly. It keeps the sidecar's HTTP contract, isolation, gate and bounds. The Nodestone submodule, its source patches and its dependencies are removed. Before the switch, both parsers produced identical output on live pages. Where NODE requirements name Nodestone, they now apply to this parser.
 
 ### Approved issue-reporting amendments (2026-09-24)
 
@@ -203,7 +205,7 @@ Synchronization combines Lodestone observations with PostgreSQL policy state to 
 
 **SCOPE-02.** Channel functionality consists of metadata queries through `/channel` and configured destinations for application messages. Voice-channel conversation controls and color/status workflows are outside the application scope.
 
-**SCOPE-03.** Nodestone owns Lodestone page acquisition and parsing. TaruBot accesses its results through the typed adapter defined in Section 9, which owns normalization, validation, and application-facing error handling.
+**SCOPE-03.** The Lodestone sidecar owns Lodestone page acquisition and parsing (with TaruBot's own selector-driven parser since 2.20.0; Nodestone before). TaruBot accesses its results through the typed adapter defined in Section 9, which owns normalization, validation, and application-facing error handling.
 
 **SCOPE-04.** Support independently configured Discord guilds. Each guild may link to at most one FC at a time. Guilds observing the same FC maintain independent permissions, character links, guest grants, and ledger accounts.
 
