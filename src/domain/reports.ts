@@ -20,6 +20,8 @@ export const REPEAT_COMMENT_SECONDS = 3600;
 export const ROSTER_STALE_SECONDS = 12 * 3600;
 /** ...and the Lodestone unreachable, throttling or refusing for an hour. */
 export const LODESTONE_DOWN_SECONDS = 3600;
+/** An outage counts only while requests keep failing: the last attempt within this long. */
+export const LODESTONE_RECENT_ATTEMPT_SECONDS = 1800;
 /** GitHub rejects bodies over 65,536 characters; stay well below with room for the header. */
 export const BODY_LIMIT = 60_000;
 

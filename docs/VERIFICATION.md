@@ -29,10 +29,11 @@ Live registration, gateway connection/restart, complete member enumeration, hier
   - `/issue` saves with context and queues delivery. It refuses short text, a second report within 10 minutes, and the twenty-first in a server's day.
   - Delivery opens one labelled issue, with the fenced text (no @mention), every context section, and no deployment secret. A second delivery posts nothing, and saved-only mode queues nothing.
   - Automatic reports group by fingerprint, count repeats inside the hourly window, comment once the sweep finds them due, reopen after a close, redact a diagnostic's copy of the token, and respect the daily cap.
-  - The trouble checks report a stale linked roster and an unreachable Lodestone, and don't run again within five minutes.
+  - The trouble checks report a linked roster not accepted for 12 hours and a Lodestone that keeps failing, and don't run again within five minutes. A freshly linked FC waits 12 hours of never succeeding, and a failure followed by quiet isn't reported (review round).
+  - A repeat of a closed issue is held back by the new-issue cap, with no GitHub call (review round).
   - Migration 008 accepts only the four sources and creates its indexes, and the catalog comparison covers the new table.
 
-`bun run test:unit` passed **1,130 tests** and `bun run test:contract` **23**. The full container run passed **1,251 tests / 37,285 assertions** with no failures (1,130 unit, 23 contract and 98 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+`bun run test:unit` passed **1,130 tests** and `bun run test:contract` **23**. The full container run passed **1,251 tests / 37,290 assertions** with no failures (1,130 unit, 23 contract and 98 PostgreSQL integration tests), both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture, after the review-round fixes.
 
 **2.17.0 rollouts (2026-09-25).** DevBot applied migration 007 after a restore check and a rehearsal on the copy. Production applied it with about 31 s of downtime (restore point 00:34:35.012502 UTC), with an independent backup kept off Linode. The two private profiles then completed as private instead of failing. [DEV_GUILD.md](DEV_GUILD.md#2170-rollout--2026-09-25) has the details.
 

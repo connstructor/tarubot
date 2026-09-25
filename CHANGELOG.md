@@ -24,6 +24,11 @@ The owner asked for an "unexpected behavior handler" that opens GitHub issues wi
   `redact()` removes Discord and GitHub tokens, Authorization values, URL passwords, PEM blocks and the deployment's own secret values. Member text goes in a fenced block, so it can't @mention anyone on GitHub.
 - **Durability.** `issue_reports` saves every report before delivery, and `issue.report` jobs deliver it through the new `GitHubIssues` client. GitHub's rate limits wait, outages retry, and a refused token fails as `configuration`. Without `GITHUB_REPORTS_TOKEN`, reports are saved and sent once a token is set.
 - **Configuration.** `GITHUB_REPORTS_TOKEN` and `GITHUB_REPORTS_REPO` (default `deconfined/tarubot-reports`) are passed through both Compose files and listed in both env templates.
+- **Review round (PR #19).** The Claude review found three behavior bugs, all fixed with regression tests:
+  - A repeat of a closed issue opens a new issue, but was checked against the comment allowance. Delivery now reads the issue's state first, so a reopen spends the new-issue allowance.
+  - An FC with no accepted roster yet (freshly linked) was reported as "not accepted for 12+ hours" within minutes. It is now reported only after the check has seen it without a roster for 12 hours.
+  - One failed Lodestone request followed by an hour of quiet looked like an hour-long outage. The client now records its last attempt, and an outage is reported only while attempts keep failing (the last within 30 minutes).
+  - A CONFIGURATION.md sentence was corrected.
 - **Tests:**
   - redaction of every secret shape, fingerprints, stack frames, bounds and Markdown, and the log buffer;
   - the GitHub client's requests and failure mapping against a local fake;

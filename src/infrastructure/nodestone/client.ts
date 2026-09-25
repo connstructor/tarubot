@@ -55,6 +55,11 @@ export interface LodestoneReachability {
   readonly lastAnswerAt: Date | null;
   /** When unanswered requests began, if every request since the last answer went unanswered. */
   readonly failingSince: Date | null;
+  /**
+   * The last request started, answered or not. A failure followed by quiet says nothing about
+   * now, so an outage is only "still failing" while attempts keep being made.
+   */
+  readonly lastAttemptAt: Date | null;
   /** The code of the most recent unanswered request. */
   readonly lastFailure: string | null;
 }
@@ -288,6 +293,7 @@ export class Nodestone {
   private lastAnswerAt: Date | null = null;
   private failingSince: Date | null = null;
   private lastFailure: string | null = null;
+  private lastAttemptAt: Date | null = null;
   private shutdown = new AbortController();
   private readonly limits: z.infer<typeof limitsSchema>;
   /** Validate limits independently of Discord credentials so acquisition tools can share the adapter. */
@@ -306,6 +312,7 @@ export class Nodestone {
       lastAnswerAt: this.lastAnswerAt,
       failingSince: this.failingSince,
       lastFailure: this.lastFailure,
+      lastAttemptAt: this.lastAttemptAt,
     };
   }
   /** Abort active requests and retry sleeps when the bot relinquishes work. */
@@ -321,6 +328,7 @@ export class Nodestone {
     input: ParseRequest,
     signal: AbortSignal = AbortSignal.timeout(this.limits.LODESTONE_JOB_TIMEOUT_MS),
   ): Promise<unknown> {
+    this.lastAttemptAt = new Date();
     try {
       const result = await this.attempts(input, signal);
       this.answered();

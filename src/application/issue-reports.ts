@@ -27,6 +27,7 @@ import {
   firstPartyFrames,
   GUILD_REPORTS_PER_DAY,
   LODESTONE_DOWN_SECONDS,
+  LODESTONE_RECENT_ATTEMPT_SECONDS,
   redact,
   REPEAT_COMMENT_SECONDS,
   type ReportSource,
@@ -87,6 +88,11 @@ export class IssueReports {
   private lastCheck = 0;
   /** When each fingerprint's context was last collected, for RENDER_INTERVAL_MS. */
   private readonly rendered = new Map<string, number>();
+  /**
+   * When each linked FC was first seen with no accepted roster at all. Its timestamp can't show
+   * how long that has lasted (a freshly linked FC has none yet), so the check keeps its own clock.
+   */
+  private readonly neverAccepted = new Map<string, number>();
   private status: () => unknown = () => null;
   /** Secret values of this deployment, removed from every report even in unfamiliar shapes. */
   private readonly secrets: string[];
@@ -307,13 +313,17 @@ export class IssueReports {
   async tick(now = Date.now()): Promise<void> {
     if (now - this.lastCheck < CHECK_INTERVAL_MS) return;
     this.lastCheck = now;
-    await this.checkRosters();
-    await this.checkLodestone();
+    await this.checkRosters(now);
+    await this.checkLodestone(now);
     await this.sweep();
   }
 
-  /** A linked FC whose roster hasn't been accepted for 12 hours is repeated trouble. */
-  private async checkRosters(): Promise<void> {
+  /**
+   * A linked FC whose roster hasn't been accepted for 12 hours is repeated trouble. One with no
+   * accepted roster yet (freshly linked, say) counts from when this check first saw it that way,
+   * so it is reported only after 12 hours of never succeeding, not minutes after linking.
+   */
+  private async checkRosters(now: number): Promise<void> {
     const stale = await this.db.orm
       .selectDistinct({
         id: t.freeCompanies.id,
@@ -333,7 +343,14 @@ export class IssueReports {
           ),
         ),
       );
+    const seen = new Set(stale.map((fc) => fc.id));
+    for (const id of this.neverAccepted.keys()) if (!seen.has(id)) this.neverAccepted.delete(id);
     for (const fc of stale) {
+      if (!fc.accepted) {
+        const since = this.neverAccepted.get(fc.id) ?? now;
+        this.neverAccepted.set(fc.id, since);
+        if (now - since < ROSTER_STALE_SECONDS * 1000) continue;
+      }
       const body = await this.render({
         source: "trouble",
         what: [
@@ -354,18 +371,29 @@ export class IssueReports {
     }
   }
 
-  /** The Lodestone unreachable, throttling or the sidecar full, with no answer for an hour. */
-  private async checkLodestone(): Promise<void> {
+  /**
+   * The Lodestone unreachable, throttling or the sidecar full, with no answer for an hour, and
+   * still failing: the last attempt recent. One failure followed by a quiet hour is no outage.
+   */
+  private async checkLodestone(now: number): Promise<void> {
     const reach = this.nodestone.reachability();
-    if (!reach.failingSince) return;
-    if (Date.now() - reach.failingSince.getTime() < LODESTONE_DOWN_SECONDS * 1000) return;
+    if (!reach.failingSince || !reach.lastAttemptAt) return;
+    if (now - reach.failingSince.getTime() < LODESTONE_DOWN_SECONDS * 1000) return;
+    if (now - reach.lastAttemptAt.getTime() > LODESTONE_RECENT_ATTEMPT_SECONDS * 1000) return;
     const body = await this.render({
       source: "trouble",
       what: [
         `TaruBot hasn't had an answer from the Lodestone since ${iso(reach.failingSince)}; the latest request ended \`${reach.lastFailure}\`. Profile refreshes, verification and roster checks are waiting.`,
         table(
-          ["Last answer", "Failing since", "Latest code"],
-          [[iso(reach.lastAnswerAt), iso(reach.failingSince), reach.lastFailure]],
+          ["Last answer", "Failing since", "Last attempt", "Latest code"],
+          [
+            [
+              iso(reach.lastAnswerAt),
+              iso(reach.failingSince),
+              iso(reach.lastAttemptAt),
+              reach.lastFailure,
+            ],
+          ],
         ),
       ].join("\n\n"),
       ref: "lodestone",
@@ -492,7 +520,12 @@ export class IssueReports {
       if (row.posted_at && Date.now() - row.posted_at.getTime() < REPEAT_COMMENT_SECONDS * 1000)
         return { skipped: "within the hourly comment window" };
     }
-    if (automatic && (await this.capped(row.issue_number === null ? "created" : "commented")))
+    // A repeat of a closed issue opens a new one, so it spends the new-issue allowance, not the
+    // comment allowance; the state is read before choosing which daily cap applies.
+    const closed =
+      row.issue_number !== null && (await this.github.get(row.issue_number)).state === "closed";
+    const opening = row.issue_number === null || closed;
+    if (automatic && (await this.capped(opening ? "created" : "commented")))
       return { skipped: "daily cap", source: row.source };
     const repeats = row.occurrences - row.posted_occurrences;
     let status: "created" | "commented" | "reopened";
@@ -508,8 +541,7 @@ export class IssueReports {
       status = "created";
       number = created.number;
     } else {
-      const existing = await this.github.get(row.issue_number);
-      if (existing.state === "closed") {
+      if (closed) {
         const created = await this.github.create(
           row.title,
           bounded(

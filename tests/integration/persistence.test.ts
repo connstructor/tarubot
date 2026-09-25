@@ -6450,11 +6450,25 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       skipped: "daily cap",
       source: "error",
     });
+    // A repeat of a closed issue opens a new issue, so the same new-issue allowance holds it back,
+    // even though no comments were posted today.
+    github.closed.add((await reportRow(row.fingerprint))?.issue_number ?? 0);
+    await reports.jobFailed({ ...failed, id: randomUUID() }, outcome);
+    await db.query(
+      "UPDATE issue_reports SET posted_at=now()-interval '61 minutes' WHERE fingerprint=$1",
+      [row.fingerprint],
+    );
+    const calls = github.calls.length;
+    expect(await reports.deliver(row.fingerprint, async () => {})).toEqual({
+      skipped: "daily cap",
+      source: "job",
+    });
+    expect(github.calls).toHaveLength(calls);
     await db.query("DELETE FROM jobs WHERE kind='issue.report'");
     await db.query("DELETE FROM issue_reports WHERE source <> 'user'");
   });
 
-  test("trouble checks report a stale roster and an unreachable Lodestone once per check (2.18.0)", async () => {
+  test("trouble checks report stale rosters after 12 hours and a Lodestone that keeps failing (2.18.0)", async () => {
     const reports = new IssueReports(config, db, nodestone, new RecentLogs(), new FakeIssues());
     const before = await db.query<{ last_successful_roster_at: Date | null }>(
       "SELECT last_successful_roster_at FROM free_companies WHERE id=$1",
@@ -6464,43 +6478,50 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       "UPDATE free_companies SET last_successful_roster_at=now()-interval '13 hours' WHERE id=$1",
       [fc],
     );
-    // The client saw no Lodestone answer for two hours.
+    // A freshly linked FC that has no accepted roster yet.
+    const fresh = "9230000000000009999";
+    const freshGuild = "666666666666666699";
+    await db.query(
+      "INSERT INTO free_companies (id, name, world) VALUES ($1, 'Fresh FC', 'Diabolos')",
+      [fresh],
+    );
+    await db.query("INSERT INTO guilds (id, fc_id) VALUES ($1, $2)", [freshGuild, fresh]);
+    // No Lodestone answer for two hours, and the client is still trying.
     Object.assign(nodestone, {
       failingSince: new Date(Date.now() - 2 * 3600_000),
       lastFailure: "unavailable",
+      lastAttemptAt: new Date(),
     });
+    const occurrences = async (pattern: string) =>
+      (
+        await db.query<{ occurrences: number }>(
+          "SELECT occurrences FROM issue_reports WHERE source='trouble' AND (title LIKE $1 OR body LIKE $1)",
+          [pattern],
+        )
+      )[0]?.occurrences;
     try {
       const now = Date.now();
       await reports.tick(now);
-      const trouble = await db.query<{ title: string; body: string }>(
-        "SELECT title, body FROM issue_reports WHERE source='trouble' ORDER BY title",
-      );
-      // Every stale linked FC is reported (other scenarios' FCs never had a roster), this one too.
-      expect(trouble.map((row) => row.title)).toContain(
-        "[production] Lodestone unreachable for over an hour",
-      );
-      expect(
-        trouble.some(
-          (row) =>
-            /^\[production\] Roster for .+ not accepted for 12\+ hours$/u.test(row.title) &&
-            row.body.includes(`(\`${fc}\`)`),
-        ),
-      ).toBe(true);
+      expect(await occurrences("%Lodestone unreachable for over an hour%")).toBe(1);
+      expect(await occurrences(`%(\`${fc}\`)%`)).toBe(1);
+      // A freshly linked FC isn't stale yet: its 12 hours start when the check first sees it.
+      expect(await occurrences(`%(\`${fresh}\`)%`)).toBeUndefined();
       // Within five minutes the checks don't run again.
       await reports.tick(now + 60_000);
-      expect(
-        (
-          await db.query<{ n: number }>(
-            "SELECT max(occurrences)::int AS n FROM issue_reports WHERE source='trouble'",
-          )
-        )[0]?.n,
-      ).toBe(1);
+      expect(await occurrences(`%(\`${fc}\`)%`)).toBe(1);
+      // Twelve hours on, still never accepted, it is reported. The Lodestone's last attempt is now
+      // twelve hours old: a failure followed by quiet is no outage, so it is not reported again.
+      await reports.tick(now + 12 * 3600_000 + 60_000);
+      expect(await occurrences(`%(\`${fresh}\`)%`)).toBe(1);
+      expect(await occurrences("%Lodestone unreachable for over an hour%")).toBe(1);
     } finally {
-      Object.assign(nodestone, { failingSince: null, lastFailure: null });
+      Object.assign(nodestone, { failingSince: null, lastFailure: null, lastAttemptAt: null });
       await db.query("UPDATE free_companies SET last_successful_roster_at=$2 WHERE id=$1", [
         fc,
         before[0]?.last_successful_roster_at ?? null,
       ]);
+      await db.query("DELETE FROM guilds WHERE id=$1", [freshGuild]);
+      await db.query("DELETE FROM free_companies WHERE id=$1", [fresh]);
       await db.query("DELETE FROM jobs WHERE kind='issue.report'");
       await db.query("DELETE FROM issue_reports WHERE source='trouble'");
     }

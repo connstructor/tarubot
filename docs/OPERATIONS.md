@@ -193,7 +193,7 @@ Since 2.18.0 (REQUIREMENTS.md "Approved issue-reporting amendments"), TaruBot op
 - `/issue` from any member: one per member per 10 minutes, twenty per server per day.
 - Every error-level report: unexpected failures in interactions, events, the lifecycle and the queue worker.
 - Every job that ends failed at error level, except `issue.report` itself.
-- Every five minutes, repeated trouble: a linked FC whose roster hasn't been accepted for 12 hours, and no Lodestone answer for an hour.
+- Every five minutes, repeated trouble: a linked FC whose roster hasn't been accepted for 12 hours, and no Lodestone answer for an hour. An FC with no accepted roster yet is reported only after the check has seen it that way for 12 hours, so linking one doesn't raise a false report. The Lodestone report needs failures to continue, with the last attempt within 30 minutes; one failure followed by quiet isn't an outage.
 
 **How it's grouped:**
 - Automatic reports share an issue per fingerprint of what failed and where. Repeats are counted, and a comment posts the count, with the newest context, at most hourly.
