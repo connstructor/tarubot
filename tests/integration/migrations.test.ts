@@ -374,8 +374,12 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
           })
           .from(t.guestGrants),
       ).toEqual([{ ended: null, by: null, why: null }]);
-      // A guild created later takes the default: applications off until /setup or /config.
-      await store.insert(t.guilds).values({ id: guild.disabled, effects_enabled: true });
+      // A guild created later takes the default: applications off until /setup or /config. Raw
+      // SQL, because a Drizzle insert names every column of today's mapping, including columns
+      // later migrations add (009's changelog columns), which this schema-006 table lacks.
+      await client.query("INSERT INTO guilds (id, effects_enabled) VALUES ($1, true)", [
+        guild.disabled,
+      ]);
       expect(
         (
           await store

@@ -22,7 +22,8 @@ Issue [#30](https://github.com/deconfined/tarubot/issues/30): when the bot start
   - `tests/unit/changelog.test.ts`: the release range, every job decision, and the notes against the repository (each key a CHANGELOG release that fits the column's CHECK and isn't ahead of `package.json`; each note one line of at most 300 characters with no mention or link, shown whole);
   - `tests/unit/migration-files.test.ts`: migrations numbered 001..N with no gap or repeat, and `SCHEMA_VERSION` the last;
   - the post (including the largest: twelve 300-character notes, ten shown, nothing cut), the receipts, the show field and validate lines, the command path and its input checks, and the job line;
-  - on PostgreSQL: migration 009; startup's enqueue, its merge and the collapse of parked posts; and delivery: the baseline rules, the audience lookup (including the Community Updates channel), one post per range, repeats and forged payloads, nothing for members, blocked and released, unset while waiting, paused (only a post with something to say parks), the compare-and-set, and two servers.
+  - on PostgreSQL: migration 009; startup's enqueue, its merge and the collapse of parked posts; and delivery: the baseline rules, the audience lookup (including the Community Updates channel), one post per range, repeats and forged payloads, nothing for members, blocked and released, unset while waiting, paused (only a post with something to say parks), the compare-and-set, and two servers;
+  - migration 006's rehearsal inserts its later guild with raw SQL, since today's Drizzle mapping names 009's columns, which a schema-006 table lacks.
 - **Docs:** REQUIREMENTS.md (the amendment, the command table and AC-23), OPERATIONS.md, REPLIES.md, SETUP.md, README.md, CONFIGURATION.md, PERSISTENCE.md and CLAUDE.md.
 
 ## 2.24.2 — Code-scanning fixes in the Lodestone parser
