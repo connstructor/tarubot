@@ -96,7 +96,7 @@ The cutover went live on App Platform, and then every profile refresh failed the
 - rebuildable from Git and an encrypted copy of `.env` kept off the host, with a rebuild runbook (2.23.0: `scripts/host-env-backup.ts` with `age`, and docs/HOSTING.md "Rebuilding the host");
 - alerting from outside the host: the issue reporter, plus a heartbeat that notices a silent host (2.22.0: the bot pings a healthchecks.io check every five minutes while ready, and the owner's check alerts through Pushover when the pings stop);
 - a deploy workflow over SSH from GitHub Actions;
-- confirmed managed-database backup retention and point-in-time recovery, with scheduled off-site encrypted dumps.
+- confirmed managed-database backup retention and point-in-time recovery, with scheduled off-site encrypted dumps (2.24.0: point-in-time recovery confirmed back to the cluster's creation; `ops/backup.sh` dumps daily into Linode Object Storage, encrypted with `age`, with its own healthchecks.io check. The owner chose Linode's storage over Backblaze B2, accepting that backups share the Linode account).
 
 The owner considered Terraform with the Linode provider for the infrastructure and declined it for now (2026-09-25): "Sounds like too much trouble at least at this stage."
 

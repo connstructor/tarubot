@@ -61,3 +61,21 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *logging
+
+  # The daily database dump (2.24.0): ops/backup.sh runs it with `docker compose run -T backup`,
+  # encrypts its output with age as it streams, and uploads it. The profile keeps `up` from ever
+  # starting it. pg_dump reads the bot's own connection settings; $$ defers expansion to the
+  # container's shell, so Compose doesn't splice the multi-line CA into the command.
+  backup:
+    image: postgres:18.4-alpine
+    profiles: [backup]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the managed tarubot database}
+      DATABASE_CA_CERT: ${DATABASE_CA_CERT:?Set DATABASE_CA_CERT to the managed cluster CA}
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /tmp/ca.crt
+    entrypoint:
+      - sh
+      - -c
+      - umask 077 && printf '%s\n' "$$DATABASE_CA_CERT" > /tmp/ca.crt && exec pg_dump --format=custom --no-owner --no-privileges "$$DATABASE_URL"
+    logging: *logging

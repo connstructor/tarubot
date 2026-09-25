@@ -64,8 +64,17 @@ test("setting names are read without values, skipping every line of a quoted val
 
 test("a .env missing a setting production needs is refused by name", () => {
   const complete = ["TARUBOT_IMAGE_TAG", "DATABASE_URL", "DATABASE_CA_CERT", "DISCORD_TOKEN"];
-  expect(checkSettings(complete)).toEqual(["GITHUB_REPORTS_TOKEN", "HEALTHCHECKS_PING_URL"]);
-  expect(checkSettings([...complete, "GITHUB_REPORTS_TOKEN", "HEALTHCHECKS_PING_URL"])).toEqual([]);
+  const expected = [
+    "GITHUB_REPORTS_TOKEN",
+    "HEALTHCHECKS_PING_URL",
+    "BACKUP_STORAGE_ENDPOINT",
+    "BACKUP_STORAGE_ACCESS_KEY",
+    "BACKUP_STORAGE_SECRET_KEY",
+    "HEALTHCHECKS_BACKUP_URL",
+  ];
+  // Absent expected settings are reported, not refused.
+  expect(checkSettings(complete)).toEqual(expected);
+  expect(checkSettings([...complete, ...expected])).toEqual([]);
   expect(() => checkSettings(["TARUBOT_IMAGE_TAG", "DATABASE_URL"])).toThrow(
     "lacks DATABASE_CA_CERT, DISCORD_TOKEN",
   );

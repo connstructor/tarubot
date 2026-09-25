@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Retention for the tarubot-backups bucket (2.24.0), applied once with the bucket's key
+  (docs/HOSTING.md "Backups and recovery"): daily dumps and settings copies for 30 days, and the
+  dump from the 1st of each month for a year.
+-->
+<LifecycleConfiguration>
+  <Rule>
+    <ID>daily-dumps-30-days</ID>
+    <Filter><Prefix>daily/</Prefix></Filter>
+    <Status>Enabled</Status>
+    <Expiration><Days>30</Days></Expiration>
+  </Rule>
+  <Rule>
+    <ID>settings-copies-30-days</ID>
+    <Filter><Prefix>env/</Prefix></Filter>
+    <Status>Enabled</Status>
+    <Expiration><Days>30</Days></Expiration>
+  </Rule>
+  <Rule>
+    <ID>monthly-dumps-365-days</ID>
+    <Filter><Prefix>monthly/</Prefix></Filter>
+    <Status>Enabled</Status>
+    <Expiration><Days>365</Days></Expiration>
+  </Rule>
+</LifecycleConfiguration>

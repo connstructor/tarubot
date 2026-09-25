@@ -4,7 +4,7 @@
 
 ## 1. Where we stopped
 
-The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)). After launch, 2.17.0 (Lodestone hardening), 2.18.0 and 2.18.1 (issue reports) were deployed to DevBot and production, and production ran **2.18.1** until 2.21.0. 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser) are merged; **2.21.0** moves the parser into the bot, removes the sidecar and retires App Platform. 2.21.0 carried all three to DevBot and production on 2026-09-25; 2.22.0 added the healthchecks.io heartbeat (deployed), and **2.23.0** adds the rebuild runbook and the encrypted settings copy.
+The core v2 functionality is implemented and tested. The table below is the original 2026-09-23 snapshot; the updates after it bring it to the current state. The owner's 2.14.0 reply session ran on 2026-09-24, and **2.15.0** ships its fixes and the owner's decisions, with the fixes from an adversarial review round (`07af9d8`). 2.15.0 is merged, published and deployed to DevBot (migration 006, 19 roots / 43 paths). The owner then renamed the GitHub account `connstructor` to `deconfined`, and **2.15.1** follows the rename. 2.15.1 is merged and published, and the 2.15.0 DevBot session is done. The owner approved the App Platform deploy-workflow proposal and wants v2 live on 2026-09-24, so **2.16.0** ships its deployment safeguards (Release A), OPS-10/OPS-11 move to 2.17.0 after launch, and the production cutover follows 2.16.0's publication and DevBot check. **The cutover ran on 2026-09-24 with 2.16.0.** Production went live on App Platform, then moved that evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. **2.16.1** brings the repository in line with that ([HOSTING.md](HOSTING.md)). After launch, 2.17.0 (Lodestone hardening), 2.18.0 and 2.18.1 (issue reports) were deployed to DevBot and production, and production ran **2.18.1** until 2.21.0. 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser) are merged; **2.21.0** moves the parser into the bot, removes the sidecar and retires App Platform. 2.21.0 carried all three to DevBot and production on 2026-09-25; 2.22.0 added the healthchecks.io heartbeat (deployed), 2.23.0 adds the rebuild runbook and the encrypted settings copy, and **2.24.0** the daily encrypted off-site database dumps.
 
 | Layer | State at handoff |
 | --- | --- |
@@ -155,11 +155,21 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Owner's check.** "TaruBot production": period 5 minutes, grace 10 minutes, Pushover for down. The URL lives in `~/tarubot-cutover/healthchecks-production.url` and goes into the host's `.env` ([HOSTING.md](HOSTING.md#heartbeat)).
 - **Status.** Merged ([PR #24](https://github.com/deconfined/tarubot/pull/24), `dfa6c5b`) and deployed on 2026-09-25 to DevBot (heartbeat off) and production (12:33 UTC, heartbeat on); the owner confirmed good pings.
 
-**Update, 2.23.0 (current version):**
+**Update, 2.23.0:**
 - **Why.** The robust, disposable host needs a way back when the host is gone: a rebuild runbook and an off-host copy of its settings. The owner declined Terraform for now ("too much trouble at least at this stage").
 - **Change.** `scripts/host-env-backup.ts` (`bun run host:env-backup`) reads the host's `.env` over SSH and encrypts it with `age` for `ops/age-recipients.txt`, writing only the encrypted copy; HOSTING.md gains "Settings copy" and an 11-step "Rebuilding the host".
 - **Found.** `sshd` offered password login (though `tarubot` had no password); the owner made it key-only the same day, confirmed from outside. No Linode Cloud Firewall is attached; that stays an owner item in OPEN_ITEMS.md.
-- **Status.** Branch `feat/robust-host-2.23.0`; not yet pushed.
+- **Status.** [PR #25](https://github.com/deconfined/tarubot/pull/25) open, with the review fixes (quote-aware setting names, verify-then-rename). Nothing to deploy.
+
+**Update, 2.24.0 (current version):**
+- **Why.** The last piece of the backup layer: off-site dumps. The owner chose Linode Object Storage over B2 ("not really worried about Akamai going down"): bucket `tarubot-backups`, key `tarubot-backup-key` limited to it, and a second healthchecks check "TaruBot backups".
+- **Change.**
+  - `ops/backup.sh` dumps through the production Compose file's profile-only `backup` service, streams into `age`, uploads to `daily/` (and `monthly/` on the 1st) with curl SigV4, and uploads an encrypted `.env` to `env/`. It pings healthchecks with start, success or the failed step.
+  - Retention (`ops/bucket-lifecycle.xml`: 30 days, monthly 365) is applied to the bucket.
+  - The host's `.env` holds the storage settings, which the bot never sees.
+- **Proven.** A run from a scratch copy on the host uploaded a 381,594-byte dump. It decrypted and restored into a throwaway PostgreSQL 18 with all 27 table counts identical to production.
+- **Deploy.** A pull on the host (the bot needn't restart), then the crontab line from HOSTING.md.
+- **Status.** Branch `feat/backups-2.24.0`, stacked on 2.23.0; not yet pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -225,7 +235,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge 2.23.0 (docs and an operator script; nothing to deploy). Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge 2.23.0 and 2.24.0, then on the host `git pull` and install the backup crontab line (HOSTING.md). Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
