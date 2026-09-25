@@ -376,6 +376,12 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - No Lodestone job was due in the first minutes (profiles are paced daily, rosters every 6 h), so a read-only parse ran inside the production container: a profile with its FC in 755 ms, the Woven Souls FC (105 members) in 803 ms, and member page 1 (50 entries, page 1 of 3).
 - **Operator machine:** the production-tools clone `~/tarubot-cutover/src` moved from 2.18.0 to 2.21.0 and was rebuilt. The cutover's `tarubot-cutover-nodestone` container, running since the cutover, was stopped; 2.21.0 tools parse in their own process.
 
+### 2.22.0 rollout — 2026-09-25
+
+- PR #24 merged as `dfa6c5b`; CI, CodeQL and the Claude review passed with no comments. Publish run 36135042231 published `tarubot:2.22.0` (`sha256:f8fea36a…`) and promoted `latest`.
+- **DevBot:** 567 jobs, all succeeded. The writer stopped at 12:32:21 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.22.0-dfa6c5b.dump` is 131,026 bytes, sha256 `ca2ff878b3efa3cec9875dd767018f803f21c9e7c8e25c90483a922ea9f1c2f8`; the restore was verified at 008. Healthy at 12:32:40, readiness 200, and the heartbeat off, as intended (no URL in DevBot's `.env`).
+- **Production:** the ping URL went from `~/tarubot-cutover/healthchecks-production.url` into the host's `.env` over SSH stdin, in the same rewrite that pinned `TARUBOT_IMAGE_TAG=2.22.0`; the file stayed mode 600 and its checksum matches the saved URL. `up -d --wait --remove-orphans` at 12:32:54, healthy at 12:33:00, readiness 200 with the heartbeat on and the reports token present. No heartbeat warnings over the first scheduler passes, and the owner confirmed the check receives good pings.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

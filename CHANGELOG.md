@@ -1,6 +1,38 @@
 # Version history
 
-The current application version is **2.22.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.23.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.23.0 — A rebuild runbook and an off-host settings copy
+
+The robust, disposable host (owner decision, 2026-09-25) needs a way back when the host is gone. The owner declined Terraform for now ("too much trouble at least at this stage"), so this is a runbook and a small operator script. No running code changes: there is nothing to deploy, no migration and no command change.
+
+- **Settings copy (`scripts/host-env-backup.ts`, `bun run host:env-backup`).** It runs on the operator machine and reads the host's `.env` over SSH.
+  - It checks that the settings production needs are present, naming only what's missing, and encrypts with `age` for the public keys in `ops/age-recipients.txt`.
+  - It writes only the encrypted copy (`~/tarubot-cutover/env-backups/tarubot-env-<UTC time>.age`, mode 600), so the settings never touch the operator machine's disk or the terminal.
+  - `--identity` decrypts the new copy in memory and confirms it matches. The copy is written under a hidden temporary name and renamed into place only after that check, so a failed run leaves nothing a restore could pick up.
+  - The setting-name scan tracks quotes, so no line of a multi-line value, such as the CA, is ever printed.
+  - Its output names the settings present, never their values.
+- **Rebuild runbook (HOSTING.md "Rebuilding the host").** Eleven steps from a lost host to a running bot:
+  - stop the old writer;
+  - create the Linode;
+  - the base system as root (Docker CE from Docker's repository, `age`, the `tarubot` user in the docker group, key-only SSH);
+  - DNS with new SSHFP records;
+  - the database allow list;
+  - clone;
+  - restore and pin the settings;
+  - start and check;
+  - the backup schedule;
+  - retire the old host.
+- **Key.** The `age` private key lives on the operator machine, with an offline copy kept by the owner. The daily database dumps (2.24.0) will use the same key.
+- **Found and fixed.** `sshd` offered password login on the host (although `tarubot` had no password). The owner made it key-only the same day, and a probe from outside now sees `publickey` alone. No Linode Cloud Firewall is attached; that is an owner item.
+- **Records.** The 2.22.0 rollouts: DevBot with the heartbeat off, and production with the ping URL set over SSH stdin and good pings confirmed. The Terraform decision is in REQUIREMENTS.md and OPEN_ITEMS.md.
+- **Tests.** `tests/unit/host-env-backup.test.ts`:
+  - argument parsing;
+  - setting names read without values, including a multi-line CA;
+  - the required settings refused by name;
+  - UTC file names;
+  - the recipients file's format;
+  - from the review: the quote-aware name scan, and the verify-then-rename write path.
 
 ## 2.22.0 — A healthchecks.io heartbeat
 

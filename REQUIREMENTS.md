@@ -93,10 +93,12 @@ The cutover went live on App Platform, and then every profile refresh failed the
 **Production host.** Production runs on a Linode Docker host with `docker-compose.production.yml`: the published GHCR bot image (and until 2.21.0 the Nodestone sidecar image), pinned to one release, with no bundled database. It is attached to the owner-provisioned Linode managed PostgreSQL cluster `tarubot-pgsql` (PostgreSQL 18, database and user `tarubot`) over verified TLS on its direct port. Connection pools are never used. The single-writer lease (MIG-13), the production tool profile, and the rule that every provider, token and registration change is a separately authorized owner step all stand unchanged. Updates are a `git pull`, a pinned image tag, and Compose. A release with a migration stops the bot first and takes an independent backup ([docs/HOSTING.md](docs/HOSTING.md)).
 
 **Follow-up (owner decision, 2026-09-25).** The owner asked whether App Platform for the bot and database, with Nodestone elsewhere behind an API key, would be more robust. Nodestone's outgoing address is a single point either way, and the split would add a public, authenticated endpoint and a second provider, so the owner kept production on the Linode host and asked that it be made robust and disposable:
-- rebuildable from Git and an encrypted copy of `.env` kept off the host, with a rebuild runbook;
+- rebuildable from Git and an encrypted copy of `.env` kept off the host, with a rebuild runbook (2.23.0: `scripts/host-env-backup.ts` with `age`, and docs/HOSTING.md "Rebuilding the host");
 - alerting from outside the host: the issue reporter, plus a heartbeat that notices a silent host (2.22.0: the bot pings a healthchecks.io check every five minutes while ready, and the owner's check alerts through Pushover when the pings stop);
 - a deploy workflow over SSH from GitHub Actions;
 - confirmed managed-database backup retention and point-in-time recovery, with scheduled off-site encrypted dumps.
+
+The owner considered Terraform with the Linode provider for the infrastructure and declined it for now (2026-09-25): "Sounds like too much trouble at least at this stage."
 
 **App Platform.** *(Superseded by the 2026-09-25 retirement below.)* The App Platform spec, its phases and their CI validation stay in the repository as the record and as a fallback, in case DigitalOcean's addresses are admitted again. DEPLOY-DO-01 remains satisfied, but it no longer describes production. The approved GitHub deploy-workflow proposal targeted App Platform. It is on hold until it is re-planned for the Compose host.
 
