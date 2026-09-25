@@ -16,10 +16,13 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests supersede their own stale builds. Deploys run one at a time and are never
-  # cancelled, so an older main can't finish deploying after a newer one.
-  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Only main (pushes and manual runs from main) joins the deploy group: deploys run one at a
+  # time and are never cancelled, so an older main can't finish deploying after a newer one.
+  # Everything else, pull requests (refs/pull/N/merge) and build-only dispatches from other
+  # branches, gets a group of its own and supersedes only its own stale builds, so it can never
+  # cancel a pending main deploy.
+  group: pages-${{ github.ref == 'refs/heads/main' && 'deploy' || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-Settings live in `.env` next to `docker-compose.yml`, copied from the repository's [`.env.example`](https://github.com/deconfined/tarubot/blob/main/.env.example). Keep it private (`chmod 600 .env`) and out of Git: it holds the bot token and the database password.
+Settings live in `.env` next to `docker-compose.yml`, copied from your release's [`.env.example`](https://github.com/deconfined/tarubot/blob/main/.env.example) as [Install](/tarubot/deploy/install/#1-get-the-compose-file-and-settings-template) shows. Keep it private (`chmod 600 .env`) and out of Git: it holds the bot token and the database password.
 
 The bot validates its settings at startup and refuses to start with an invalid one, naming the setting but never its value. Compose passes the bot container only the settings `docker-compose.yml` lists; a one-off `docker compose run` can add others with `-e NAME=value`. Settings removed in earlier releases are ignored; the [changelog](https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md) records each removal.
 
@@ -60,15 +60,21 @@ Read by `docker-compose.yml`, not by the bot.
 
 ## Maintenance tools only
 
-Read by the [one-shot tools](/tarubot/deploy/tools/), not by the running bot.
+Read by the [one-shot tools](/tarubot/deploy/tools/), not by the running bot. `docker-compose.yml` doesn't pass these to the container, so a value in `.env` reaches only tools run outside it. For a tool in the container, pass the setting with that run:
+
+```sh
+docker compose run --rm --no-deps -e MIGRATE_WRITER_WAIT_SECONDS=300 tarubot bun dist/scripts/migrate.js
+```
+
+A setting derived from the bot's own connection, such as `RESTORE_DATABASE_URL`, uses the `sh -c` form in the [restore rehearsal](/tarubot/deploy/operations/#restore-rehearsal), so no password is typed.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | (template value) | The connection string for tools run **outside** the container, for example with the loopback port override. Under the stock Compose file the bot and the tools in its container get their own URL to the bundled database, and this line is unused. |
 | `TARUBOT_ENVIRONMENT` | (empty) | The tools' deployment profile. Leave it empty: your deployment uses the unmanaged profile. The other values belong to the upstream project's own instances. |
-| `RESTORE_DATABASE_URL` | (not set) | The restored copy that `check-restore.js` compares with `DATABASE_URL`. Set it only for that run. |
+| `RESTORE_DATABASE_URL` | (not set) | The restored copy that `check-restore.js` compares with `DATABASE_URL`. Set it only for that run, never in `.env`. |
 | `RESTORE_DATABASE_CA_CERT` | (empty) | A CA for `RESTORE_DATABASE_URL` when it differs from the primary's; empty reuses `DATABASE_CA_CERT`. |
-| `MIGRATE_WRITER_WAIT_SECONDS` | `90` | How long `migrate.js` waits for a stopping bot to release the database before refusing a pending migration, 0 to 600. |
+| `MIGRATE_WRITER_WAIT_SECONDS` | `90` | How long `migrate.js` waits for a stopping bot to release the database before refusing a pending migration, 0 to 600. In the container, pass it with `-e` as above. |
 
 ## Development only
 

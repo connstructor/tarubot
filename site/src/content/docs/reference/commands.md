@@ -10,7 +10,7 @@ Every command works only inside a server, and every reply is private to the pers
 **Who can use it** uses these words:
 
 - **Anyone** means any human member of the server.
-- **Officers** have Discord's Manage Server permission, or hold the Officer role TaruBot manages. See [Who can do what](/tarubot/admin/access/).
+- **Officers** have Discord's Manage Server permission, or hold the Officer role with TaruBot backing it: a linked character holds the officer rank, or a server manager granted it with `/officer grant`. A role given by hand alone doesn't count. See [Who can do what](/tarubot/admin/access/).
 - **Server managers** have both Manage Server and Manage Roles. Bot officer access alone isn't enough.
 - **Confirmed FC members** have a linked character that an accepted roster lists in the server's Free Company.
 
@@ -210,7 +210,7 @@ Choose the Guest role, which TaruBot gives to registered visitors, approved appl
 
 ### /config roles officer
 
-Choose the Officer role. Holding it gives bot officer access, never Discord permissions.
+Choose the Officer role. TaruBot gives it to members whose linked character holds the officer rank or whom a server manager granted officer access, and removes it from anyone else. Holding it with that backing gives bot officer access, never Discord permissions.
 
 **Who can use it:** server managers.
 

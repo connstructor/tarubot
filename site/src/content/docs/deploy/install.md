@@ -9,16 +9,19 @@ This installs TaruBot with the stock Compose file: the published bot image and a
 
 ## 1. Get the Compose file and settings template
 
-On the host, in a directory of its own:
+Pick a release from the [changelog](https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md) and use it for `X.Y.Z` below. On the host, in a directory of its own, pull that release's image and fetch the Compose file and settings template from the commit that built it, so the three match:
 
 ```sh
 mkdir tarubot && cd tarubot
-curl -fsSLO https://raw.githubusercontent.com/deconfined/tarubot/main/docker-compose.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/deconfined/tarubot/main/.env.example
+docker pull ghcr.io/deconfined/tarubot:X.Y.Z
+commit=$(docker image inspect ghcr.io/deconfined/tarubot:X.Y.Z \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+curl -fsSLO "https://raw.githubusercontent.com/deconfined/tarubot/$commit/docker-compose.yml"
+curl -fsSL -o .env "https://raw.githubusercontent.com/deconfined/tarubot/$commit/.env.example"
 chmod 600 .env
 ```
 
-That's all the host needs: the image carries the compiled bot, its migrations and its tools.
+The image's `org.opencontainers.image.revision` label names the commit it was built from. That's all the host needs: the image carries the compiled bot, its migrations and its tools.
 
 ## 2. Fill in `.env`
 
@@ -33,7 +36,7 @@ ENABLE_EFFECTS=true
 ```
 
 - **`POSTGRES_PASSWORD`** creates the bundled database's login on first start. Use letters, digits, `-` and `_` only (for example the output of `openssl rand -hex 24`), because Compose puts it into the bot's connection URL.
-- **`TARUBOT_IMAGE_TAG`** pins a release. Replace `X.Y.Z` with a published version from the [changelog](https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md). `latest` follows every release, which makes updates, and any migration they bring, happen whenever the image is pulled; pin a version instead.
+- **`TARUBOT_IMAGE_TAG`** pins a release. Use the same `X.Y.Z` as in step 1, so the bot runs the release its Compose file came from. `latest` follows every release, which makes updates, and any migration they bring, happen whenever the image is pulled; pin a version instead.
 - **`ENABLE_EFFECTS=true`** lets the bot change roles and nicknames and post messages. With `false`, it records every decision but holds the Discord changes as paused work.
 
 Leave these as the template has them:
@@ -76,7 +79,7 @@ docker compose up -d --wait
 
 ```sh
 docker compose exec -T tarubot \
-  bun -e 'const r = await fetch("http://127.0.0.1:3000/health/ready"); console.log(await r.text())'
+  bun -e 'const r = await fetch("http://127.0.0.1:" + (process.env.HEALTH_PORT || "3000") + "/health/ready"); console.log(await r.text())'
 docker compose logs --since 10m tarubot
 ```
 

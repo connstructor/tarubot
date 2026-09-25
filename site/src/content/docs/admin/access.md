@@ -16,9 +16,9 @@ Every human member can link their own characters, choose a main and a nickname s
 A member is a TaruBot **officer** in a server when either is true:
 
 - they have Discord's **Manage Server** permission there; or
-- they hold the server's bound **Officer role** and haven't been revoked with `/officer revoke`.
+- they hold the server's bound **Officer role** and TaruBot backs it: one of their linked characters holds the FC rank chosen with [`/config officer_rank`](/tarubot/reference/commands/#config-officer_rank), or a server manager granted them officer access with [`/officer grant`](/tarubot/reference/commands/#officer-grant), and they haven't been revoked with `/officer revoke`.
 
-TaruBot gives the Officer role to members whose linked character holds the FC rank chosen with [`/config officer_rank`](/tarubot/reference/commands/#config-officer_rank), and to members a server manager granted with [`/officer grant`](/tarubot/reference/commands/#officer-grant). See [Officers](/tarubot/admin/officers/).
+TaruBot gives the Officer role to exactly those members. A role given by hand alone doesn't count: its holder gets **Officers only**, and TaruBot removes the role at its next pass. While TaruBot can't tell yet, for example before a new link's first roster check, a member who already holds the role keeps it. See [Officers](/tarubot/admin/officers/).
 
 The Officer role grants TaruBot's officer commands only. It carries no Discord permissions, and it doesn't let anyone manage Discord roles or channels. A revocation takes effect at once, even while Discord is still removing the role.
 

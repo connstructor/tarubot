@@ -76,6 +76,19 @@ bun run start
 
 The normal Compose configuration keeps dependency ports private. Use a separate database and development application for test-guild work. Bun loads this directory's `.env` for every `bun` command, including `bun run` script children.
 
+The one-shot tools run from the compiled output too, so run `bun run build` after every source change. Their `bun run` aliases:
+
+| Script | Tool |
+| --- | --- |
+| `bun run db:migrate` | `migrate.js`: apply pending migrations |
+| `bun run commands:register --global` or `--guild ID` | `register.js`: register the slash commands in one scope |
+| `bun run commands:list` | `commands.js list`: read back every command scope |
+| `bun run commands:clear-guild GUILD_ID --application APP_ID` | `commands.js clear-guild`: remove one server's leftover commands, dry run first |
+| `bun run preview GUILD_ID` | `preview.js`: read-only role and nickname preview |
+| `bun run jobs:retry GUILD_ID JOB_ID` | `retry.js`: requeue failed or blocked delivery |
+
+Tools without an alias, such as `check-restore.js`, run as `bun dist/scripts/NAME.js`. The [maintenance tools page](https://deconfined.github.io/tarubot/deploy/tools/) explains each tool, and [CONFIGURATION.md](docs/CONFIGURATION.md#maintenance-tool-profiles) the deployment guard every tool applies first.
+
 ## License
 
 TaruBot's first-party code is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX **AGPL-3.0-only**. `/version` provides source-code and license links. Third-party dependencies, including the `lodestone-css-selectors` data the parser applies, retain their own licenses.

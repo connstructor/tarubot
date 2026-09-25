@@ -7,11 +7,11 @@ sidebar:
 
 ## Health probes
 
-The bot serves two probes on `HEALTH_PORT` (3000) inside its container. No port is published: read them through the container.
+The bot serves two probes on `HEALTH_PORT` (3000 by default) inside its container. No port is published: read them through the container. The command reads the port from the container's own setting, as Compose's health check does.
 
 ```sh
 docker compose exec -T tarubot \
-  bun -e 'const r = await fetch("http://127.0.0.1:3000/health/ready"); console.log(await r.text())'
+  bun -e 'const r = await fetch("http://127.0.0.1:" + (process.env.HEALTH_PORT || "3000") + "/health/ready"); console.log(await r.text())'
 ```
 
 - **`/health/live`** answers 200 whenever the process can answer at all, even while it waits for the writer lease.
@@ -21,11 +21,13 @@ The readiness body reports:
 
 | Field | Meaning |
 | --- | --- |
+| `live` | `true` until shutdown begins. |
 | `ready` | The overall verdict. |
 | `database` | The database is reachable and on the expected schema. |
 | `writerLease` | This process holds the [writer lease](/tarubot/deploy/operations/#single-database-writer). `false` means another bot holds it. |
 | `discord` | Connected to Discord. |
 | `effects` | `ENABLE_EFFECTS` is on. |
+| `publicTestResponses` | Development replies are public: `TEST_GUILD_ID` is set and `PUBLIC_TEST_RESPONSES` is on. Normally `false`. |
 | `capabilities` | Pending and blocked work, the age of the oldest accepted roster, and FCs whose roster reads are failing. |
 | `lodestone` | Informational; a Lodestone outage never makes the bot unready. `parsing` and `waiting` count parses running and waiting; `cooldownSeconds` above 0 means Lodestone requests are paused after a 429; `selectors` shows the [live selector set](#live-selectors). |
 

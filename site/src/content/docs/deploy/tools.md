@@ -93,4 +93,4 @@ The image also carries `import.js`, `snapshot.js`, `acquire.js` and `activate.js
 
 ## Tools outside the container
 
-The same tools can run from a source checkout with Bun, against the loopback database port that `docker-compose.tools.yml` publishes. That's a development setup: it reads `DATABASE_URL` from `.env`, and a `bun run` script loads the checkout's `.env` automatically. The [repository's README](https://github.com/deconfined/tarubot/blob/main/README.md) covers it.
+The same tools can run from a source checkout with Bun, against the loopback database port that `docker-compose.tools.yml` publishes. That's a development setup: it reads `DATABASE_URL` from `.env`, and a `bun run` script loads the checkout's `.env` automatically. The [repository's README](https://github.com/deconfined/tarubot/blob/main/README.md#running-the-compiled-bot-locally) lists the `bun run` aliases and the `bun run build` they need first, and [CONFIGURATION.md](https://github.com/deconfined/tarubot/blob/main/docs/CONFIGURATION.md#maintenance-tool-profiles) describes the deployment guard every tool applies before it connects.

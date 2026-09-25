@@ -11,32 +11,48 @@ These procedures assume the stock `docker-compose.yml` with its bundled PostgreS
 
 Read the [changelog](https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md) entries between your release and the new one first. Each says whether it adds a **migration** and whether its **commands changed**.
 
-1. Pin the new release in `.env` and pull it. Nothing restarts yet.
+1. Fetch the new release's Compose file and settings template. A release can add, rename or remove settings and services in `docker-compose.yml`, and Compose passes the bot only the settings that file lists, so take both from the commit that built the new image. Nothing restarts yet.
+
+   ```sh
+   docker pull ghcr.io/deconfined/tarubot:X.Y.Z
+   commit=$(docker image inspect ghcr.io/deconfined/tarubot:X.Y.Z \
+     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+   cp docker-compose.yml docker-compose.yml.previous
+   curl -fsSLO "https://raw.githubusercontent.com/deconfined/tarubot/$commit/docker-compose.yml"
+   curl -fsSL -o .env.example "https://raw.githubusercontent.com/deconfined/tarubot/$commit/.env.example"
+   comm -13 <(grep -oE '^[A-Z][A-Z0-9_]*=' .env | sort) <(grep -oE '^[A-Z][A-Z0-9_]*=' .env.example | sort)
+   ```
+
+   The image's `org.opencontainers.image.revision` label names the commit it was built from, the same commit as its `sha-<commit>` tag. The `comm` line (bash or zsh) lists settings the new template has and your `.env` doesn't: read their comments in `.env.example` and on [Configuration](/tarubot/deploy/configuration/), and add the ones you need. If you edited your Compose file, `diff docker-compose.yml.previous docker-compose.yml` and carry your changes over.
+
+2. Pin the new release in `.env` and pull the images the new Compose file names:
 
    ```sh
    sed -i 's/^TARUBOT_IMAGE_TAG=.*/TARUBOT_IMAGE_TAG=X.Y.Z/' .env
    docker compose pull
    ```
 
-2. Stop the bot: `docker compose stop tarubot`. It finishes its work in progress and exits within 30 seconds.
-3. [Back up](#backup) the database.
-4. Migrate, in the new image:
+3. Stop the bot: `docker compose stop tarubot`. It finishes its work in progress and exits within 30 seconds.
+4. [Back up](#backup) the database.
+5. Migrate, in the new image:
 
    ```sh
    docker compose run --rm --no-deps tarubot bun dist/scripts/migrate.js
    ```
 
    With a migration pending, it prints the files it applied and the restore point, then `Schema ready.` With nothing pending, it only prints `Schema ready.`
-5. Start the bot: `docker compose up -d --wait`, then [check readiness](/tarubot/deploy/monitoring/#health-probes).
-6. If the changelog says the commands changed, register them again with the same scope you used at install (`register.js --global` or `--guild YOUR_GUILD_ID`), and check with `commands.js list`; see [Maintenance tools](/tarubot/deploy/tools/).
+6. Start the bot: `docker compose up -d --wait --remove-orphans`, then [check readiness](/tarubot/deploy/monitoring/#health-probes). `--remove-orphans` removes the containers of services the new Compose file no longer has. If the new file names a newer PostgreSQL image, Compose recreates that container too; the data stays in its [volume](#volumes).
+7. If the changelog says the commands changed, register them again with the same scope you used at install (`register.js --global` or `--guild YOUR_GUILD_ID`), and check with `commands.js list`; see [Maintenance tools](/tarubot/deploy/tools/).
 
-For a release without a migration, steps 2 to 4 are optional: `docker compose up -d --wait` after the pull replaces the container, and Compose stops the old one first. The outage is a few seconds either way.
+For a release without a migration, steps 3 to 5 are optional: `docker compose up -d --wait --remove-orphans` after the pull replaces the container, and Compose stops the old one first. The outage is a few seconds either way.
 
 A new image never touches your database or restarts your bot by itself: updates happen only when you pull and recreate.
 
 ## Rollback
 
-To go back, pin the previous `TARUBOT_IMAGE_TAG` and run `docker compose up -d --wait` again. That only works when no migration lies between the two releases: an older release refuses to start on a newer schema. After a migration, the way back is a fix release, or restoring the backup you took before migrating.
+To go back, pin the previous `TARUBOT_IMAGE_TAG`, put back the Compose file that went with it (`mv docker-compose.yml.previous docker-compose.yml`, or fetch the older release's file as in step 1 of the update), and run `docker compose up -d --wait --remove-orphans` again. Going back past a release that changed the Compose file needs that older file: the newer one may lack a service or setting the older release expects.
+
+That only works when no migration lies between the two releases: an older release refuses to start on a newer schema. After a migration, the way back is a fix release, or restoring the backup you took before migrating.
 
 ## Single database writer
 
@@ -94,15 +110,23 @@ docker compose cp postgres:/tmp/tarubot.dump "backups/tarubot-$(date -u +%Y%m%dT
 docker compose exec -T postgres rm /tmp/tarubot.dump
 ```
 
-A dump is consistent even while the bot runs, because `pg_dump` reads one snapshot. Back up on a schedule (a daily `cron` job is plenty) and before every update, and keep copies **off the host**, encrypted: the dump holds your members' links and the ledger. A backup you haven't restored isn't proven; rehearse a restore now and then (below).
+A dump is consistent even while the bot runs, because `pg_dump` reads one snapshot. Back up on a schedule (a daily `cron` job is plenty) and before every update, and keep copies **off the host**, encrypted: the dump holds your members' links and the ledger. A backup you haven't restored isn't proven; [rehearse a restore](#restore-rehearsal) now and then, with a dump taken while the bot is stopped.
 
 The repository's `ops/` directory and `scripts/host-env-backup.ts` are the upstream instance's own backup tooling. They are tied to its Compose file, encryption key and host, so don't reuse them as they are.
 
 ## Restore rehearsal
 
-Restore into a separate database, then compare it with the live one. Stop the bot first, so the two can match exactly.
+Restore a backup into a separate database, then compare the copy with the live one. The comparison checks every row, so it only matches a dump taken while the bot was stopped, with nothing written since: the bot writes jobs, roster observations and audit entries all the time, and a scheduled backup taken while it ran always reports a mismatch. Rehearse with a fresh dump, such as the one step 4 of an [update](#updating-to-a-release) takes.
 
-1. Create the copy and restore the dump into it:
+1. Stop the bot and take a fresh backup:
+
+   ```sh
+   docker compose stop tarubot
+   ```
+
+   Then run the three [backup](#backup) commands. If you're in the middle of an update, the bot is already stopped and step 4's backup is the one to use.
+
+2. Create the copy and restore that dump into it:
 
    ```sh
    docker compose exec -T postgres createdb -U tarubot tarubot_restore_test
@@ -110,7 +134,7 @@ Restore into a separate database, then compare it with the live one. Stop the bo
    docker compose exec -T postgres pg_restore -U tarubot -d tarubot_restore_test --exit-on-error /tmp/restore.dump
    ```
 
-2. Compare every row, sequence, trigger and constraint with the live database, using exact checksums:
+3. Compare every row, sequence, trigger and constraint with the live database, using exact checksums:
 
    ```sh
    docker compose run --rm --no-deps -T tarubot \
@@ -119,7 +143,7 @@ Restore into a separate database, then compare it with the live one. Stop the bo
 
    `check-restore.js` needs both databases at its own release's schema. If you already pinned a newer release whose migration isn't applied yet, add `--schema-version` with the newest migration the database has, which `SELECT max(version) FROM schema_migrations` shows.
 
-3. Before an update with a migration, rehearse the migration on the copy first. It must print `Schema ready.`:
+4. Before an update with a migration, rehearse the migration on the copy. It must print `Schema ready.`:
 
    ```sh
    docker compose run --rm --no-deps -T tarubot \
@@ -128,7 +152,14 @@ Restore into a separate database, then compare it with the live one. Stop the bo
 
    `--restore-rehearsal` accepts only a database whose name ends in `_restore_test`, so it can't be pointed at the live one by mistake.
 
-4. Drop the copy: `docker compose exec -T postgres dropdb -U tarubot tarubot_restore_test`.
+5. Drop the copy, and remove the dump from the PostgreSQL container, because it holds your members' data:
+
+   ```sh
+   docker compose exec -T postgres dropdb -U tarubot tarubot_restore_test
+   docker compose exec -T postgres rm /tmp/restore.dump
+   ```
+
+6. Unless you're in the middle of an update, start the bot again: `docker compose up -d --wait`.
 
 The `sh -c` form builds the copy's URL inside the container from the bot's own, so no password is typed or printed.
 
@@ -138,13 +169,14 @@ To recover from a broken or lost database:
 
 1. Stop the bot: `docker compose stop tarubot`, and confirm with the [writer gate](#single-database-writer) that nothing holds the lease.
 2. Keep the newest state you have, even a damaged one: rename the database instead of dropping it.
-3. Restore the most recent good backup into a new `tarubot` database:
+3. Restore the most recent good backup into a new `tarubot` database, then remove the dump from the container:
 
    ```sh
    docker compose exec -T postgres psql -U tarubot -d postgres -c "ALTER DATABASE tarubot RENAME TO tarubot_before_restore"
    docker compose exec -T postgres createdb -U tarubot tarubot
    docker compose cp backups/tarubot-20260101T000000Z.dump postgres:/tmp/restore.dump
    docker compose exec -T postgres pg_restore -U tarubot -d tarubot --exit-on-error /tmp/restore.dump
+   docker compose exec -T postgres rm /tmp/restore.dump
    ```
 
    Decisions acknowledged after that backup, such as new links, ledger entries and guest decisions, must be recorded again: a restore can't know about them.

@@ -39,7 +39,7 @@ TaruBot reads the profile fresh from the Lodestone and looks for your token.
 - **Linked.** The reply confirms the link. If this is your first linked character, it becomes your main character and nickname sync turns on. The reply also shows whether the FC's roster lists the character yet; your Member role follows once it does.
 - **"Token not on the Lodestone yet."** The Lodestone can take several minutes to publish a saved biography. Your token is still valid: wait a little, then click **Check again**. The button waits 15 seconds between checks.
 - **"Lodestone profile is private."** Make the character's profile public on the Lodestone, then try again. Your token is still valid.
-- **"Token expired."** Run `/claim` again for a new token and put that one in your biography.
+- **"Token expired during verification."** Run `/claim` again for a new token and put that one in your biography.
 
 Once you're linked, you can take the token out of your biography. It can't be used again.
 
