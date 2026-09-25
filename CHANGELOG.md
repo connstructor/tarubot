@@ -1,6 +1,14 @@
 # Version history
 
-The current application version is **2.24.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.24.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.24.2 — Code-scanning fixes in the Lodestone parser
+
+The owner asked to address the two open CodeQL alerts, both in code from the parser's move into the bot (2.20.0 and 2.21.0). Neither was exploitable in production, but both now read correctly. There is no migration and no command change.
+
+- **#7, `js/missing-origin-check` (medium), `worker.ts`.** The parser worker's message handler didn't check where a message came from. Only the thread that created a dedicated worker can message it, and Bun gives those messages an empty origin (checked: origin `""`, source `null`). The handler now ignores any message that carries an origin, before parsing anything, and the runner's deadline ends such a request.
+- **#8, `js/comparison-between-incompatible-types` (warning), `parser.ts`.** `isDefinition` checked `value !== null` after `typeof value === "object"`, which CodeQL read as comparing incompatible types. The null check now comes first. The behaviour is the same, since `typeof null` is `"object"` and the check is needed.
+- **Records.** The 2.24.1 rollout to DevBot and production, with 2.24.0's host step: the pull, the backup crontab line (04:30 UTC) and a first run from `~/tarubot/ops/backup.sh`.
 
 ## 2.24.1 — `/sync status` shows only unresolved failures
 

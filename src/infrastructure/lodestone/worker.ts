@@ -16,6 +16,10 @@ const messageSchema = z.object({
 });
 
 self.onmessage = (event: MessageEvent<unknown>) => {
+  // Only the thread that created a dedicated worker can message it, and Bun gives those messages
+  // an empty origin. Anything carrying an origin is not the bot's and is ignored unparsed, so the
+  // runner's deadline ends that request (CodeQL alert #7).
+  if (event.origin !== "") return;
   try {
     const { input, body, files } = messageSchema.parse(event.data);
     // The adapter validates every field; parsed values stay untrusted until then.

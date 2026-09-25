@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.24.1 unresolved failures only",
-  "objective": "2.24.1 makes /sync status list a failed job only until the same work later succeeds, so the first night's resolved Lodestone failures stop showing. With 2.24.0, the host also starts its daily encrypted backup. No migration and no command change.",
+  "title": "Session: 2.24.2 code-scanning fixes",
+  "objective": "2.24.2 closes the two CodeQL alerts in the Lodestone parser: the worker now ignores messages that don't come from the bot itself, and a null check reads correctly. Parsing is unchanged. No migration and no command change.",
   "user": [
-    "Run /sync status as an officer: the old profile failures are gone, and runs and pending work read as before.",
-    "Say if any failure you'd expect to see is missing.",
-    "Check the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
+    "Run /claim or /characters once: character and FC names read as before.",
+    "Check the repository's Security tab: both alerts should show as fixed after the merge.",
+    "Confirm the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
   ],
   "assistant": [
-    "Deploy 2.24.1 to DevBot and production with the owner's go-ahead (restarts, no migration).",
-    "Install the backup crontab line on the host and confirm its first scheduled run.",
+    "Deploy 2.24.2 to DevBot and production with the owner's go-ahead (restarts, no migration).",
+    "Check the next day's scheduled backup in ~/tarubot-backup.log and the bucket.",
     "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.24.1 on schema 008, heartbeat on in production.",
-    "List only unresolved failures in /sync status.",
+    "Run compiled 2.24.2 on schema 008 with the heartbeat on in production.",
+    "Parse Lodestone pages in workers that accept only the bot's own messages.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

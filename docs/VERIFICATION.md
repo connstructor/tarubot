@@ -21,6 +21,10 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.24.2** (code-scanning fixes) passed strict type checking, lint, formatting, the compiled build and `ci:version`. For alert #7, a probe worker under Bun received its parent's message with `origin` `""` and `source` `null`, which is what the new check accepts. The parser, worker, runner and selector tests (30) pass unchanged, and the compiled build parsed a live profile and the Woven Souls FC (105 members) through the worker. The PR's CodeQL run is the check that both alerts close.
+
+**2.24.1 rollouts (2026-09-25), with 2.24.0's backup schedule:** see [DEV_GUILD.md](DEV_GUILD.md#2241-rollout-with-2240s-backup-schedule--2026-09-25). The first backup from the host's real path uploaded 396,896 bytes, and the crontab line is installed.
+
 **2.24.1** (`/sync status` shows only unresolved failures) passed strict type checking, lint, formatting, the compiled build and `ci:version`.
 - **Tests.** A new integration test, run against a throwaway PostgreSQL 18, gives the scenario its own guild so the 25-row limit holds only its jobs. It lists exactly the lone failure and the failure after an earlier success, leaving out the failure that later succeeded. It fails against the 2.24.0 service. The existing `/sync status` test still passes.
 - **Review round.** The review found that comparing creation times missed `retry.js`, which re-runs a failed row in place.

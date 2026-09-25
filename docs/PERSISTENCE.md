@@ -46,7 +46,7 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.24.1** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
+The current **2.24.2** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
 - the source (`user`, `error`, `job` or `trouble`), title, the first occurrence's Markdown body and the newest repeat's (`latest`);
 - the server and member for `/issue`;
 - occurrence counts, and the GitHub issue number, creation time and last post.
