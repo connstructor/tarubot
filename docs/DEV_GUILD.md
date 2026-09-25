@@ -412,29 +412,35 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 - **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
 - There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
 
-### 2.25.0 rollout plan (update posts; not yet run)
+### 2.25.0 rollout — 2026-09-25
 
-2.25.0 adds migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). It includes 2.24.3's changes and follows the 2.24.3 rollout above. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+2.25.0 (#30, PR #35, `723274a`) adds update posts: migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). The owner merged PR #35 (CI, CodeQL and the Claude review found no issues) and gave the go-ahead ("Deploy away."). Publish run 36190366566 published `tarubot:2.25.0` (`sha256:1f217a58ea273a51ba6272e7d2b5696cadb852659b74fb6d59699cb22cf13c86`, revision `723274a`).
 
-1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.25.0-<sha>.dump`.
-2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version` naming the current head (`008_issue_reports.sql`).
-3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`), then run `migrate.js` against `tarubot_dev`.
-4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.25.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on.
-5. `register.js --guild 1040379370159743139`, then `commands.js list`: clean, with the one new `/config` path.
-6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line, and choosing it again gives the no-change card with a Visibility field; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
-7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
+- **DevBot:** 630 jobs, all succeeded. The writer stopped at 21:24:02 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.25.0-723274a.dump` is 135,969 bytes (mode 600), sha256 `d3d638fc7a67dfa1f4cba79fb2c004ee252c5746d41262b78e3b2e486a11ebfd`.
+  - 2.25.0's `check-restore.js --schema-version 008_issue_reports.sql` verified the restore, `migrate.js --restore-rehearsal` applied 009 on the copy (`Schema ready.`), and the copy was dropped.
+  - `migrate.js` applied 009 to `tarubot_dev` at 21:24:17 (`Schema ready.`). `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.25.0` at 21:24:17, healthy at 21:24:34; readiness 200 with the writer lease held, and no warning or error.
+  - `register.js --guild` registered 20 roots / 45 paths, and `commands.js list` was clean (global 0, production guild 0, test guild 20).
+- **Production:** the operator clone `~/tarubot-cutover/src` moved from `220a99f` to `723274a` and was rebuilt (2.25.0). The host clone pulled `723274a`, then `TARUBOT_IMAGE_TAG=2.25.0` (the `.env` stays mode 600) and pull (the same digest).
+  - The bot stopped at 21:25:17 UTC with the writer-lease gate empty. An independent backup, `~/tarubot-cutover/work/backups/before-2.25.0.dump`, is 453,504 bytes (root, mode 600), sha256 `3fa210f214427caf629772db1c0a4f639e67223079700fd5c6d059b83ff3295b`, with 27 table-data entries.
+  - `migrate.js` in the new image applied 009 at 21:25:40 (`Schema ready.`). `up` was healthy at 21:25:46, about 29 seconds down. Readiness 200 with the writer lease held, effects on and `publicTestResponses` false; the heartbeat URL is set; no warning or error; the backup crontab line is present.
+  - The schema head is `009_changelog_channel.sql`. No guild has a changelog channel yet, and there are no `changelog.post` jobs, so nothing was posted.
+  - From the operator clone, `register.js --global` registered 20 roots / 45 paths, and `commands.js list` was clean (global 20, the old guild scope 0), exit 0.
+- **Not recorded:** the owner's changelog checks from 2.25.0's session plan (the success and warning receipts, the `/config validate` Changelog lines, the no-change card, and a forced post on DevBot with `changelog_version` lowered below 2.25.0, then a restart that posts nothing).
+- **Rollback** across migration 009 is a restore or a fix release: an older image refuses to start on schema 009.
 
 ### 2.26.0 rollout plan (`/suggest`; not yet run)
 
-Planned only: 2.26.0 (issue #32) is not merged or deployed. It follows 2.24.3 and 2.25.0 in the agreed release order, and each step below needs the owner's go-ahead.
+Planned only: 2.26.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 merged in) is not merged or deployed. 2.24.3 and 2.25.0, which come before it in the agreed release order, are deployed, so DevBot and production run 2.25.0 on schema 009; 2.26.0 adds no migration. Each step below needs the owner's go-ahead.
 
-- **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head, `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 46 paths), `commands.js list`, then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
+- **Registration.** Both DevBot and production need the commands registered after the deploy: 21 roots / 46 paths (2.25.0's 20 roots / 45 paths plus `/suggest`).
+- **Update post.** 2.26.0 has a member note. A server with a changelog channel gets one post, "TaruBot updated to v2.26.0", with that note when it starts on 2.26.0; production had no changelog channel at the 2.25.0 rollout, so it posts nothing unless one is set by then.
+- **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head (`009_changelog_channel.sql`), `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 46 paths), `commands.js list` (test guild 21), then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
 - **DevBot checks:**
   - a member's `/suggest` opens a preview issue in `deconfined/tarubot-reports`; check its title, fixed first line, fenced text, footer and the labels `enhancement` and `from-discord` (created there on first use), and that the reply names `deconfined/tarubot-reports#N`;
   - a second try within the hour gets "You can suggest again later";
   - an idea of fewer than 10 visible characters gets "Check your input" with the Example;
   - an account without the Member or Guest role gets "FC membership needed" with the steps to either role (PigeonMuffin, with his roles removed for the test, or a fresh account).
-- **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.26.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [OPERATIONS.md](OPERATIONS.md#public-suggestions)), then `register.js --global` from the operator clone and `commands.js list` (21 global).
+- **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.26.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [OPERATIONS.md](OPERATIONS.md#public-suggestions)), then `register.js --global` from the operator clone (21 roots / 46 paths) and `commands.js list` (21 global).
 - **Owner test:** one `/suggest` in Woven Souls. Check that the author is the app's bot account, both labels are applied, `＠` replaces `@`, no IDs appear, and no Claude run starts in Actions. Then close or delete the test issue and record the result here and in VERIFICATION.md.
 
 ### Remaining unverified-visitor form checks (on hold until after launch)
