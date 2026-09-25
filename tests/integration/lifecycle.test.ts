@@ -4,11 +4,13 @@
  * a private schema, so startup writes never touch persistence.test.ts's public schema. Advisory
  * locks are database-wide, so the lifecycles contend exactly as two deployments would. The same
  * harness pins the periodic lease check's SQL against real pg_locks and startup's per-guild enqueue
- * gates (AC-26: no layout work for layout-off guilds, no channel work for onboarding-off guilds).
+ * gates (AC-26: no layout work for layout-off guilds, no channel work for onboarding-off guilds;
+ * 2.25.0: an update post only for a guild with a changelog channel and an older baseline).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { type LifecycleOptions, WRITER_LEASE_LOCK } from "../../src/application/lifecycle.js";
 import type { Configuration } from "../../src/config/env.js";
+import { project } from "../../src/config/project.js";
 import { Database, SESSION_OPTIONS } from "../../src/infrastructure/postgres/database.js";
 import {
   eventually,
@@ -216,6 +218,105 @@ describe.skipIf(!url)("database writer lease", () => {
       { guild_id: on, kind: "reconcile.guild", dedupe_key: `guild:${on}` },
       { guild_id: on, kind: "roles.layout", dedupe_key: `role-layout:${on}` },
       { guild_id: off, kind: "reconcile.guild", dedupe_key: `guild:${off}` },
+    ]);
+  });
+
+  test("startup queues one update post per guild behind the running version, merging on restart", async () => {
+    // Guild IDs reserved for #30's tests (unique in this private schema). Only `behind` is due:
+    // `current` is at the running version, `ahead` was told about a newer release (a rollback),
+    // `unset` has a baseline but no channel, and `never` has neither.
+    const [behind, current, ahead, unset, never] = [
+      "666666666666666721",
+      "666666666666666722",
+      "666666666666666723",
+      "666666666666666724",
+      "666666666666666725",
+    ];
+    await admin.query(
+      `INSERT INTO ${SCHEMA}.guilds (id, role_layout_enabled, changelog_channel_id, changelog_version)
+       VALUES ($1, false, '82001', '2.24.2'), ($2, false, '82001', $6), ($3, false, '82001', '99.0.0'),
+         ($4, false, NULL, '2.24.2'), ($5, false, NULL, NULL)`,
+      [behind, current, ahead, unset, never, project.version],
+    );
+    const posts = () =>
+      admin.query<{
+        guild_id: string;
+        dedupe_key: string;
+        payload: unknown;
+        generation: number;
+        status: string;
+        due: boolean;
+      }>(
+        `SELECT guild_id::text, dedupe_key, payload, generation, status, due_at <= now() AS due
+         FROM ${SCHEMA}.jobs WHERE kind = 'changelog.post' AND guild_id IN ($1, $2, $3, $4, $5)`,
+        [behind, current, ahead, unset, never],
+      );
+    const first = writer({}, [behind, current, ahead, unset, never]);
+    await first.lifecycle.prepare();
+    await first.lifecycle.start();
+    // One post, due now, with an empty payload: the job reads the range when it runs.
+    expect(await posts()).toEqual([
+      {
+        guild_id: behind,
+        dedupe_key: `changelog:${behind}`,
+        payload: {},
+        generation: 1,
+        status: "queued",
+        due: true,
+      },
+    ]);
+    // A count and the version only.
+    expect(first.logs).toContainEqual(
+      expect.objectContaining({ msg: "Queued update posts", guilds: 1, version: project.version }),
+    );
+    await first.lifecycle.stop();
+    // A restart before it was delivered merges into the same row: still one pending post.
+    const second = writer({}, [behind, current, ahead, unset, never]);
+    await second.lifecycle.prepare();
+    await second.lifecycle.start();
+    expect(await posts()).toEqual([
+      expect.objectContaining({ guild_id: behind, generation: 2, status: "queued" }),
+    ]);
+  });
+
+  test("update posts parked while Discord changes were off collapse to one when they resume", async () => {
+    const guild = "666666666666666726";
+    await admin.query(
+      `INSERT INTO ${SCHEMA}.guilds (id, effects_enabled, role_layout_enabled, changelog_channel_id,
+         changelog_version) VALUES ($1, true, false, '82001', '2.24.2')`,
+      [guild],
+    );
+    const rows = () =>
+      admin.query<{ status: string; result: unknown }>(
+        `SELECT status, result FROM ${SCHEMA}.jobs WHERE dedupe_key = $1 ORDER BY created_at, id`,
+        [`changelog:${guild}`],
+      );
+    /** Park the key's queued row as the dispatcher does while effects are off. */
+    const park = () =>
+      admin.query(
+        `UPDATE ${SCHEMA}.jobs SET status = 'disabled',
+           last_error = 'disabled: Discord effects are disabled for this deployment.'
+         WHERE dedupe_key = $1 AND status = 'queued'`,
+        [`changelog:${guild}`],
+      );
+    // Two paused restarts: a disabled row isn't merged, so each adds one more parked post.
+    for (let restart = 0; restart < 2; restart++) {
+      const paused = writer({}, [guild]);
+      await paused.lifecycle.prepare();
+      await paused.lifecycle.start();
+      await paused.lifecycle.stop();
+      await park();
+    }
+    expect((await rows()).map((row) => row.status)).toEqual(["disabled", "disabled"]);
+    // Resuming queues the running version's post and closes the parked ones as superseded.
+    const resumed = writer({}, [guild], { ENABLE_EFFECTS: true });
+    await resumed.lifecycle.prepare();
+    await resumed.lifecycle.start();
+    const after = await rows();
+    expect(after.filter((row) => row.status === "queued")).toHaveLength(1);
+    expect(after.filter((row) => row.status !== "queued")).toEqual([
+      { status: "succeeded", result: { skipped: "superseded" } },
+      { status: "succeeded", result: { skipped: "superseded" } },
     ]);
   });
 

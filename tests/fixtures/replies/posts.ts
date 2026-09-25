@@ -1,11 +1,20 @@
 /**
  * The channel post and DM catalog: one case per ledger post kind (approved ledger#29 and #32,
- * reply specs ledger#30 and #31) and per review message and decision DM kind (reply specs
- * guests#29–#32 and the legacy review gap). Each renders a stored record the way the gateway
- * renders it for the ledger.notify, guest.review and guest.dm jobs. The samples are exported so
- * the gateway tests send the same posts through the REST recorder.
+ * reply specs ledger#30 and #31), per review message and decision DM kind (reply specs
+ * guests#29–#32 and the legacy review gap), and the update post (2.25.0). Each renders a stored
+ * record the way the gateway renders it for the ledger.notify, guest.review, guest.dm and
+ * changelog.post jobs. The samples are exported so the gateway tests send the same posts through
+ * the REST recorder.
  */
-import type { ApplicationRecord, LedgerPostView } from "../../../src/application/records.js";
+import type {
+  ApplicationRecord,
+  ChangelogPostView,
+  LedgerPostView,
+} from "../../../src/application/records.js";
+import {
+  changelogPost,
+  type ChangelogPostKind,
+} from "../../../src/discord/presenters/changelog.js";
 import {
   decisionDm,
   guestReviewPost,
@@ -37,6 +46,22 @@ export const OPENING_POST: LedgerPostView = {
 };
 /** The approved correction post (ledger#32): entry #43 corrects #42. */
 export const CORRECTION_POST: LedgerPostView = { entry: E43, correctionSequence: 42n };
+
+/**
+ * The update post a guild last told about 2.24.2 sees when 2.25.0 starts: that release's own
+ * member note, linking the CHANGELOG on main as the dispatcher does.
+ */
+export const CHANGELOG_POST: ChangelogPostView = {
+  version: "2.25.0",
+  previous: "2.24.2",
+  notes: [
+    {
+      version: "2.25.0",
+      note: "Officers can now pick a channel where TaruBot shares what's new for members when an update changes something for them.",
+    },
+  ],
+  url: "https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md",
+};
 
 /** A time as the reply specs' <t:…> values write it. */
 const unix = (seconds: number): Date => new Date(seconds * 1_000);
@@ -185,4 +210,12 @@ export const POST_CASES = {
     timestamp: true,
     render: () => decisionDm(APPLICATIONS.denied, { cooldownSeconds: COOLDOWN, serverName: null }),
   },
-} as const satisfies ReplyCatalog<LedgerPostKind | GuestPostKind>;
+  "changelog.update": {
+    spec: null,
+    audience: "channel",
+    tone: "info",
+    title: "TaruBot updated to v2.25.0",
+    timestamp: false,
+    render: () => changelogPost(CHANGELOG_POST),
+  },
+} as const satisfies ReplyCatalog<LedgerPostKind | GuestPostKind | ChangelogPostKind>;

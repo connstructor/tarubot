@@ -2,7 +2,7 @@
 title: Health checks
 description: Check the server's setup with /config show and /config validate, follow background work, and fix what they report.
 sidebar:
-  order: 9
+  order: 10
 ---
 
 ## Settings and checks
@@ -12,7 +12,7 @@ sidebar:
 [`/config validate`](/tarubot/reference/commands/#config-validate) checks the setup without changing anything, and lists each check with a token:
 
 - `[OK]` passed; `[WARN]` works but needs attention; `[FAIL]` stops a feature; `[OFF]` switched off; `[WAIT]` waiting for something, such as a first roster.
-- It covers whether each role and channel exists, TaruBot's permissions and role position, the linked FC and how fresh its roster is, onboarding, changes in Discord, the role layout, and whether Discord changes are paused.
+- It covers whether each role and channel exists, TaruBot's permissions and role position, the linked FC and how fresh its roster is, onboarding, changes in Discord, the role layout, and whether Discord changes are paused. With onboarding on, it also warns when members and guests may not be able to read the [changelog channel](/tarubot/admin/notices-and-updates/#visibility-with-lobby-onboarding).
 - The title gives the verdict: problems, warnings, or all checks passed.
 
 **Run health check** on `/config show`, and **Re-check** on `/config validate`, run the checks again in place. Fix what a `[FAIL]` line names, then re-check. [Replies and error codes](/tarubot/reference/replies/#health-check-tokens) explains each token.
@@ -27,7 +27,7 @@ A failed job stops being listed once the same work succeeds after it; the job it
 
 What to do with each [status marker](/tarubot/reference/replies/#status-markers):
 
-- `! BLOCKED`: a permission, the role order, or a deleted role or channel. Fix what the diagnostic names, then run `/config validate`. Any `/config` change requeues blocked work.
+- `! BLOCKED`: a permission, the role order, or a deleted role or channel. Fix what the diagnostic names, then run `/config validate`. Saving a `/config` role or channel, the FC link or `/config guest_applications` requeues blocked work.
 - `‖ PAUSED`: Discord changes are off for the deployment. Only its operator can turn them back on.
 - `✗ FAILED`: the job stopped after repeated errors. Tell the deployment's operator, who can retry it; the error was also reported to them if issue reports are on.
 - `↻ WAITING`: it's waiting its turn, a Lodestone rate limit or a retry. Nothing to do.
@@ -38,9 +38,9 @@ Members see only their own requests and work, in plain words.
 
 A request that matches what's already saved changes nothing and replies with `= NO CHANGE`: naming the saved officer rank, a `/config guest_applications` request that matches the settings, `/main` naming the current main, `/nickname` repeating its setting, and `/officer reset` or `/guest reset` with nothing to remove. Nothing is saved, audited or queued.
 
-Choosing the role or channel that's already saved with `/config roles`, `/config ledger` or `/config officer_notifications` is the exception: it's saved and audited again and rechecks the server, which is a handy way to requeue held work.
+Choosing the role or channel that's already saved with `/config roles`, `/config ledger`, `/config officer_notifications` or `/config changelog` is the exception: it's saved and audited again and rechecks the server, which is a handy way to requeue held work.
 
-To stop using a setting, use its unset option: `unset_channel:true` for `ledger`, `officer_notifications` and `guest_applications`, `unset_role:true` for the `roles` commands, and `unset_rank:true` for `officer_rank`. Unsetting never deletes the Discord channel or role.
+To stop using a setting, use its unset option: `unset_channel:true` for `ledger`, `officer_notifications`, `changelog` and `guest_applications`, `unset_role:true` for the `roles` commands, and `unset_rank:true` for `officer_rank`. Unsetting never deletes the Discord channel or role.
 
 ## Naming members
 

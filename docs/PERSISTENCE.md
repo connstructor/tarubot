@@ -9,6 +9,7 @@ TaruBot uses pinned **Drizzle ORM 0.45.3** with **node-postgres 8.23.0**. `src/i
 - Keep Discord and Lodestone requests outside decision transactions. Existing session advisory locks serialize FC acquisition, user delivery, and setup/layout across remote calls, and the bot's writer lease (key `714882494`) holds one dedicated session for the process lifetime ([the single writer](../site/src/content/docs/deploy/operations.md#single-database-writer)). Always release those locks and checked-out clients in `finally`. Session locks need a direct connection, never a transaction-mode pool.
 - Use schema column objects in `sql` expressions. Bind dynamic values through Drizzle; do not interpolate user strings as SQL identifiers or fragments. Alias computed selections when composing subqueries or insert-from-select operations.
 - The work queue uses a typed CTE with `FOR UPDATE OF jobs SKIP LOCKED` and one `UPDATE ... RETURNING` claim. Preserve lease-token, expiry, generation, and configuration guards when changing queue or delivery queries. Active-job upserts use the literal predicate from the partial unique index so prepared plans can infer it.
+- `jobs` rows are history as well as work, and the application never deletes them. Since 2.24.3 the officer Lodestone notices read that history (REQUIREMENTS.md "Approved officer-notice amendments"): the degraded notice's rate limit and the recovery check select `officer.notify` rows by exact `dedupe_key`, using `status`, `created_at`, `completed_at` and `message_id`, never payload or result text. A future jobs retention must keep every pending row, and every row finished within 24 hours or newer than its FC's last accepted roster. No index covers historical rows by key, so these reads scan `jobs`; if the table grows by orders of magnitude, an index on `jobs(dedupe_key, created_at)` would be a later migration.
 
 ## Exact values
 
@@ -46,7 +47,15 @@ The **2.9.0 adoption added no migration** and used `002_setup_and_ranks.sql`. Mi
 
 Registered-visitor Guest needs no schema change. First-activation grants, their per-grant and completion audits, the marker, and the effects flip commit on the activation transaction's client.
 
-The current **2.27.0** source adds no migration and requires `SCHEMA_VERSION=008_issue_reports.sql`, which **2.18.0** added. It is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
+The current **2.27.0** source adds no migration and requires `SCHEMA_VERSION=009_changelog_channel.sql`, which **2.25.0** added. It is additive and needs no superuser privileges. It adds two nullable `guilds` columns for update posts:
+
+- **`changelog_channel_id`** (`external_id`): where update posts go; NULL means they're off.
+- **`changelog_version`** (`text`): the newest version the guild was told about. A CHECK allows only `MAJOR.MINOR.PATCH` with an optional prerelease, which `Bun.semver.order` compares. The `changelog_baseline` CHECK requires it whenever a channel is set.
+- **Existing rows.** Both start NULL, so nothing posts on the deploy, and no revision changes.
+
+`/config changelog` writes the channel and, when none was set, the baseline (`newer(stored, running)`) in the same `UPDATE`, under the guild row lock, with its `config` audit and the usual repair pass on one client. It reads the guild's `channel_access_policies` row there, in onboarding guilds, to report who can read the channel; it writes none. Startup queues `changelog.post` in the presence transaction. The job moves the baseline with a compare-and-set (`UPDATE … WHERE changelog_version = <from>`) and its `changelog.advanced` audit in one transaction, and treats zero rows as already done. The Drizzle mapping still covers 26 application tables. An older image can't start on schema 009, so a rollback across it is a restore or a fix release; restoring a snapshot taken before a post was delivered can post it again unless `changelog_version` is raised by hand first.
+
+`008_issue_reports.sql`, introduced in **2.18.0**, is additive and needs no superuser privileges. It adds the `issue_reports` table, one row per report fingerprint:
 - the source (`user`, `error`, `job` or `trouble`), title, the first occurrence's Markdown body and the newest repeat's (`latest`);
 - the server and member for `/issue`;
 - occurrence counts, and the GitHub issue number, creation time and last post.

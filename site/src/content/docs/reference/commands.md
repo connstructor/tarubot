@@ -289,7 +289,7 @@ Choose the channel where ledger entries are posted.
 
 ### /config officer_notifications
 
-Choose the channel for officer notices: accepted rosters, Lodestone trouble, and characters unlinked automatically.
+Choose the channel for officer notices: Lodestone trouble and its recovery, and characters unlinked automatically. See [Officer notices](/tarubot/admin/notices-and-updates/#officer-notices).
 
 **Who can use it:** officers.
 
@@ -301,6 +301,22 @@ Choose the channel for officer notices: accepted rosters, Lodestone trouble, and
 ```text
 /config officer_notifications channel:#officer-chat
 /config officer_notifications unset_channel:true
+```
+
+### /config changelog
+
+Choose the channel where TaruBot posts what's new for members after it starts on a newer version. Setting it posts nothing at once: the first post comes with the next update that has something for members. See [Update posts](/tarubot/admin/notices-and-updates/#update-posts).
+
+**Who can use it:** officers.
+
+| Option | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `channel` | Channel | No | A normal text channel that members and guests can read and TaruBot can post in. With lobby onboarding on, the reply warns about a channel members and guests can't read, or one onboarding doesn't manage. |
+| `unset_channel` | True or false | No | Stop update posts. The channel and its posts stay, and updates released meanwhile aren't posted later. |
+
+```text
+/config changelog channel:#tarubot-updates
+/config changelog unset_channel:true
 ```
 
 ### /config guest_applications

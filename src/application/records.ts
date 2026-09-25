@@ -6,6 +6,7 @@ import type {
   ledgerEntries,
 } from "../infrastructure/postgres/schema.js";
 import type { AccessRoles, AccessSnapshot, ChannelAudience } from "../domain/channel-access.js";
+import type { ReleaseNote } from "../domain/changelog.js";
 
 /** Configuration revision fences queued effects; activation is separate from bot membership. */
 export type GuildRecord = Omit<typeof guilds.$inferSelect, "created_at">;
@@ -69,12 +70,25 @@ export interface LedgerPostView {
   readonly correctionSequence: bigint | null;
 }
 /**
+ * What an update post shows (2.25.0): the running version, the version the guild was last told
+ * about, the member notes of the releases in between (newest first), and the CHANGELOG link. Only
+ * values fixed for the running build, so every retry of the post renders byte-identical JSON.
+ */
+export interface ChangelogPostView {
+  readonly version: string;
+  readonly previous: string;
+  readonly notes: readonly ReleaseNote[];
+  /** The full CHANGELOG on GitHub; the post's only link. */
+  readonly url: string;
+}
+/**
  * A channel post as data; the gateway renders it through the reply presenters, so jobs never
  * build message text. `text` is the documented plain-text exclusion (officer.notify, and the
  * DevBot smoke check): already escaped by its caller and sent as content.
  */
 export type PostMessage =
   | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "changelog"; readonly view: ChangelogPostView }
   | { readonly kind: "ledger"; readonly view: LedgerPostView }
   | { readonly kind: "review"; readonly application: ApplicationRecord };
 /** A direct message as data: the applicant's approval or denial, with the reapply cooldown. */

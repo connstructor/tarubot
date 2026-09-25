@@ -22,6 +22,7 @@ import type {
 } from "../application/records.js";
 import { roleLayoutPlan, rolePositionChanges, type RoleLayoutPlan } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
+import { changelogPost } from "./presenters/changelog.js";
 import { decisionDm, guestReviewPost } from "./presenters/guests.js";
 import { ledgerPost } from "./presenters/ledger.js";
 import type { Presented } from "./presenters/reply.js";
@@ -435,6 +436,7 @@ export class DiscordGateway implements DiscordPort {
    * caller has escaped it, and it is cut to fit Discord's content limit.
    */
   private static render(message: PostMessage) {
+    if (message.kind === "changelog") return DiscordGateway.sendable(changelogPost(message.view));
     if (message.kind === "ledger") return DiscordGateway.sendable(ledgerPost(message.view));
     if (message.kind === "review")
       return DiscordGateway.sendable(guestReviewPost(message.application));

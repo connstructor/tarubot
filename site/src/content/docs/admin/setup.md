@@ -40,6 +40,14 @@ Run these as an officer (the role commands have their own requirements; see [Who
 - Guest applications stay closed until you open them; see [Guest applications](/tarubot/admin/guest-applications/).
 - [`/config validate`](/tarubot/admin/health-checks/) checks everything without changing anything.
 
+Optionally, choose where [update posts](/tarubot/admin/notices-and-updates/#update-posts) go: a normal text channel that members and guests can read. Announcement channels are refused, like every channel setting.
+
+```text
+/config changelog channel:#tarubot-updates
+```
+
+Setting the channel posts nothing at once; the first post comes with the next update that has something for members.
+
 ## All at once with `/setup`
 
 ```text
@@ -70,14 +78,17 @@ When `/setup` adopts an existing Officer role, its current human holders get rec
 
 Saved rooms are reused first. Otherwise `/setup` reuses a single `#lobby`, prefers a recognizable private officer or staff room (starting with `#officer-chat`), then the only private text room, then a room with an officer or staff name. Missing rooms are created as `#lobby` and `#officer-chat`, with their permissions already in place. If the choice is ambiguous, name the rooms with `lobby` and `officers`; they must be two different text channels.
 
-After `/setup`, choose the ledger channel and any overrides:
+After `/setup`, choose the ledger channel, optionally the channel for update posts, and any overrides:
 
 ```text
 /config ledger channel:#fc-ledger
+/config changelog channel:#tarubot-updates
 /config officer_notifications channel:#officer-chat
 /config guest_applications channel:#officer-chat
 /config validate
 ```
+
+For update posts, don't choose the lobby, the officer room or a private channel: members and guests can't read them. Don't choose Discord's community-updates channel either: onboarding never manages it, so TaruBot can't tell who reads it. The receipt and `/config validate` warn about each, and TaruBot doesn't change the channel's permissions; see [Visibility with lobby onboarding](/tarubot/admin/notices-and-updates/#visibility-with-lobby-onboarding).
 
 Running `/setup` again is safe: it reuses what exists and repairs missing bindings. If it's interrupted, anything already created is reused on the next run.
 

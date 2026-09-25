@@ -1,7 +1,7 @@
 /**
- * Migration 005 and 006 rehearsals in private PostgreSQL schemas, isolated from persistence.test.ts's
- * public schema: import/activation backfill, the new CHECKs, the guest-application switch, an empty
- * database, and the real migrate() runner.
+ * Migration rehearsals (005 through 009) in private PostgreSQL schemas, isolated from
+ * persistence.test.ts's public schema: import/activation backfill, the new CHECKs, the
+ * guest-application switch, the changelog columns, an empty database, and the real migrate() runner.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
@@ -374,8 +374,12 @@ describe.skipIf(!url)("migration 006 guest-application switch", () => {
           })
           .from(t.guestGrants),
       ).toEqual([{ ended: null, by: null, why: null }]);
-      // A guild created later takes the default: applications off until /setup or /config.
-      await store.insert(t.guilds).values({ id: guild.disabled, effects_enabled: true });
+      // A guild created later takes the default: applications off until /setup or /config. Raw
+      // SQL, because a Drizzle insert names every column of today's mapping, including columns
+      // later migrations add (009's changelog columns), which this schema-006 table lacks.
+      await client.query("INSERT INTO guilds (id, effects_enabled) VALUES ($1, true)", [
+        guild.disabled,
+      ]);
       expect(
         (
           await store
@@ -472,6 +476,65 @@ describe.skipIf(!url)("migration 008 issue reports", () => {
         ),
       ).rejects.toThrow();
       await client.query("ROLLBACK TO SAVEPOINT bad_source");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+});
+
+const CHANGELOG_CHANNEL = "009_changelog_channel.sql";
+
+describe.skipIf(!url)("migration 009 changelog channel", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  test("existing guilds keep posts off and their revision; a channel always has a valid baseline", async () => {
+    const client = await db.pool.connect();
+    /** Run a statement that must fail, inside a savepoint so the rehearsal continues. */
+    const refused = async (statement: string, message: string) => {
+      await client.query("SAVEPOINT refused");
+      await expect(client.query(statement)).rejects.toThrow(message);
+      await client.query("ROLLBACK TO SAVEPOINT refused");
+    };
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE SCHEMA m009_rehearsal");
+      await client.query("SET LOCAL search_path TO m009_rehearsal");
+      for (const file of (await migrationFiles()).filter((name) => name < CHANGELOG_CHANNEL))
+        await client.query(await migration(file));
+      // A schema-008 guild at revision 13, like DevBot (a reserved #30 test guild ID).
+      await client.query("INSERT INTO guilds (id, revision) VALUES ('666666666666666720', 13)");
+      await client.query(await migration(CHANGELOG_CHANNEL));
+      expect(
+        (
+          await client.query<{
+            revision: bigint;
+            changelog_channel_id: string | null;
+            changelog_version: string | null;
+          }>("SELECT revision, changelog_channel_id, changelog_version FROM guilds")
+        ).rows,
+      ).toEqual([{ revision: 13n, changelog_channel_id: null, changelog_version: null }]);
+      // The version CHECK takes MAJOR.MINOR.PATCH with an optional prerelease, nothing else.
+      for (const bad of ["latest", "2.25", "2.25.0+build", "02.25.0"])
+        await refused(
+          `UPDATE guilds SET changelog_version='${bad}'`,
+          "guilds_changelog_version_check",
+        );
+      // changelog_baseline: a channel is never set without a version.
+      await refused("UPDATE guilds SET changelog_channel_id='82001'", "changelog_baseline");
+      await client.query(
+        "UPDATE guilds SET changelog_channel_id='82001', changelog_version='2.25.0-rc.1'",
+      );
+      // Unsetting the channel keeps the version, which the CHECKs allow.
+      await client.query("UPDATE guilds SET changelog_channel_id=NULL");
+      expect(
+        (await client.query<{ changelog_version: string }>("SELECT changelog_version FROM guilds"))
+          .rows,
+      ).toEqual([{ changelog_version: "2.25.0-rc.1" }]);
     } finally {
       await client.query("ROLLBACK");
       client.release();

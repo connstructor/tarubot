@@ -6,6 +6,7 @@
  */
 import type { GuildRecord } from "../../../src/application/records.js";
 import type {
+  ChangelogAudience,
   ConfigChange,
   ConfigurationReport,
   EffectsMode,
@@ -65,6 +66,8 @@ export const CHANNEL = {
   reviews: "323456789012345603",
   lobby: "323456789012345604",
   officers: "323456789012345605",
+  /** Where update posts go (2.25.0); unset in the approved cards, which predate it. */
+  changelog: "323456789012345606",
 } as const;
 
 /** The approved layout pass and channel-access jobs (configuration#33 and #37). */
@@ -76,7 +79,8 @@ export const OVERRIDE_USER = "423456789012345678";
 
 /**
  * A fully configured, activated guild (configuration#4 and #7): an FC, all four roles, the three
- * channels, onboarding with its lobby and officer room, the role layout on, revision 42.
+ * channels, onboarding with its lobby and officer room, the role layout on, revision 42. The
+ * changelog channel (2.25.0) is unset, as it is on every server until officers choose one.
  */
 export const configGuild = (overrides: Partial<GuildRecord> = {}): GuildRecord => ({
   id: GUILD_ID,
@@ -101,6 +105,8 @@ export const configGuild = (overrides: Partial<GuildRecord> = {}): GuildRecord =
   role_layout_enabled: true,
   guest_grandfather: null,
   guest_grandfathered_at: null,
+  changelog_channel_id: null,
+  changelog_version: null,
   ...overrides,
 });
 
@@ -126,6 +132,7 @@ const RESOURCE_COLUMNS = [
   "guest_application_channel_id",
   "lobby_channel_id",
   "officer_channel_id",
+  "changelog_channel_id",
 ] as const;
 
 /**
@@ -139,6 +146,8 @@ export function configReport(
     readonly effectsMode?: EffectsMode;
     readonly capabilities?: Readonly<Record<string, string>>;
     readonly fc?: FcHealthRow;
+    /** The changelog channel's audience, as validate() reports it in an onboarding guild. */
+    readonly changelogAudience?: ChangelogAudience;
   } = {},
 ): ConfigurationReport {
   const guild = options.guild ?? configGuild();
@@ -156,6 +165,7 @@ export function configReport(
     capabilities: { ...capabilities, ...options.capabilities },
     guestApplicationsOpen: guestApplicationsOpen(guild),
     fc: guild.fc_id ? [options.fc ?? fcRow()] : null,
+    ...(options.changelogAudience ? { changelogAudience: options.changelogAudience } : {}),
   };
 }
 
@@ -382,6 +392,15 @@ export const CONFIG_RESULTS = {
     officerHolders: { adopt: false, adopted: 0, sample: [] },
   }),
   ledgerSet: configChange("ledger_channel_id", CHANNEL.ledger, { requeued: 2 }),
+  /** A first changelog channel in an onboarding guild, where onboarding shows it to members. */
+  changelogSet: configChange("changelog_channel_id", CHANNEL.changelog, {
+    audience: "members",
+    guild: configGuild({
+      revision: 43n,
+      changelog_channel_id: CHANNEL.changelog,
+      changelog_version: "2.25.0",
+    }),
+  }),
   unlinked: unlinked(),
   setup: setupResult(),
   granted: override(),
@@ -684,6 +703,44 @@ export const CONFIG_CASES = {
     render: () =>
       changeReply(
         configChange("officer_notifications_channel_id", null, { previous: CHANNEL.notices }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  // /config changelog (2.25.0): where update posts go.
+  "channel.changelog": {
+    spec: null,
+    audience: "officer",
+    tone: "success",
+    title: "Changelog channel set",
+    timestamp: true,
+    render: () => changeReply(R.changelogSet, VIEWERS.officer, { now }),
+  },
+  "channel.changelog_hidden": {
+    spec: null,
+    audience: "officer",
+    tone: "warning",
+    title: "Changelog channel set",
+    timestamp: true,
+    render: () =>
+      changeReply(
+        configChange("changelog_channel_id", CHANNEL.officers, {
+          audience: "hidden",
+          guild: configGuild({ revision: 43n, changelog_channel_id: CHANNEL.officers }),
+        }),
+        VIEWERS.officer,
+        { now },
+      ),
+  },
+  "channel.changelog_cleared": {
+    spec: null,
+    audience: "officer",
+    tone: "success",
+    title: "Changelog posts turned off",
+    timestamp: true,
+    render: () =>
+      changeReply(
+        configChange("changelog_channel_id", null, { previous: CHANNEL.changelog }),
         VIEWERS.officer,
         { now },
       ),

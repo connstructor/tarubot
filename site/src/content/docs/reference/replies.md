@@ -37,7 +37,7 @@ Officers see more than members: a diagnostic, what's affected, and how to fix it
 | `private_profile` | Lodestone profile is private | The character's Lodestone profile is private, so TaruBot can't read it | The owner makes the profile public on the Lodestone, then tries again. A pending claim's token stays valid meanwhile. |
 | `unavailable`, `incomplete`, `invalid_response` | The Lodestone isn't responding, Discord isn't responding, … | The Lodestone or Discord failed or returned something unusable, such as a malformed ID in a parsed page (`invalid_response`) or a member Discord sent without a join time (`incomplete`) | Check readiness's `lodestone` object and Discord's status. Logged at warn. |
 | `blocked` | Server setup issue (officers: Discord permissions need attention) | A missing permission, the role hierarchy, or a deleted role or channel | Fix what the officer reply names, then `/config validate`. |
-| `disabled` | Discord changes paused | Discord changes are off for the whole deployment (`ENABLE_EFFECTS=false`), or for a server imported from the previous bot that hasn't been activated yet; the job's diagnostic says which | Restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every active server. Any `/config` change also requeues it, and [`retry.js`](/tarubot/deploy/tools/#retryjs) is the fallback. |
+| `disabled` | Discord changes paused | Discord changes are off for the whole deployment (`ENABLE_EFFECTS=false`), or for a server imported from the previous bot that hasn't been activated yet; the job's diagnostic says which | Restart with `ENABLE_EFFECTS=true`: startup requeues the held work of every active server. Saving a `/config` role or channel, the FC link or `/config guest_applications` also requeues it, and [`retry.js`](/tarubot/deploy/tools/#retryjs) is the fallback. |
 | `unexpected` (and internal codes such as `idempotency_conflict`) | Something went wrong | An error with no approved explanation | Find the Ref in the logs (`source`, `scope`) and investigate. Logged at error, and reported to the maintainers when issue reports are on. |
 
 ### Log levels
@@ -81,7 +81,7 @@ Replies describe saved and background work with text markers, so color is never 
 
 Two more markers describe the request itself: `• SAVED` (committed to the database) and `= NO CHANGE` (it was already that way, so nothing was saved or queued).
 
-Members see labels: Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Ledger post, Guest review message, Decision DM, Officer notice. Officers see the raw job kind (such as `reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored diagnostic, cut to 150 characters.
+Members see labels: Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice. Officers see the raw job kind (such as `reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored diagnostic, cut to 150 characters.
 
 An immediate reply never uses completion words. `… QUEUED` or `‖ PAUSED` there means the work was saved; only a view that reads stored jobs back (`/sync status`, `/guest status`, `/ledger balance` and `/ledger history`) can show `✓ DONE`.
 
@@ -92,7 +92,7 @@ An immediate reply never uses completion words. `… QUEUED` or `‖ PAUSED` the
 | Token | Meaning |
 | --- | --- |
 | `[OK]` | The check passed. |
-| `[WARN]` | It works, but something needs attention, such as `ENABLE_EFFECTS=false`, a review channel without a Guest role, or guest applications switched on with no review channel. |
+| `[WARN]` | It works, but something needs attention, such as `ENABLE_EFFECTS=false`, a review channel without a Guest role, guest applications switched on with no review channel, or a changelog channel that onboarding hides from members or doesn't manage. |
 | `[FAIL]` | A missing resource, permission or hierarchy problem stops a feature. |
 | `[OFF]` | The feature is switched off. |
 | `[WAIT]` | Waiting, for example for the server's activation or a first roster. |
@@ -120,7 +120,8 @@ Every click is authorized again for the person who clicked.
 - **Ledger posts** in the ledger channel read `<Operation> · <amount>`, with the full note, the new balance, who recorded it and the entry number. A correction also shows the previous balance and the entry it corrects.
 - **The guest review message** in the review channel holds the applicant, the submission time, both answers, and **Approve** and **Deny**. Once decided, its title reads approved, denied, cancelled or no longer needed, and the buttons are disabled.
 - **The decision DM** tells the applicant whether they were approved. A denial includes the officers' reason, if one was given, and when they may apply again.
-- **Officer notices** in the officer notifications channel are plain text: accepted rosters, Lodestone trouble, and characters unlinked automatically.
+- **Officer notices** in the officer notifications channel are plain text: Lodestone trouble, its recovery, and characters unlinked automatically. See [Officer notices](/tarubot/admin/notices-and-updates/#officer-notices).
+- **Update posts** in the changelog channel read "TaruBot updated to vX.Y.Z", linking the changelog, with "What's new since" the last version announced and one field per release with a member note, newest first. At most ten are listed; the footer counts the rest. See [Update posts](/tarubot/admin/notices-and-updates/#update-posts).
 
 Every message is sent with mentions turned off, so no reply or post pings anyone.
 

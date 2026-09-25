@@ -31,6 +31,8 @@ export const JOB_KIND: Readonly<Record<string, { readonly label: string; readonl
     profile: { label: "Character profile refresh", done: "Character profile refreshed" },
     "channels.access": { label: "Channel access", done: "Channel access secured" },
     "roles.layout": { label: "Role layout", done: "Role layout applied" },
+    // The post after the bot starts on a newer version (2.25.0).
+    "changelog.post": { label: "Update post", done: "Update posted" },
     "ledger.notify": { label: "Ledger post", done: "Ledger entry posted" },
     "guest.review": { label: "Guest review message", done: "Guest review message posted" },
     "guest.dm": { label: "Decision DM", done: "Decision DM sent" },

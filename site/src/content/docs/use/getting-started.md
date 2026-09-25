@@ -43,6 +43,10 @@ Much of what TaruBot does, such as changing your roles or posting a ledger entry
 
 When a command can't do what you asked, the card says why and what to try, and its footer reads `Code <code> · Ref <number>`. If you ask an officer or the bot's maintainers for help, include that line: the Ref leads them straight to the bot's log entry.
 
+## What's new
+
+Your server may have a channel where TaruBot posts what's new after it's updated: one short message, "TaruBot updated to vX.Y.Z", with a sentence for each release that changed something for members since the last post. An update that changes nothing for members isn't posted. The officers choose the channel, so ask them where it is. For the technical detail, [`/version`](/tarubot/reference/commands/#version) lists the recent commits, and each post links the full changelog.
+
 ## Your data
 
 TaruBot keeps what it needs to decide access and keep the ledger exact:

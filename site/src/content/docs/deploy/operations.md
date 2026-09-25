@@ -42,7 +42,7 @@ Read the [changelog](https://github.com/deconfined/tarubot/blob/main/CHANGELOG.m
 
    With a migration pending, it prints the files it applied and the restore point, then `Schema ready.` With nothing pending, it only prints `Schema ready.`
 6. Start the bot: `docker compose up -d --wait --remove-orphans`, then [check readiness](/tarubot/deploy/monitoring/#health-probes). `--remove-orphans` removes the containers of services the new Compose file no longer has. If the new file names a newer PostgreSQL image, Compose recreates that container too; the data stays in its [volume](#volumes).
-7. If the changelog says the commands changed, register them again with the same scope you used at install (`register.js --global` or `--guild YOUR_GUILD_ID`), and check with `commands.js list`; see [Maintenance tools](/tarubot/deploy/tools/).
+7. If the changelog says the commands changed, register them again with the same scope you used at install (`register.js --global` or `--guild YOUR_GUILD_ID`), and check with `commands.js list`; see [Maintenance tools](/tarubot/deploy/tools/). Registering after the new release is up keeps the old one from receiving a command it doesn't have.
 
 For a release without a migration, steps 3 to 5 are optional: `docker compose up -d --wait --remove-orphans` after the pull replaces the container, and Compose stops the old one first. The outage is a few seconds either way.
 
@@ -181,7 +181,14 @@ To recover from a broken or lost database:
 
    Decisions acknowledged after that backup, such as new links, ledger entries and guest decisions, must be recorded again: a restore can't know about them.
 4. If the backup is from an older release, run `migrate.js` as in an update.
-5. Start exactly one bot: `docker compose up -d --wait`, and check readiness and `/config validate`.
+5. If the backup predates an [update post](/tarubot/deploy/monitoring/#update-posts) that went out, raise that server's `changelog_version` to the version it announced, or the post goes out again when the bot starts:
+
+   ```sh
+   docker compose exec -T postgres psql -U tarubot -d tarubot \
+     -c "SELECT id, changelog_channel_id, changelog_version FROM guilds WHERE changelog_channel_id IS NOT NULL"
+   ```
+
+6. Start exactly one bot: `docker compose up -d --wait`, and check readiness and `/config validate`.
 
 Discord work the restored database still owes resumes from its durable jobs. A restore never undoes Discord changes the bot already made; the next reconciliation brings Discord in line with the restored decisions.
 

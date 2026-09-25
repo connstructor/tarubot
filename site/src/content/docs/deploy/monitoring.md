@@ -1,6 +1,6 @@
 ---
 title: Monitoring
-description: Health probes, logs, background jobs, Lodestone refreshes, issue reports and the optional heartbeat.
+description: Health probes, logs, background jobs, Lodestone refreshes, officer notices, update posts, issue reports and the optional heartbeat.
 sidebar:
   order: 6
 ---
@@ -60,7 +60,7 @@ A member's role update (`reconcile.user`) keeps an `applied` list in its stored 
 
 ## Jobs that need attention
 
-Officers see outstanding and failed work in `/sync status`. Blocked work (a permission, the role order, a deleted channel) resumes by itself once an officer fixes the cause and changes any `/config` setting, or the same work is queued again.
+Officers see outstanding and failed work in `/sync status`. Blocked work (a permission, the role order, a deleted channel) resumes once an officer fixes the cause and saves a `/config` role or channel, the FC link or `/config guest_applications`, or when the same work is queued again. `/config officer_rank`, `/config role_layout` and `/config fc unlink` don't requeue it.
 
 A job that **failed** has stopped for good. After fixing the cause, retry it with [`retry.js`](/tarubot/deploy/tools/#retryjs), giving the server's ID and the job's full ID:
 
@@ -97,6 +97,51 @@ FROM characters
 WHERE profile_missing_at IS NOT NULL OR profile_retry_at > now()
 ORDER BY profile_missing_at NULLS LAST, profile_retry_at;"
 ```
+
+## Officer notices
+
+Officer notices are `officer.notify` jobs that post plain text to a server's officer notifications channel ([what officers see](/tarubot/admin/notices-and-updates/#officer-notices)). Each kind has its own job key:
+
+- **Lodestone degraded** (`officer:<guild>:degraded:<fc>`). Queued on the first roster failure since the FC's last accepted roster that isn't a wait, and posted only if it is still pending 5 minutes later. While the FC keeps failing it repeats at most once a day, counted from when the last one finished. A notice still waiting to post (held, paused or blocked) blocks new ones. Throttling and the queue's other waits post nothing.
+- **Recovered** (`officer:<guild>:recovered:<fc>`). One line after an accepted roster, only when a degraded notice posted (or was posting) during that outage.
+- **Character no longer on the Lodestone** (`officer:<guild>:missing:<link>`), one per link the [two-"not found" rule](#profile-refreshes) ends.
+- **FC roster accepted** (`officer:<guild>`), only on a development deployment's test server (`TEST_GUILD_ID`). Other servers get no line for a routine roster read.
+
+A degraded notice that completes `– SKIPPED` with `recovered before posting` (the roster was accepted during the hold, while it was paused or blocked, or while the bot was out of that server) or `FC unlinked` (`/config fc unlink` during an outage) is expected. The queue never claims a job of a server the bot was removed from, so an accepted roster closes such a server's waiting notice too, and posts no recovery line there. `/sync status` lists only unfinished and failed work, so it never shows these closed jobs; this query does:
+
+```sh
+docker compose exec -T postgres psql -U tarubot -d tarubot -c "
+SELECT dedupe_key, status, created_at, completed_at, message_id, result
+FROM jobs
+WHERE dedupe_key LIKE 'officer:%:degraded:%' OR dedupe_key LIKE 'officer:%:recovered:%'
+ORDER BY created_at DESC
+LIMIT 10;"
+```
+
+Accepted edge cases and assumptions:
+
+- **A send in flight.** A degraded notice being sent when the roster is accepted counts as posted, so the recovery line is queued; one being sent during `/config fc unlink` is left to finish. If that send fails (or its worker dies) and the queue retries it, the degraded line can post after the recovery line, or about the unlinked FC, with nothing after it. The window is one send in flight at that moment.
+- **An FC with no active server.** Rosters run only while a server linked to the FC is active. If the bot is removed from every such server during an outage, a waiting notice stays queued until the bot is added back. It can then post before the next roster, which, once accepted, posts the recovery line after it.
+- **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's clock. They must agree to within a few seconds (one roster fetch); NTP on the host keeps them far closer.
+
+The rate limit reads these job rows, so don't prune `officer.notify` jobs ([persistence conventions](https://github.com/deconfined/tarubot/blob/main/docs/PERSISTENCE.md)).
+
+## Update posts
+
+When the bot starts on a newer version, it posts what's new for members in each server's changelog channel ([what officers see](/tarubot/admin/notices-and-updates/#update-posts)). The member notes live in [`src/domain/release-notes.ts`](https://github.com/deconfined/tarubot/blob/main/src/domain/release-notes.ts), one sentence for each release that changes something members notice.
+
+- **The baseline.** Each server stores the newest version it was told about, `guilds.changelog_version`. Setting a channel where none was stores the running version (or keeps a higher stored one), so nothing posts at once, and releases published while no channel is set are never posted. Moving or unsetting the channel keeps the baseline, and the bot never lowers it.
+- **Startup.** Each present server with a channel and an older baseline gets one `changelog.post` job (`changelog:<guild>`), logged as "Queued update posts" with the count and the version. A restart while one is pending merges into it, so one post covers every release since the last.
+- **Outcomes.** The job reads the release range when it runs. It completes as `– SKIPPED` with `changelog unconfigured` (the channel was unset), `already announced` (the baseline is already at or past the running version) or `nothing for members` (no notes in the range; the baseline still moves). A post succeeds with its `messageId`, `channelId` and `version`, and writes a `changelog.advanced` audit.
+- **Missing permissions.** The job is `! BLOCKED` and the baseline doesn't move. The scheduler requeues it about every 10 minutes, and it is released at once by a `/config` save of the FC link, a role or a channel, by `/config guest_applications`, and by [`retry.js`](/tarubot/deploy/tools/#retryjs) or the next startup; `/config officer_rank`, `role_layout` and `fc unlink` don't release it. It never fails on its own, so a problem never fixed leaves a warning line and a delivery attempt about every 10 minutes. A restart merge keeps its attempt count, so about seven restarts inside one scheduler window use up its 8 attempts; the first transient error after that ends it as failed, and the next startup queues it again without a double post.
+- **Paused.** With Discord changes off for the deployment or the server, a post parks as `‖ PAUSED`, and each restart on a newer version adds one more parked job. Resuming keeps only the newest and closes the rest as `superseded`, so one post goes out.
+- **Duplicates.** A retry within a few minutes is deduplicated by Discord's nonce check (`changelog:<guild>:<running version>`). A kill, out-of-memory stop or host loss between the send and the baseline update, followed by a different version, can repeat that post's releases once, the same risk ledger posts accept. A graceful stop can't cause it.
+- **Restores and baselines.** Restoring a backup taken before a post was delivered can post it again: [raise the baseline](/tarubot/deploy/operations/#recovery) before starting the bot. An operator may move a baseline by hand; the column accepts only `MAJOR.MINOR.PATCH` with an optional prerelease, and lowering it announces the notes in between again at the next startup:
+
+  ```sh
+  docker compose exec -T postgres psql -U tarubot -d tarubot \
+    -c "UPDATE guilds SET changelog_version = 'X.Y.Z' WHERE id = 'YOUR_GUILD_ID'"
+  ```
 
 ## Live selectors
 
