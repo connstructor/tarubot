@@ -395,6 +395,18 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - Reinstalled without that. HOSTING.md's command runs in an ordinary shell and is unaffected.
 - The scratch-copy test runs at 13:15 and 13:31 left their `daily/` copies, which expire after 30 days.
 
+### 2.25.0 rollout plan (update posts; not yet run)
+
+2.25.0 adds migration `009_changelog_channel.sql` and `/config changelog` (20 roots, 45 paths). Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+
+1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.25.0-<sha>.dump`.
+2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version` naming the current head (`008_issue_reports.sql`).
+3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`), then run `migrate.js` against `tarubot_dev`.
+4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.25.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on.
+5. `register.js --guild 1040379370159743139`, then `commands.js list`: clean, with the one new `/config` path.
+6. The owner's checks from `test-plans/current.json`: a plain members channel gives the success receipt and an `[OK] Changelog` line; `#officer-chat` gives the warning receipt and a `[WARN]` line; then back to the plain channel. With the owner's OK, set `tarubot_dev`'s `changelog_version` to the release just below 2.25.0 in CHANGELOG.md and restart: exactly one post with one field (2.25.0's note) right after ready. Once the job succeeded and the version advanced, restart again: no post.
+7. Check readiness (including `writerLease`), the logs ("Queued update posts" once, then not again) and the plan posted in #chat, then record the results here.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

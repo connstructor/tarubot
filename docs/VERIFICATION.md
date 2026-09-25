@@ -21,6 +21,14 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.25.0** (update posts, issue #30) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.25.0 above 2.24.2). `bun run test:unit` passed **1,178 tests** and `bun run test:contract` **26**. New and changed unit cases:
+- `tests/unit/changelog.test.ts`: the release range (bounds, newest first, a prerelease before its release, releases without notes, a rollback), `changelogDue`, `newerVersion`, every `changelogStep` outcome, and `RELEASE_NOTES` against the repository: each key has its CHANGELOG heading, fits migration 009's version CHECK (read from the file) and isn't ahead of `package.json`; each note is one line of 1–300 characters with no mention, ping or link, and renders without being cut.
+- `tests/unit/migration-files.test.ts`: migrations 001..009 with no gap or repeat, and `SCHEMA_VERSION` the last.
+- The update post: the catalog case, the largest post (twelve 300-character notes with prerelease versions: ten fields, "…and 2 more in the full changelog", nothing cut, within 6,000), byte-identical JSON, escaped notes, and the gateway sending it with `allowed_mentions {parse: []}` under the `changelog:<guild>:<version>` nonce.
+- The receipts (set, hidden, unset, unmanaged Visibility, no-op and paused), the `/config show` field and collapsed text, the widest layout at exactly 15 fields, the validate `[OK]`, `[FAIL]`, `[OFF]` and both `[WARN]` lines, the ten-failing-capabilities budget, the updated approved cards #4, #7, #8 and #9, the command path and its input checks (20 roots, 45 paths), and the "Update post" job line.
+
+The PostgreSQL cases are written but not yet run in this session; the container run (`test:docker`) is still to do: migration 009's rehearsal, startup's enqueue, merge and parked-post collapse, and delivery (baseline rules, audience lookup including the Community Updates channel, one post per range, repeats and a forged payload, nothing for members, blocked then released by `/config`, unset while waiting, paused, the compare-and-set, two servers).
+
 **2.24.2** (code-scanning fixes) passed strict type checking, lint, formatting, the compiled build and `ci:version`. For alert #7, a probe worker under Bun received its parent's message with `origin` `""` and `source` `null`, which is what the new check accepts. The parser, worker, runner and selector tests (30) pass unchanged, and the compiled build parsed a live profile and the Woven Souls FC (105 members) through the worker. The PR's CodeQL run is the check that both alerts close.
 
 **2.24.1 rollouts (2026-09-25), with 2.24.0's backup schedule:** see [DEV_GUILD.md](DEV_GUILD.md#2241-rollout-with-2240s-backup-schedule--2026-09-25). The first backup from the host's real path uploaded 396,896 bytes, and the crontab line is installed.

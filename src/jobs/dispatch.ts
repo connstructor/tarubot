@@ -8,17 +8,24 @@ import type { Service } from "../application/service.js";
 import type { Synchronization } from "../application/synchronization.js";
 import type { GuildAccess } from "../application/guild-access.js";
 import type { IssueReports } from "../application/issue-reports.js";
+import { project } from "../config/project.js";
+import { changelogStep } from "../domain/changelog.js";
 import { effectsPaused } from "../domain/failures.js";
+import { RELEASE_NOTES } from "../domain/release-notes.js";
 import { Failure } from "../domain/values.js";
 import { managedRoleOrder } from "../domain/role-layout.js";
 import { enqueue, reconcileUser, type Job } from "./queue.js";
 
-/** Bind application capabilities once; each invocation revalidates its persisted payload. */
+/**
+ * Bind application capabilities once; each invocation revalidates its persisted payload. `notes`
+ * is the member-note map update posts read (the compiled RELEASE_NOTES); tests pass their own.
+ */
 export function dispatcher(
   app: Service,
   sync: Synchronization,
   access: GuildAccess,
   reports?: IssueReports,
+  notes: Readonly<Record<string, string>> = RELEASE_NOTES,
 ): (job: Job, guard: () => Promise<void>) => Promise<unknown> {
   return async (job, guard) => {
     if (job.payload_version !== 1)
@@ -129,6 +136,21 @@ export function dispatcher(
     // as `disabled`, which activation or a later /config change would requeue.
     if (job.kind === "roles.layout" && !guild.role_layout_enabled)
       return { skipped: "layout disabled" };
+    // Update posts (2.25.0) complete every no-post outcome here, before the effects gate, so a
+    // paused guild never parks a job with nothing to send (the roles.layout precedent above). The
+    // release range comes from the guild's current row, never the payload.
+    const changelog =
+      job.kind === "changelog.post"
+        ? changelogStep(guild.changelog_channel_id, guild.changelog_version, project.version, notes)
+        : null;
+    if (changelog?.kind === "skip") return { skipped: changelog.reason };
+    if (changelog?.kind === "advance") {
+      // Nothing for members (owner decision 2): move the baseline without posting. The lease
+      // fence comes first, as before every write.
+      await guard();
+      await app.advanceChangelog(guild.id, changelog.from, project.version, null);
+      return { skipped: "nothing for members", version: project.version };
+    }
     if (!app.config.ENABLE_EFFECTS || !guild.effects_enabled)
       throw effectsPaused(app.config.ENABLE_EFFECTS);
     if (job.kind === "roles.layout") {
@@ -184,11 +206,38 @@ export function dispatcher(
     await guard();
     await app.db.orm.insert(t.deliveryAttempts).values({ job_id: job.id, status: "started" });
     let messageId: string | undefined;
-    // The channel a ledger post went to, kept in the job result: the ledger channel can be rebound
-    // later, and a jump link must pair the message with the channel it was actually sent to.
+    // The channel a ledger or update post went to, kept in the job result: the channel can be
+    // rebound later, and a jump link must pair the message with the channel it was actually sent to.
     let channelId: string | undefined;
+    // Kind-specific facts for the job result (an update post's version).
+    let extra: Record<string, unknown> = {};
     try {
-      if (job.kind === "ledger.notify") {
+      if (job.kind === "changelog.post") {
+        // The range was decided above; only a post reaches here, and only with Discord changes on.
+        if (changelog?.kind !== "post")
+          throw new Failure("invalid_job", "Update post state is unavailable.");
+        channelId = changelog.channel;
+        // The nonce key names the running version, never the stored one: an earlier post for the
+        // stored version would come back from Discord's check, and the compare-and-set would then
+        // skip releases that were never posted.
+        messageId = await app.discord.send(
+          guild.id,
+          changelog.channel,
+          {
+            kind: "changelog",
+            view: {
+              version: project.version,
+              previous: changelog.from,
+              notes: changelog.notes,
+              url: `${project.url}/blob/${project.branch}/CHANGELOG.md`,
+            },
+          },
+          `changelog:${guild.id}:${project.version}`,
+        );
+        await guard();
+        await app.advanceChangelog(guild.id, changelog.from, project.version, messageId);
+        extra = { version: project.version };
+      } else if (job.kind === "ledger.notify") {
         // The immutable entry is authoritative; retrying this job never changes money again.
         const { entryId } = z.object({ entryId: z.string().uuid() }).parse(job.payload);
         const [entry] = await app.db.orm
@@ -305,6 +354,7 @@ export function dispatcher(
         status: "delivered",
         messageId: messageId ?? null,
         ...(channelId ? { channelId } : {}),
+        ...extra,
       };
     } catch (error) {
       // Delivery failure is operational history; the application decision remains committed.

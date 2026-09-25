@@ -701,6 +701,7 @@ describe("resolved inconsistencies", () => {
       "configuration/officer.revoked",
       "configuration/channel.ledger_cleared",
       "configuration/channel.notifications_cleared",
+      "configuration/channel.changelog_cleared",
       "configuration/applications.closed",
       "configuration/applications.review_unset",
       "configuration/role.cleared",
@@ -720,6 +721,8 @@ describe("resolved inconsistencies", () => {
       "configuration/role.leader_no_fc",
       "configuration/role.officer_no_rank",
       "configuration/channel.ledger_no_fc",
+      // 2.25.0: a changelog channel onboarding hides from members and guests (warn only).
+      "configuration/channel.changelog_hidden",
       "configuration/applications.no_role",
       "configuration/applications.no_channel",
       "configuration/rank.heads_up",

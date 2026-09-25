@@ -1,19 +1,20 @@
 {
-  "title": "Session: 2.24.2 code-scanning fixes",
-  "objective": "2.24.2 closes the two CodeQL alerts in the Lodestone parser: the worker now ignores messages that don't come from the bot itself, and a null check reads correctly. Parsing is unchanged. No migration and no command change.",
+  "title": "Session: 2.25.0 update posts",
+  "objective": "2.25.0 posts what's new for members in a channel officers choose with /config changelog, when the bot starts on a newer version. Setting a channel posts nothing at once, and an update with nothing for members posts nothing. Migration 009 and one new command path.",
   "user": [
-    "Run /claim or /characters once: character and FC names read as before.",
-    "Check the repository's Security tab: both alerts should show as fixed after the merge.",
-    "Confirm the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
+    "/config changelog channel:#<plain members channel> (not officer-chat, the lobby or community-updates): a success receipt, and /config validate shows an OK Changelog line.",
+    "/config changelog channel:#officer-chat: the warning receipt, and a [WARN] Changelog line in /config validate. Then set it back to the plain channel.",
+    "After the assistant's first restart: exactly one post in that channel, 'TaruBot updated to v2.25.0' with one field. After the second restart: no new post."
   ],
   "assistant": [
-    "Deploy 2.24.2 to DevBot and production with the owner's go-ahead (restarts, no migration).",
-    "Check the next day's scheduled backup in ~/tarubot-backup.log and the bucket.",
-    "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "With the owner's go-ahead: stop, back up, restore-check at 008, rehearse migration 009 on the copy, migrate tarubot_dev, then up (ENABLE_EFFECTS=true).",
+    "Register the guild commands; commands.js list is clean with /config changelog (20 roots, 45 paths).",
+    "With the owner's OK, set changelog_version to the release just below 2.25.0 and restart; once the job succeeded and the version advanced, restart again.",
+    "Record the rollout in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.24.2 on schema 008 with the heartbeat on in production.",
-    "Parse Lodestone pages in workers that accept only the bot's own messages.",
+    "Run compiled 2.25.0 on schema 009.",
+    "Queue one update post for each server behind the running version, and post it in its changelog channel.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

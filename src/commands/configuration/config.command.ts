@@ -90,16 +90,22 @@ data.addSubcommand((sub) =>
         .setRequired(true),
     ),
 );
-for (const name of ["ledger", "officer_notifications"])
+// changelog (2.25.0) is where update posts go after the bot starts on a newer version.
+for (const name of ["ledger", "officer_notifications", "changelog"])
   data.addSubcommand((sub) =>
     sub
       .setName(name)
       .setDescription(`Set or unset the ${name.replaceAll("_", " ")} channel`)
-      // Discord offers only text channels, as /setup's rooms do; the gateway still refuses others.
+      // Discord offers only text channels, as /setup's rooms do; the gateway still refuses others,
+      // Announcement channels included.
       .addChannelOption((option) =>
         option
           .setName("channel")
-          .setDescription("Guild text channel")
+          .setDescription(
+            name === "changelog"
+              ? "Text channel members and guests can read"
+              : "Guild text channel",
+          )
           .addChannelTypes(ChannelType.GuildText),
       )
       // "unset", not "clear": the channel and its messages stay (owner decision, 2026-09-24).

@@ -226,6 +226,10 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
     "/config officer_notifications channel:#officer-chat",
     "/config officer_notifications unset_channel:true",
   ],
+  "config changelog": [
+    "/config changelog channel:#tarubot-updates",
+    "/config changelog unset_channel:true",
+  ],
   "config guest_applications": [
     "/config guest_applications enabled:true channel:#officer-chat",
     "/config guest_applications unset_channel:true",

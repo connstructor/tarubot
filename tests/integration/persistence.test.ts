@@ -55,6 +55,9 @@ import {
   type QueueEvent,
 } from "../../src/jobs/queue.js";
 import { dispatcher } from "../../src/jobs/dispatch.js";
+import { announceChangelog } from "../../src/jobs/queue.js";
+import { project } from "../../src/config/project.js";
+import { notesSince } from "../../src/domain/changelog.js";
 import { GuildAccess } from "../../src/application/guild-access.js";
 import { FakeGuildAccess } from "../fixtures/guild-access.js";
 import { discordAccessFixture } from "../fixtures/discord-access.js";
@@ -6664,5 +6667,342 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       )[0]?.locked,
     ).toBe(true);
     expect(db.healthy).toBe(true);
+  });
+
+  /**
+   * Update posts (2.25.0, issue #30), with the guilds reserved for them: 666666666666666720-729.
+   * Each test builds its own guild, filters `sent` by guild and nonce key, and passes its own note
+   * map to the dispatcher, so neither the compiled notes nor other tests' posts affect it.
+   */
+  describe("changelog posts", () => {
+    const reserved = (n: number) => `66666666666666672${n}`;
+    /** An officer of a reserved guild, for /config changes there. */
+    const officerOf = (guildId: string): Actor => ({ ...actor, guildId });
+    /** Notes for releases before, at and after the running version. */
+    const NOTES = {
+      "2.0.0": "Already announced.",
+      "2.1.0": "Between the baseline and now.",
+      [project.version]: "The running release.",
+      "99.0.0": "Not released yet.",
+    };
+    /** Run one job through the real dispatcher with `notes` as the member-note map. */
+    const perform = async (jobId: string, notes: Readonly<Record<string, string>> = NOTES) =>
+      new Queue(db, dispatcher(service, sync, access, undefined, notes), () => {}).perform(
+        await leased(jobId),
+      );
+    /** The update posts handed to Discord for a guild. */
+    const postsFor = (guildId: string) =>
+      sent.filter((post) => post.guild === guildId && post.key.startsWith(`changelog:${guildId}:`));
+    /** A guild's stored update-post settings. */
+    const stored = async (guildId: string) =>
+      (
+        await db.orm
+          .select({
+            channel: t.guilds.changelog_channel_id,
+            version: t.guilds.changelog_version,
+          })
+          .from(t.guilds)
+          .where(eq(t.guilds.id, guildId))
+      )[0];
+    /** A guild with posts on, told about `version` last, and effects as given. */
+    async function changelogGuild(guildId: string, version = "2.0.0", effects = true) {
+      await db.orm.insert(t.guilds).values({
+        id: guildId,
+        effects_enabled: effects,
+        changelog_channel_id: "82001",
+        changelog_version: version,
+      });
+    }
+    /** One job row's status and result. */
+    const jobRow = async (jobId: string) =>
+      (
+        await db.query<{ status: string; result: unknown }>(
+          "SELECT status, result FROM jobs WHERE id=$1",
+          [jobId],
+        )
+      )[0];
+
+    test("setting a channel sets the baseline; moving and unsetting keep it; a higher one stays", async () => {
+      const guildId = reserved(0);
+      const officer = officerOf(guildId);
+      // First set (onboarding off): the running version, audited, with no audience lookup.
+      const first = await service.configure(officer, "changelog_channel_id", "82001");
+      expect(first).toMatchObject({ status: "saved", field: "changelog_channel_id" });
+      expect(first.status === "saved" && first.audience).toBeUndefined();
+      expect(await stored(guildId)).toEqual({ channel: "82001", version: project.version });
+      const audits = await db.query<{ details: unknown }>(
+        "SELECT details FROM audit WHERE guild_id=$1 AND action='config' AND target='changelog_channel_id' ORDER BY id",
+        [guildId],
+      );
+      expect(audits[0]?.details).toEqual({ value: "82001", baseline: project.version });
+      // Moving the channel keeps the stored version; unsetting keeps it too.
+      await db.query("UPDATE guilds SET changelog_version='2.1.0' WHERE id=$1", [guildId]);
+      await service.configure(officer, "changelog_channel_id", "82002");
+      expect(await stored(guildId)).toEqual({ channel: "82002", version: "2.1.0" });
+      await service.configure(officer, "changelog_channel_id", null);
+      expect(await stored(guildId)).toEqual({ channel: null, version: "2.1.0" });
+      // Setting it again raises the baseline: releases while it was unset are never posted.
+      await service.configure(officer, "changelog_channel_id", "82001");
+      expect(await stored(guildId)).toEqual({ channel: "82001", version: project.version });
+      // A higher stored version (an operator's, or a newer release's) is never lowered.
+      await service.configure(officer, "changelog_channel_id", null);
+      await db.query("UPDATE guilds SET changelog_version='99.0.0' WHERE id=$1", [guildId]);
+      await service.configure(officer, "changelog_channel_id", "82001");
+      expect(await stored(guildId)).toEqual({ channel: "82001", version: "99.0.0" });
+    });
+
+    test("in an onboarding guild the receipt says who can read the channel", async () => {
+      const fixture = await accessFixture(reserved(1));
+      const guildId = fixture.guild.id;
+      // A staff-only channel onboarding keeps hidden, and a members channel, beside the fixture's.
+      await db.orm.insert(t.channelAccessPolicies).values([
+        { guild_id: guildId, channel_id: "81010", staff_only: true, original_state: {} },
+        { guild_id: guildId, channel_id: "81011", staff_only: false, original_state: {} },
+      ]);
+      const audience = async (channel: string) => {
+        const change = await service.configure(fixture.manager, "changelog_channel_id", channel);
+        return change.status === "saved" ? change.audience : undefined;
+      };
+      expect(await audience("81010")).toBe("hidden");
+      // The lobby and the officer room deny Member and Guest view.
+      expect(await audience("81001")).toBe("hidden");
+      expect(await audience("81002")).toBe("hidden");
+      expect(await audience("81011")).toBe("members");
+      // No policy row: a channel onboarding doesn't manage (yet).
+      expect(await audience("81099")).toBe("unmanaged");
+      await service.configure(fixture.manager, "changelog_channel_id", "81010");
+      expect((await service.validate(fixture.manager)).changelogAudience).toBe("hidden");
+      // With no channel, validate reports no audience.
+      await service.configure(fixture.manager, "changelog_channel_id", null);
+      expect((await service.validate(fixture.manager)).changelogAudience).toBeUndefined();
+    });
+
+    test("the Community Updates channel stays unmanaged, so its warning stays", async () => {
+      const fixture = await accessFixture(reserved(2));
+      const community: AccessChannel[] = [
+        {
+          id: "81400",
+          name: "Admin",
+          type: ChannelType.GuildCategory,
+          parentId: null,
+          overwrites: [],
+          everyoneVisible: true,
+          memberVisible: true,
+          guestVisible: true,
+        },
+        {
+          id: "81401",
+          name: "community-updates",
+          type: ChannelType.GuildText,
+          parentId: "81400",
+          overwrites: [],
+          everyoneVisible: true,
+          memberVisible: true,
+          guestVisible: true,
+        },
+      ];
+      fixture.remote.channels.push(...structuredClone(community));
+      fixture.remote.excludedChannelIds = community.map((channel) => channel.id);
+      fixture.remote.preserveEveryoneView = true;
+      await fixture.policy.reconcile(fixture.guild.id, async () => {});
+      const change = await service.configure(fixture.manager, "changelog_channel_id", "81401");
+      expect(change.status === "saved" && change.audience).toBe("unmanaged");
+      expect((await service.validate(fixture.manager)).changelogAudience).toBe("unmanaged");
+      // Onboarding never records it, so a later repair pass doesn't change the answer.
+      await fixture.policy.reconcile(fixture.guild.id, async () => {});
+      expect(
+        await db.orm
+          .select()
+          .from(t.channelAccessPolicies)
+          .where(
+            and(
+              eq(t.channelAccessPolicies.guild_id, fixture.guild.id),
+              eq(t.channelAccessPolicies.channel_id, "81401"),
+            ),
+          ),
+      ).toEqual([]);
+      expect((await service.validate(fixture.manager)).changelogAudience).toBe("unmanaged");
+    });
+
+    test("a post lists the notes since the baseline once, then moves the baseline", async () => {
+      const guildId = reserved(3);
+      await changelogGuild(guildId);
+      const jobId = await announceChangelog(db.pool, guildId);
+      await perform(jobId);
+      const posts = postsFor(guildId);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).toEqual({
+        guild: guildId,
+        channel: "82001",
+        key: `changelog:${guildId}:${project.version}`,
+        message: {
+          kind: "changelog",
+          view: {
+            version: project.version,
+            previous: "2.0.0",
+            notes: notesSince("2.0.0", project.version, NOTES),
+            url: `${project.url}/blob/main/CHANGELOG.md`,
+          },
+        },
+      });
+      // Newest first, the running release's note included and the unreleased one left out.
+      expect(posts[0]?.message.kind === "changelog" && posts[0].message.view.notes).toEqual([
+        { version: project.version, note: "The running release." },
+        { version: "2.1.0", note: "Between the baseline and now." },
+      ]);
+      expect((await stored(guildId))?.version).toBe(project.version);
+      expect(await jobRow(jobId)).toEqual({
+        status: "succeeded",
+        result: {
+          status: "delivered",
+          messageId: "123456789",
+          channelId: "82001",
+          version: project.version,
+        },
+      });
+      expect(
+        (
+          await db.query<{ status: string }>(
+            "SELECT status FROM delivery_attempts WHERE job_id=$1 ORDER BY id",
+            [jobId],
+          )
+        ).map((row) => row.status),
+      ).toEqual(["started", "delivered"]);
+      expect(
+        await db.query<{ target: string; details: unknown; actor_id: string | null }>(
+          "SELECT target, details, actor_id FROM audit WHERE guild_id=$1 AND action='changelog.advanced'",
+          [guildId],
+        ),
+      ).toEqual([
+        {
+          target: project.version,
+          details: { from: "2.0.0", messageId: "123456789" },
+          actor_id: null,
+        },
+      ]);
+      // The compare-and-set from a stale baseline changes nothing, audits nothing and never throws.
+      expect(await service.advanceChangelog(guildId, "2.0.0", project.version, null)).toBe(false);
+      expect(
+        await db.query("SELECT id FROM audit WHERE guild_id=$1 AND action='changelog.advanced'", [
+          guildId,
+        ]),
+      ).toHaveLength(1);
+      // A repeat is already announced: the first job succeeded, so this is a new row, and the
+      // baseline is now the running version.
+      const again = await announceChangelog(db.pool, guildId);
+      await perform(again);
+      expect(await jobRow(again)).toEqual({
+        status: "succeeded",
+        result: { skipped: "already announced" },
+      });
+      // A payload naming another version is ignored: the job reads the guild's row.
+      const forged = await enqueue(
+        db.pool,
+        "changelog.post",
+        `changelog:${guildId}`,
+        { version: "9.9.9" },
+        guildId,
+      );
+      await perform(forged);
+      expect((await jobRow(forged))?.result).toEqual({ skipped: "already announced" });
+      expect(postsFor(guildId)).toHaveLength(1);
+    });
+
+    test("nothing for members moves the baseline without a post or a delivery attempt", async () => {
+      const guildId = reserved(5);
+      await changelogGuild(guildId);
+      const jobId = await announceChangelog(db.pool, guildId);
+      await perform(jobId, {});
+      expect(await jobRow(jobId)).toEqual({
+        status: "succeeded",
+        result: { skipped: "nothing for members", version: project.version },
+      });
+      expect(postsFor(guildId)).toEqual([]);
+      expect((await stored(guildId))?.version).toBe(project.version);
+      expect(await db.query("SELECT id FROM delivery_attempts WHERE job_id=$1", [jobId])).toEqual(
+        [],
+      );
+      expect(
+        (
+          await db.query<{ details: unknown }>(
+            "SELECT details FROM audit WHERE guild_id=$1 AND action='changelog.advanced'",
+            [guildId],
+          )
+        ).map((row) => row.details),
+      ).toEqual([{ from: "2.0.0", messageId: null }]);
+    });
+
+    test("missing permissions block without moving the baseline; a /config save releases it once", async () => {
+      const guildId = reserved(6);
+      await changelogGuild(guildId);
+      const jobId = await announceChangelog(db.pool, guildId);
+      sendBlocked = true;
+      try {
+        await perform(jobId);
+      } finally {
+        sendBlocked = false;
+      }
+      expect((await jobRow(jobId))?.status).toBe("blocked");
+      expect((await stored(guildId))?.version).toBe("2.0.0");
+      // Saving the same channel again (after fixing its permissions) requeues the blocked post,
+      // and keeps the baseline, since a channel was already set.
+      const change = await service.configure(officerOf(guildId), "changelog_channel_id", "82001");
+      expect(change).toMatchObject({ status: "saved", rebound: true });
+      expect(change.status === "saved" && change.requeued).toBeGreaterThanOrEqual(1);
+      expect((await jobRow(jobId))?.status).toBe("queued");
+      expect((await stored(guildId))?.version).toBe("2.0.0");
+      await perform(jobId);
+      expect((await jobRow(jobId))?.status).toBe("succeeded");
+      expect(postsFor(guildId)).toHaveLength(1);
+      expect((await stored(guildId))?.version).toBe(project.version);
+    });
+
+    test("posts turned off while a job waits skip it, even with Discord changes paused", async () => {
+      const guildId = reserved(7);
+      await changelogGuild(guildId, "2.0.0", false);
+      const jobId = await announceChangelog(db.pool, guildId);
+      await db.query("UPDATE guilds SET changelog_channel_id=NULL WHERE id=$1", [guildId]);
+      await perform(jobId);
+      // Completed as skipped before the effects gate, never parked as disabled.
+      expect(await jobRow(jobId)).toEqual({
+        status: "succeeded",
+        result: { skipped: "changelog unconfigured" },
+      });
+      expect(postsFor(guildId)).toEqual([]);
+      expect((await stored(guildId))?.version).toBe("2.0.0");
+    });
+
+    test("with Discord changes paused, a post with something to say parks as disabled", async () => {
+      const guildId = reserved(8);
+      await changelogGuild(guildId, "2.0.0", false);
+      const jobId = await announceChangelog(db.pool, guildId);
+      await perform(jobId);
+      expect((await jobRow(jobId))?.status).toBe("disabled");
+      expect(postsFor(guildId)).toEqual([]);
+      expect((await stored(guildId))?.version).toBe("2.0.0");
+    });
+
+    test("two guilds each get their own post, once", async () => {
+      const [left, right] = [reserved(4), reserved(9)];
+      await changelogGuild(left);
+      // The right guild was told about 2.1.0 already, so its post lists only what's newer.
+      await changelogGuild(right, "2.1.0");
+      const jobs = [
+        await announceChangelog(db.pool, left),
+        await announceChangelog(db.pool, right),
+      ];
+      for (const jobId of jobs) await perform(jobId);
+      for (const guildId of [left, right]) {
+        expect(postsFor(guildId).map((post) => post.key)).toEqual([
+          `changelog:${guildId}:${project.version}`,
+        ]);
+        expect((await stored(guildId))?.version).toBe(project.version);
+      }
+      const [only] = postsFor(right);
+      expect(only?.message.kind === "changelog" && only.message.view).toMatchObject({
+        previous: "2.1.0",
+        notes: [{ version: project.version, note: "The running release." }],
+      });
+    });
   });
 });
