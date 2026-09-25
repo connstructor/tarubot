@@ -190,7 +190,7 @@ Issue [#32](https://github.com/deconfined/tarubot/issues/32) asked for a command
 
 **Durability.** Unlike `/issue` (see the issue-reporting "Durability" paragraph), a suggestion is **not** saved first and delivered by a job. It is posted in the interaction the router already deferred, so there is no table, job or migration; a GitHub outage refuses the suggestion, and an idea is easy to retype. A shutdown lets a post that is already at GitHub finish and record its audit row before the writer lease is handed over (within the shutdown deadline), and refuses submissions that haven't started ("TaruBot is restarting right now.").
 
-**Accepted risks.** A public post is permanent once GitHub's events, archives and notification emails copy it. Anyone who verifies a character gets Guest, so a few alternate accounts could use up the deployment's daily limit; the owner accepts this and moderates after posting. Names typed freely, IDs deliberately split with visible separators, and IPv6 addresses can't be recognised.
+**Accepted risks.** A public post is permanent once GitHub's events, archives and notification emails copy it. Anyone who verifies a character gets Guest, so a few alternate accounts could use up the deployment's daily limit; the owner accepts this and moderates after posting. Names typed freely and IDs deliberately split with visible separators can't be recognised, and only non-global IPv6 addresses (link-local, unique-local, loopback) are left, which don't identify a connection publicly.
 
 **Command surface.** `/suggest` brings the command surface to 21 roots and 45 paths (AC-23). It must be registered after the deployment. Release order (agreed 2026-09-25): #29 as 2.24.3, #30 as 2.25.0, #32 as 2.26.0, then #31 as 2.27.0.
 

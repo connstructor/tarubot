@@ -469,6 +469,114 @@ describe("the hostile review's bypasses", () => {
   });
 });
 
+/**
+ * Global IPv6 addresses (2000::/3, @deconfined's rule): the first group is exactly four hex digits
+ * starting with 2 or 3, and there are at least two colons. `publicly` expects one idea's cleaned
+ * text, its title and the fenced text in its body all to read `expected`, and the whole to pass
+ * the final check.
+ */
+describe("global IPv6 addresses", () => {
+  const publicly = (raw: string, expected: string) => {
+    const { text, title, body } = pipeline(raw);
+    expect({ raw, text, title, body }).toEqual({
+      raw,
+      text: expected,
+      title: expected,
+      body: suggestionBody(expected, "2.26.0"),
+    });
+    expect(() => assertPublic(text, title, body)).not.toThrow();
+  };
+
+  test("an address goes whole, with `::`, in either case and with an IPv4 tail", () => {
+    for (const address of [
+      "2001:db8::1",
+      "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+      "2001:db8:85a3::8a2e:370:7334",
+      // Two colons without compression, and `::` at the end.
+      "2001:db8:1:2",
+      "2001::",
+      "2001:db8::",
+      // Upper-case hex, and the top of 2000::/3.
+      "2001:DB8::1",
+      "2A0B:4D07:1::1",
+      "3fff:ffff::1",
+      // An IPv4 tail in place of the last two groups.
+      "2001:db8::192.0.2.1",
+      "2001:db8::ffff:192.0.2.1",
+      "2001:db8:1:2:3:4:192.0.2.1",
+    ])
+      publicly(`server ${address} please`, "server [link removed] please");
+  });
+
+  test("brackets, a port and whatever follows a host go with it", () => {
+    for (const form of [
+      "[2001:db8::1]",
+      "[2001:db8::1]:8080",
+      "[2001:db8::1]:8080/admin",
+      "[2001:db8::1]/x",
+      "[2001:db8::1]?x=1",
+      "[2001:db8::1]#top",
+      // Unbracketed, a path (a prefix length too), query or fragment; a port needs brackets.
+      "2001:db8::1/admin",
+      "2001:db8::/32",
+      "2001:db8::1?x=1",
+      "2001:db8::1#top",
+      // A user part, and the scheme rules, which already took any host after them.
+      "user@[2001:db8::1]:22",
+      "admin:pw@2001:db8::1",
+      "http://[2001:db8::1]:8080/",
+      "https:[2001:db8::1]/x",
+    ])
+      publicly(`see ${form} please`, "see [link removed] please");
+  });
+
+  test("punctuation, a label and Chinese or Japanese text around it keep their words", () => {
+    for (const [raw, expected] of [
+      ["my IPv6:2001:db8::1 today", "my IPv6:[link removed] today"],
+      ["my ip:2001:db8::1 today", "my ip:[link removed] today"],
+      ["it is (2001:db8::1), thanks", "it is ([link removed]), thanks"],
+      ["it is 2001:db8::1. Thanks", "it is [link removed]. Thanks"],
+      ['use "2001:db8::1" or `2001:db8::2`', 'use "[link removed]" or `[link removed]`'],
+      ["it is 2001:db8::1: the server", "it is [link removed]: the server"],
+      ["サーバーは2001:db8::1です", "サーバーは[link removed]です"],
+      ["地址是2001:db8::1。谢谢", "地址是[link removed]。谢谢"],
+    ])
+      publicly(raw ?? "", expected ?? "");
+  });
+
+  test("times, ratios, one-colon forms, scopes and non-global addresses stay", () => {
+    for (const phrase of [
+      "meet at 10:30:00 or 20:30:00, until 23:59:59",
+      "a 16:9 screen, like the 2024:01 build",
+      "use std::vector or a::b here",
+      "link-local fe80::1, unique-local fd00::1 and [fe80::1]:8080",
+      "loopback ::1 and 1234:5678::1",
+      "remind at <t:2000000000:R> please",
+    ])
+      publicly(phrase, phrase);
+  });
+
+  test("an address inside a longer run of letters, digits or colons stays", () => {
+    // Touching a letter or digit, or a longer first group.
+    for (const phrase of [
+      "server ip2001:db8::1 now",
+      "server 2001:db8::1x now",
+      "server \u{E9}2001:db8::1 now",
+      "server 12001:db8::1 now",
+      "server abcd2001:db8::1 now",
+      "server 2001:db8::12345 now",
+      // After a group and a colon or `::`, or before more colons: not a whole run.
+      "server fe80::2001:db8:1 now",
+      "server fe80:0:2001:db8::1 now",
+      "server 1234:5678:2001:db8::1 now",
+      "server 2001:db8::1:: now",
+      "server 2001::1::2 now",
+      "use Foo2001::bar or std::2001:db8 here",
+    ])
+      publicly(phrase, phrase);
+  });
+});
+
 describe("normalising", () => {
   test("controls, bidi and zero-width characters, and tag characters are removed", () => {
     expect(normalise("a\u{0}b\u{7}c\u{1B}d\u{7F}e\u{85}f\u{9F}g")).toBe("abcdefg");
@@ -553,6 +661,7 @@ describe("the fixed point", () => {
       "@@@ <<<>>> :1> </ run:1>",
       "see пример.рф/путь, 例子.中国/路径 or discord。gg/x, then 招待はこちらdiscord.gg/y",
       'see discord.gg./x, discord%2Egg/y, i\u{2764}.ws/z, ip192.168.1.10 and "a b"@c.de',
+      "see 2001:db8::1, [2001:db8::2]:8080/x, ip:2001:db8::192.0.2.1 and fe80::1",
     ])
       expect(clean(cleaned(raw))).toBe(cleaned(raw));
   });
@@ -608,6 +717,31 @@ describe("the fixed point", () => {
       expect({ text: text.slice(0, 8), fast }).toEqual({ text: text.slice(0, 8), fast: true });
     }
   });
+
+  test("long colon and hex runs clean in linear time", () => {
+    // IPv6 shapes: whole runs of groups, runs a letter at the end forces the rule to give up on
+    // (so every group is backtracked), `::` runs, labels and brackets before groups, 5-digit
+    // groups, and IPv4 tails. Each takes under 1 ms warm; the bound catches only a regression.
+    const fill = (unit: string) => unit.repeat(Math.ceil(1000 / unit.length)).slice(0, 1000);
+    for (const text of [
+      fill("2001:"),
+      `${fill("2001:abcd:").slice(0, 999)}x`,
+      `${fill("2001:1:").slice(0, 999)}x`,
+      fill("2001::"),
+      fill("::"),
+      fill("2:"),
+      fill("x:2001:1:"),
+      fill("[2001:1:"),
+      fill("abcde:2001:1:"),
+      fill("2001:1.1."),
+      fill("ip:2001::1 "),
+    ]) {
+      const started = performance.now();
+      clean(text);
+      const fast = performance.now() - started < 250;
+      expect({ text: text.slice(0, 8), fast }).toEqual({ text: text.slice(0, 8), fast: true });
+    }
+  });
 });
 
 /** mulberry32: a tiny seeded generator, so the fuzz is repeatable without a dependency. */
@@ -654,6 +788,11 @@ describe("seeded fuzz", () => {
       ...["\\", ":/", "%2E", "%41", "\u{2764}", "0x7f", "\u{3099}", "\u{20E3}", '"', "a:b@"].map(
         (fragment) => () => fragment,
       ),
+      // IPv6 pieces: global and non-global first groups, compression, brackets, a port, an IPv4
+      // tail and a label.
+      ...["2001:", "3FFF:", "db8", "::", ":1", "[", "]:443", "fe80", ".0.2.1", "ip:"].map(
+        (fragment) => () => fragment,
+      ),
       ...["\u{AD}", "\u{200B}", "\u{180B}", "\u{17B4}", "\u{E0041}", "\u{FF20}", "\u{D800}"].map(
         (fragment) => () => fragment,
       ),
@@ -679,6 +818,8 @@ describe("seeded fuzz", () => {
       }
       expect(points(title)).toBeLessThanOrEqual(TITLE_LIMIT);
       expect(body.split("```")).toHaveLength(3);
+      // The cleaned text is a fixed point, and passes the final check.
+      expect(clean(text)).toBe(text);
       expect(() => assertPublic(text, title, body)).not.toThrow();
       checked++;
     }

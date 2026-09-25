@@ -21,7 +21,10 @@
  *   real punctuation or digits in their own scripts (`·` in Catalan, `։` in Armenian, `٠`);
  * - IPv4 addresses written as one to three decimal numbers (`127.1`, `192.168.1`, `2130706433`),
  *   which can't be told apart from ratings, times, version ranges and counts (`3.5/5`, `10.30:00`,
- *   `2.26.0/2.27.0`, `24/7`), and IPv6 addresses.
+ *   `2.26.0/2.27.0`, `24/7`);
+ * - non-global IPv6 addresses (link-local `fe80::1`, unique-local `fd00::1`, loopback `::1`), which
+ *   don't identify a connection publicly, and a global one inside a longer run of letters, digits
+ *   or colons (`ip2001:db8::1`, `2001:db8::1x`, `2001:db8::1::`), which reads as part of it.
  */
 import type { Actor } from "./policy.js";
 import { BODY_LIMIT, fenced, SECRET_PATTERNS } from "./reports.js";
@@ -196,6 +199,27 @@ const IP_DOT = `(?:${DOT}|。)`;
  * `1.2.3.4567` stays, and not a lone `v` before it, so a version (`v1.2.3.4`) stays too.
  */
 const IPV4 = String.raw`(?<!\d|\bv)(?:${IP_PART}(?:${IP_DOT}${IP_PART}){3}|(?:${IP_PART}${IP_DOT}){0,2}0x[\da-f]{0,8}(?:${IP_DOT}${IP_PART}){0,2}(?=${AFTER_HOST}))(?!\d)`;
+/**
+ * A letter or digit that an IPv6 address can't touch: any script's, except Han, Hiragana and
+ * Katakana, which are written without spaces (`サーバーは2001:db8::1です` keeps its words).
+ */
+const V6_EDGE = String.raw`[[\p{L}\p{N}]--${CJK}]`;
+/** A group of an IPv6 address after the first: one to four hex digits. */
+const V6_GROUP = String.raw`[\da-f]{1,4}`;
+/**
+ * A global unicast IPv6 address (2000::/3), by @deconfined's rule: the first group is exactly four
+ * hex digits and starts with 2 or 3, and the address has at least two colons. After the first group
+ * comes either one `::`, with groups on either side of it (`2001::`, `2001:db8::1`), or at least two
+ * more groups (`2001:db8:0:1`); an IPv4 tail may replace the last groups (`2001:db8::192.0.2.1`).
+ * Times (`10:30:00`), ratios (`16:9`), one-colon forms (`2024:01`), scopes (`std::vector`) and
+ * non-global addresses (`fe80::1`, `fd00::1`, `::1`, `1234:5678::1`) don't fit, and stay.
+ * The address must be a whole run of groups and colons: it doesn't touch a letter or digit
+ * (V6_EDGE), follow a group and a colon (`fe80:0:2001:db8::1`) or `::` (`fe80::2001:db8:1`), or run
+ * on into another group; a word before a colon (`IPv6:`, `ip:`) is a label, not a group, and a
+ * colon with no group after it is punctuation. Each colon starts at most one group and a run can
+ * start only at its beginning, so a run is scanned about once.
+ */
+const IPV6 = String.raw`(?<!${V6_EDGE}|(?<!${V6_EDGE})[\da-f]{1,4}:|::)[23][\da-f]{3}(?:(?::${V6_GROUP})*::(?:${V6_GROUP}(?::${V6_GROUP})*)?|(?::${V6_GROUP}){2,})(?:(?<=:\d{1,3})(?:\.\d{1,3}){3})?(?!${V6_EDGE}|:[\da-f:])`;
 /** Rule f, as PUBLIC_PATTERNS describes it. */
 const LINK = new RegExp(
   [
@@ -203,7 +227,7 @@ const LINK = new RegExp(
     String.raw`\b(?:https?|wss?|ftp|file):[\/\\]*(?=${HOST_CHAR}|[%\[])\S*`,
     String.raw`www(?:\.(?=\S)|。(?=${WORD}))\S*`,
     String.raw`${USER}(?:(?:${WORD_RUN}|${CJK_RUN})${HOST_END}|\blocalhost(?:${DOT}|。)?${AFTER_HOST})\S*`,
-    String.raw`${USER}${IPV4}(?:${AFTER_HOST}\S*)?`,
+    String.raw`${USER}(?:${IPV4}|\[${IPV6}\]|${IPV6})(?:${AFTER_HOST}\S*)?`,
   ].join("|"),
   "giv",
 );
@@ -228,11 +252,13 @@ const EMAIL = new RegExp(
  *   path, or a query or fragment (`?x`, `#x`), scheme or not, so `discord.gg/…`, `discord.gg?…`,
  *   `discord。gg/…`, `discord.gg./…`, `discord.com/channels/…`, `example.com:8080`,
  *   `пример.рф/путь`, `例子.中国/路径` and Lodestone character pages all go; and any IPv4 address
- *   (see IPV4), with whatever port, path, query or fragment follows it. A `user@` or `user:password@` in front goes with the link, so an email
- *   address or credentials followed by a path or query can't leave a name or password behind. A
- *   bare domain (`discord.gg`) or `localhost` carries no ID and stays, and so does a word before a
- *   colon or a question mark ("Node.js: …", "Node.js?"). Links run before the credential shapes,
- *   so a ping URL or a URL with credentials goes whole.
+ *   (see IPV4) or global IPv6 address, bare or in brackets (see IPV6; `2001:db8::1`,
+ *   `[2001:db8::1]:8080`), with whatever port, path, query or fragment follows it. A `user@` or
+ *   `user:password@` in front goes with the link, so an email address or credentials followed by a
+ *   path or query can't leave a name or password behind. A bare domain (`discord.gg`) or
+ *   `localhost` carries no ID and stays, and so does a word before a colon or a question mark
+ *   ("Node.js: …", "Node.js?"). Links run before the credential shapes, so a ping URL or a URL
+ *   with credentials goes whole.
  * - Email addresses in any script, with a quoted local part or any of the characters RFC 5322
  *   allows unquoted (`"john doe"@…`, `hunt!er2@…`), and `.` or `。` between the domain's labels;
  *   then the issue reporter's credential shapes (never the deployment's own secret values); then
