@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -93,6 +93,25 @@ The cutover went live on App Platform, and then every profile refresh failed the
 **Production host.** Production runs on a Linode Docker host with `docker-compose.production.yml`: the published GHCR bot and Nodestone images, pinned to one release, with no bundled database. It is attached to the owner-provisioned Linode managed PostgreSQL cluster `tarubot-pgsql` (PostgreSQL 18, database and user `tarubot`) over verified TLS on its direct port. Connection pools are never used. The single-writer lease (MIG-13), the production tool profile, and the rule that every provider, token and registration change is a separately authorized owner step all stand unchanged. Updates are a `git pull`, a pinned image tag, and Compose. A release with a migration stops the bot first and takes an independent backup ([docs/HOSTING.md](docs/HOSTING.md)).
 
 **App Platform.** The App Platform spec, its phases and their CI validation stay in the repository as the record and as a fallback, in case DigitalOcean's addresses are admitted again. DEPLOY-DO-01 remains satisfied, but it no longer describes production. The approved GitHub deploy-workflow proposal targeted App Platform. It is on hold until it is re-planned for the Compose host.
+
+### Approved Lodestone amendments (2026-09-24)
+
+After the move to Linode, `/sync status` filled with failed profile refreshes, and several failures were for the same character. The investigation found that the scheduler retried failing profiles about every 30 seconds, which deepened the Lodestone's rate limiting; that a deleted character's 404 was retried like an outage; and that a private profile was reported as the Lodestone being down. The owner asked that a character the Lodestone no longer has be unclaimed automatically ("if a character ID isn't found, we should force unclaim/delete it") and decided to "require two 404s before unlinking, just in case". Release 2.17.0 implements these decisions. They refine SYNC-03, NODE-08 and NODE-10.
+
+**Deleted characters (the two-404 rule).** When the Lodestone answers "not found" for a linked character's profile refresh, TaruBot records that first 404 and changes nothing else. A second 404 at least one hour later ends every active link to the character, in every guild:
+- each unlink is audited as automatic, with no human actor;
+- the owner is reconciled: a main character is cleared for a nickname restore, and access is recomputed from the remaining links and grants;
+- officers get a notice naming the character and the owner.
+
+Any sighting in between voids the first 404: a profile read, a private profile, or a roster listing. History is kept: the character row and the ended link remain.
+
+**Private profiles.** The Lodestone answers a private character profile with its own "Access Restricted" page (HTTP 403). That is an answer about the character, not an outage. Links stay, and the refresh waits for the normal profile interval instead of retrying. An interactive command that reads the profile says it is private and asks for it to be made public. An edge or firewall block, such as DigitalOcean's, is still an outage.
+
+**Throttling.** After a Lodestone 429, the sidecar refuses every start for one shared cooldown instead of letting each queued request reach the Lodestone. The cooldown is 15 seconds, doubles on each consecutive 429 up to 5 minutes, and gives way to a longer Retry-After of up to 15 minutes. A rate-limited job waits out the cooldown without spending an attempt. A throttled roster crawl is recorded for `/sync status` but sends officers no "degraded" notice. The sidecar's own full capacity is reported as `busy`, not as Lodestone throttling.
+
+**Refresh pacing.** Scheduled profile refreshes of one character are at least an hour apart, whatever the outcome. Periodic scheduling never pulls a job that is backing off forward, and a startup catch-up is spread over a minute.
+
+**Release order.** 2.17.0 ships these decisions with migration `007_profile_checks.sql`. The GitHub issue reporter and `/issue` follow in 2.18.0, then OPS-10/OPS-11.
 
 ## 1. Purpose and interpretation
 

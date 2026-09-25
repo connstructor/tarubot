@@ -23,10 +23,23 @@ export const requestSchema = z.discriminatedUnion("operation", [
   }),
 ]);
 export type ParseRequest = z.infer<typeof requestSchema>;
-/** Useful transport categories survive worker boundaries without leaking HTML or credentials. */
+/**
+ * Useful transport categories survive worker boundaries without leaking HTML or credentials.
+ * `rate_limited` is the Lodestone throttling (the sidecar then refuses new starts for the cooldown
+ * in retryAfter); `busy` is the sidecar's own capacity, which clears within a second; `private` is a
+ * character page the Lodestone answers with its "Access Restricted" page (a private profile).
+ */
 export const failureSchema = z.object({
   ok: z.literal(false),
-  code: z.enum(["not_found", "unavailable", "rate_limited", "invalid_response", "incomplete"]),
+  code: z.enum([
+    "not_found",
+    "unavailable",
+    "rate_limited",
+    "busy",
+    "private",
+    "invalid_response",
+    "incomplete",
+  ]),
   retryAfter: z.number().nonnegative().default(0),
 });
 /** Successful envelopes deliberately make no claim about the raw parser's data shape. */

@@ -289,6 +289,25 @@ This was E1's DevBot validation of the cutover release.
 
 Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover)). DevBot stays on 2.16.0 until 2.16.1 is published. 2.16.1 changes no bot behavior.
 
+### 2.16.1 rollout — 2026-09-24
+
+- PR #17 merged as `1655adc`. Before the merge, the Claude review found that HOSTING.md's migration procedure never pulled or pinned the new release; `b556b28` fixed it. Publish run 36072940021 published `tarubot:2.16.1` (`sha256:6b6986b6…`, revision label `1655adc`) and `tarubot-nodestone:2.16.1` (`sha256:6820f4c5…`), and promoted `latest`.
+- **Production first** ([HOSTING.md](HOSTING.md)):
+  - The host clone was on a detached HEAD at `c812d4d` from the move, so `git pull --ff-only` refused ("not currently on a branch") before anything restarted. It now tracks `main` (`git checkout -B main --track origin/main`).
+  - The tracked Compose file differs from the copy set aside at the move only in its header comment.
+  - `up -d --wait` at 23:38:59 UTC was healthy at 23:39:16. Readiness was 200, with database, writer lease, Discord and effects true and no public test responses.
+  - The only warn lines were profile `unavailable` retries: the private-profile storm that 2.17.0 fixes.
+- **Post-cutover tools:**
+  - From the operator clone at 2.16.1, `preview.js --late-joiners` read the Linode database under the production profile. The new guard accepted port 27520. It reported `completed` with 0 late joiners.
+  - The planned profile retries were unnecessary. 76 of the 79 characters behind the failed rows had been refreshed by later scheduler jobs, and the other three are the deleted and private characters.
+  - `retry.js` can't retry profile jobs anyway: they carry no guild.
+- **DevBot:**
+  - Readiness was 200 with all 465 jobs succeeded. The writer stopped at 23:40:20 UTC: exit 0, no connections, no lease holders, head 006.
+  - The backup `.cache/backups/tarubot_dev-before-2.16.1-1655adc.dump` is 117,054 bytes, sha256 `644beefe353e3a49a50a5adc6080996120d8152c58395210e239a43d6c61c615`. It was restored into `tarubot_dev_restore_test`, where `check-restore.js` matched all 26 tables at 006. The copy was dropped.
+  - There was no migration. 2.16.1 was healthy at 23:40:52, with readiness 200, one lease holder (acquired in 1 ms) and info log lines only.
+  - `commands.js list` exited 0 and clean: 19 commands in the dev guild, none global.
+  - The plan was posted at 23:40:39 as message `1552827138057441331`, "Session: 2.16.1 Linode hosting", with fields of 336, 432 and 186 characters and no mentions.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

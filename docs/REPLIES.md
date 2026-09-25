@@ -82,7 +82,7 @@ Status markers describe saved, queued and delivered work. They are plain Unicode
 | `• SAVED` | Committed to the database | (the transaction, not a job) |
 | `… QUEUED` | Waiting for the worker | `queued` with no `last_error` |
 | `… IN PROGRESS` | A worker is running it | `running` |
-| `↻ WAITING` | A retry is scheduled | `queued` with a waiting code (`ordered`, `busy`, `cooldown`, `superseded`, `lease_lost`: "next"), or any other code ("retrying") |
+| `↻ WAITING` | A retry is scheduled | `queued` with a waiting code (`ordered`, `busy`, `cooldown`, `superseded`, `lease_lost`, and since 2.17.0 `rate_limited`: "next"), or any other code ("retrying") |
 | `! BLOCKED` | An officer must fix a permission or setting | `blocked` |
 | `‖ PAUSED` | Discord changes are off until activation, or for the deployment | `disabled` |
 | `✗ FAILED` | Stopped and will not retry | `failed` (`dm_blocked` adds "the decision still stands") |
@@ -300,6 +300,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | upstream.lodestone_incomplete | `incomplete` | upstream | Lodestone results incomplete | Lodestone results incomplete | warning | warn |
 | upstream.lodestone_page | `invalid_response` | upstream | Unexpected Lodestone page | Unexpected Lodestone page | warning | warn |
 | upstream.biography | `invalid_response` {biography} | upstream | Couldn't read the biography | Couldn't read the biography | warning | warn |
+| upstream.private_profile | `private_profile` | upstream | Lodestone profile is private | Lodestone profile is private: "Make the character's Lodestone profile public, then try again." `/verify` adds "Your token is still valid." (2.17.0) | warning | warn |
 | upstream.member_list | `incomplete` {member_list} | upstream | Couldn't read the member list | Couldn't read the member list | warning | warn |
 | upstream.join_context | `incomplete` {join_context} | upstream | Couldn't read your join details | Couldn't read your join details; "Couldn't read that member's join details" when it names someone else (an `/assign` or `/officer` target, an applicant) | warning | warn |
 | upstream.discord | `unavailable` {api}; raw Discord 429 and 5xx | upstream | Discord isn't responding | Discord isn't responding | warning | warn |

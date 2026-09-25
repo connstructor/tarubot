@@ -70,6 +70,8 @@ export const FAILURE_CATEGORY = {
   unavailable: "upstream",
   incomplete: "upstream",
   invalid_response: "upstream",
+  // The character exists, but its owner made the Lodestone profile private, so it can't be read.
+  private_profile: "upstream",
   // Discord permissions, hierarchy or a deleted channel/role prevent the change.
   blocked: "blocked",
   // Discord effects are paused (awaiting activation or disabled for the deployment).
@@ -127,9 +129,12 @@ export function effectsPaused(deploymentEnabled: boolean): Failure {
 }
 
 /**
- * Codes a queued job waits on instead of failing: ordering, locks, cooldowns, superseding inputs
- * or a lost lease. Shared by jobOutcome and the job-line presenter so both agree on "waiting".
- * Typed as strings because jobOutcome also tests its own non-Failure classifications against it.
+ * Codes a queued job waits on instead of failing: ordering, locks, cooldowns, superseding inputs,
+ * a lost lease, or Lodestone throttling. Shared by jobOutcome and the job-line presenter so both
+ * agree on "waiting". Throttling is not the job's fault (2.17.0): a rate-limited job waits out the
+ * sidecar's cooldown (its retryAfter) without spending an attempt, so a burst of 429s no longer ends
+ * work as failed. Typed as strings because jobOutcome also tests its own non-Failure
+ * classifications against it.
  */
 export const WAITING_CODES: ReadonlySet<string> = new Set<string>([
   "ordered",
@@ -137,6 +142,7 @@ export const WAITING_CODES: ReadonlySet<string> = new Set<string>([
   "cooldown",
   "superseded",
   "lease_lost",
+  "rate_limited",
 ] as const satisfies readonly FailureCode[]);
 
 /**

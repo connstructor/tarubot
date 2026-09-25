@@ -8,6 +8,7 @@ import {
   type Actor,
 } from "../domain/policy.js";
 import { effectsPaused } from "../domain/failures.js";
+import { PROFILE_RETRY_SECONDS } from "../domain/profiles.js";
 import { Failure, json, nickname, normalized } from "../domain/values.js";
 import { desiredRankRole, rankAccess } from "./rank-policy.js";
 import { ensureUser, orm } from "../infrastructure/postgres/database.js";
@@ -18,6 +19,7 @@ import {
   exists,
   getTableColumns,
   gt,
+  inArray,
   isNull,
   lt,
   lte,
@@ -32,6 +34,7 @@ import {
   enqueue,
   layoutGuildRoles,
   reconcileUser,
+  scheduleJob,
   secureGuildChannels,
   type Job,
 } from "../jobs/queue.js";
@@ -344,10 +347,16 @@ export class Synchronization {
           .update(t.freeCompanies)
           .set({ last_error: error instanceof Failure ? error.code : "acquisition_failed" })
           .where(eq(t.freeCompanies.id, fcId));
-        const guilds = await this.app.db.orm
-          .select({ id: t.guilds.id })
-          .from(t.guilds)
-          .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)));
+        // Lodestone throttling and a full sidecar are waits since 2.17.0: the job retries after the
+        // cooldown without spending attempts, so a notice per wait would repeat for as long as the
+        // throttling lasts. /sync status still shows the FC's last_error.
+        const throttled = error instanceof Failure && ["rate_limited", "busy"].includes(error.code);
+        const guilds = throttled
+          ? []
+          : await this.app.db.orm
+              .select({ id: t.guilds.id })
+              .from(t.guilds)
+              .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)));
         for (const guild of guilds)
           await enqueue(
             this.app.db.pool,
@@ -907,12 +916,11 @@ export class Synchronization {
         ),
       );
     for (const fc of companies)
-      await enqueue(
+      await scheduleJob(
         this.app.db.pool,
         "roster",
         `roster:${fc.id}`,
         { fcId: fc.id },
-        null,
         null,
         Math.random() * 30,
       );
@@ -928,6 +936,8 @@ export class Synchronization {
               sql`now()-${this.app.config.PROFILE_INTERVAL_SECONDS}*interval '1 second'`,
             ),
           ),
+          // A profile queued, failed, found private or missing within its window waits it out.
+          or(isNull(t.characters.profile_retry_at), lte(t.characters.profile_retry_at, sql`now()`)),
           exists(
             db
               .select({ id: t.links.id })
@@ -952,10 +962,29 @@ export class Synchronization {
         ),
       )
       .limit(100);
-    for (const character of characters)
-      await enqueue(this.app.db.pool, "profile", `profile:${character.id}`, {
-        characterId: character.id,
-      });
+    if (characters.length) {
+      // However the job ends (success clears the stamp; failure, a crash or a lost lease leave it),
+      // the scheduler queues this character again no sooner than PROFILE_RETRY_SECONDS from now.
+      await db
+        .update(t.characters)
+        .set({ profile_retry_at: sql`now()+${PROFILE_RETRY_SECONDS}*interval '1 second'` })
+        .where(
+          inArray(
+            t.characters.id,
+            characters.map((character) => character.id),
+          ),
+        );
+      // Jitter spreads a startup catch-up of up to 100 profiles over a minute instead of one burst.
+      for (const character of characters)
+        await scheduleJob(
+          this.app.db.pool,
+          "profile",
+          `profile:${character.id}`,
+          { characterId: character.id },
+          null,
+          Math.random() * 60,
+        );
+    }
     await db.delete(t.challenges).where(lt(t.challenges.expires_at, sql`now()-interval '7 days'`));
     await db
       .update(t.jobs)

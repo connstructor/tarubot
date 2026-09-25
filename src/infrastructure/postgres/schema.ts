@@ -46,6 +46,10 @@ export const characters = pgTable("characters", {
   dc: text("dc"),
   fc_hint: externalId("fc_hint"),
   profile_at: instant("profile_at"),
+  /** The scheduler queues no profile refresh before this (migration 007). */
+  profile_retry_at: instant("profile_retry_at"),
+  /** The first Lodestone 404 of the two-404 unlink rule; cleared by any later sighting. */
+  profile_missing_at: instant("profile_missing_at"),
 });
 export const users = pgTable("users", { id: externalId("id").primaryKey() });
 export const guilds = pgTable("guilds", {

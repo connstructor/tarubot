@@ -1,20 +1,21 @@
 {
-  "title": "Session: 2.16.1 Linode hosting",
-  "objective": "Bring the repository in line with where production runs since 2026-09-24: a Linode Docker host with Linode managed PostgreSQL. 2.16.1 changes no bot behavior. It adds the production Compose file and lets the production tools reach the Linode cluster, so the post-cutover retries and the late-joiner check can run. No migration and no command change.",
+  "title": "Session: 2.17.0 Lodestone hardening",
+  "objective": "Check 2.17.0 on DevBot, then production: migration 007 applies cleanly, profile refreshes are paced hourly, private profiles and deleted characters stop failing, Lodestone 429s pause the sidecar instead of failing jobs, and a character that answers 404 twice, an hour apart, is unlinked with an officer notice. No command change.",
   "user": [
-    "Approve the rollout, then run `/version`: 2.16.1, linked to deconfined/tarubot.",
-    "Run `/config show`, `/characters` and `/sync status` as usual; each answers as it did on 2.16.0.",
-    "In Woven Souls, finish W14 and W15 when convenient: the smoke checks, then `/config officer_rank`, then `/config roles officer … adopt_holders:false`."
+    "Approve the rollout, then run `/version`: 2.17.0, linked to deconfined/tarubot.",
+    "Run `/sync status`: no new failed profile lines keep appearing for the same character.",
+    "Optional: set a test character's Lodestone profile to private, then run `/verify` or `/claim` on it; the reply reads \"Lodestone profile is private\".",
+    "In Woven Souls, after the production rollout plus an hour, confirm the officer notice that Vanessa Wolfe (35999242) was unlinked."
   ],
   "assistant": [
-    "Roll DevBot out with the owner's go-ahead: stop, back up, check the restore at 006, deploy 2.16.1 (no migration, no re-registration).",
-    "On the production host: `git pull`, pin `TARUBOT_IMAGE_TAG=2.16.1`, then `up -d --wait`; check readiness and one lease holder.",
-    "From the operator clone, run `preview.js --late-joiners` and retry the failed profile jobs.",
-    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "Roll out DevBot with the owner's go-ahead: stop, back up, restore check at 006, rehearse migration 007 on the restore copy, migrate, start 2.17.0.",
+    "Check readiness, one lease holder, the sidecar's `lodestone` health field, and `characters.profile_retry_at` stamps after the first scheduler pass.",
+    "Deploy production per HOSTING.md's migration procedure: pull and pin 2.17.0, stop, gate and back up, migrate, start.",
+    "Watch the three known IDs: 35999242 records a first 404, then unlinks an hour later; 13746792 and 51218446 complete as private."
   ],
   "bot": [
-    "Run compiled 2.16.1 on schema 006, unchanged from 2.16.0.",
-    "Keep answering undeclared command shapes with the stale card.",
+    "Run compiled 2.17.0 on schema 007.",
+    "Queue each character's profile refresh at most hourly, wait out Lodestone cooldowns, treat private profiles as answers, and unlink a character only after two 404s an hour apart.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

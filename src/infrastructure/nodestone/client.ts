@@ -2,7 +2,7 @@
 import { decode } from "html-entities";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import type { FailureDetail } from "../../domain/failures.js";
+import type { FailureCode, FailureDetail } from "../../domain/failures.js";
 import { Failure, id, normalized } from "../../domain/values.js";
 import { responseSchema, type ParseRequest } from "./protocol.js";
 
@@ -24,7 +24,25 @@ const RESOURCE_CODES: ReadonlySet<string> = new Set([
   "unavailable",
   "incomplete",
   "invalid_response",
+  "private_profile",
 ]);
+/** Sidecar wire codes as catalog codes: only a private profile is renamed. */
+export const WIRE_CODES = {
+  not_found: "not_found",
+  unavailable: "unavailable",
+  rate_limited: "rate_limited",
+  busy: "busy",
+  private: "private_profile",
+  invalid_response: "invalid_response",
+  incomplete: "incomplete",
+} as const satisfies Record<string, FailureCode>;
+/**
+ * Failures worth another attempt inside one request: a sidecar outage and the sidecar's own full
+ * capacity. The Lodestone's rate limit is not retried here (2.17.0): the sidecar refuses every
+ * start for the cooldown it returns, so an immediate retry only spends the deadline. The job queue
+ * waits that retryAfter without spending an attempt, and a command tells the user when to retry.
+ */
+const RETRYABLE: ReadonlySet<string> = new Set(["unavailable", "busy"]);
 /**
  * The approved not-found wording per page. It names only public Lodestone IDs, never a typed
  * search name, because the message also reaches logs and job diagnostics.
@@ -43,7 +61,12 @@ function notFoundMessage(input: ParseRequest): string {
  */
 function withResource(failure: Failure, input: ParseRequest): Failure {
   if (failure.detail || !RESOURCE_CODES.has(failure.code)) return failure;
-  const message = failure.code === "not_found" ? notFoundMessage(input) : failure.message;
+  const message =
+    failure.code === "not_found"
+      ? notFoundMessage(input)
+      : failure.code === "private_profile" && input.operation === "profile"
+        ? `The Lodestone profile for character ID ${input.id} is private.`
+        : failure.message;
   return new Failure(failure.code, message, failure.retryAfter, resourceOf(input));
 }
 
@@ -264,8 +287,9 @@ export class Nodestone {
     this.shutdown.abort();
   }
   /**
-   * Stream-bound responses and retry only transport/rate-limit failures with shared cancellation.
-   * A not-found, outage, incomplete or invalid failure names the page the operation read.
+   * Stream-bound responses and retry only sidecar outages and capacity waits, with shared
+   * cancellation. A not-found, private, outage, incomplete or invalid failure names the page the
+   * operation read.
    */
   async request(
     input: ParseRequest,
@@ -317,8 +341,10 @@ export class Nodestone {
         const result = responseSchema.parse(raw);
         if (result.ok) return result.data;
         throw new Failure(
-          result.code,
-          `Lodestone ${result.code.replaceAll("_", " ")}.`,
+          WIRE_CODES[result.code],
+          result.code === "busy"
+            ? "The Nodestone sidecar is busy."
+            : `Lodestone ${result.code.replaceAll("_", " ")}.`,
           result.retryAfter,
         );
       } catch (error) {
@@ -333,10 +359,7 @@ export class Nodestone {
             : error instanceof z.ZodError || error instanceof SyntaxError
               ? new Failure("invalid_response", "Nodestone returned an invalid response.")
               : new Failure("unavailable", "Nodestone is unavailable.");
-        if (
-          !["unavailable", "rate_limited"].includes(failure.code) ||
-          attempt === this.limits.LODESTONE_ATTEMPTS - 1
-        )
+        if (!RETRYABLE.has(failure.code) || attempt === this.limits.LODESTONE_ATTEMPTS - 1)
           throw failure;
         await delay(
           Math.min(

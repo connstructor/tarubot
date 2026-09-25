@@ -1,5 +1,6 @@
 /** Private Nodestone HTTP service with bounded workers, real transport throttling, and cancellation. */
 import { z } from "zod";
+import { LodestoneGate } from "./gate.js";
 import { revisionsSchema, UpstreamMonitor } from "./upstreams.js";
 import {
   requestSchema,
@@ -26,9 +27,10 @@ const environment = z
 // Workers inherit this before importing Nodestone's import-time region constant.
 process.env.PAGE_REGION = environment.PAGE_REGION;
 let active = 0;
-let lastStart = Number.NEGATIVE_INFINITY;
-let startLock: Promise<void> = Promise.resolve();
-// Capacity and request-start pacing are process-wide across every parser worker.
+// Capacity, request-start pacing and the 429 cooldown are process-wide across every parser worker.
+const processGate = new LodestoneGate(environment.LODESTONE_START_MS);
+/** Structured service log; silent when imported by tests, console output in the running sidecar. */
+let log: (event: Record<string, unknown>) => void = () => {};
 let stopping = false;
 const shutdown = new AbortController();
 const fetchMessage = z.object({ type: z.literal("fetch"), url: z.string().url() });
@@ -37,6 +39,49 @@ let updates: UpstreamMonitor | undefined;
 export interface ExecutionOptions {
   transport?: (url: URL, options: RequestInit) => Promise<Response>;
   workerURL?: string;
+  /** A test's own gate, so one test's cooldown never leaks into another. */
+  gate?: LodestoneGate;
+}
+
+/** A character profile page: the only page a private profile's 403 can come from. */
+const CHARACTER_PAGE = /^\/lodestone\/character\/\d+\/?$/u;
+/** Error pages are small; reading more than this to classify one is never needed. */
+const ERROR_PAGE_BYTES = 65536;
+
+/** Seconds from a Retry-After header (delta seconds or an HTTP date), or 0 when absent/unusable. */
+function retryAfterSeconds(response: Response): number {
+  const retry = response.headers.get("retry-after");
+  const seconds = retry
+    ? /^\d+$/.test(retry)
+      ? Number(retry)
+      : Math.max(0, (Date.parse(retry) - Date.now()) / 1000)
+    : 0;
+  return Number.isFinite(seconds) ? seconds : 0;
+}
+
+/**
+ * Whether a 403 is the Lodestone's own "Access Restricted" page, which it serves for a private
+ * character profile. The page carries the Lodestone's error window markup (`ldst__error`) in every
+ * region's language; an edge or firewall block (such as the one DigitalOcean's addresses get) is a
+ * bare CDN error page without it, and stays `unavailable`. Reads at most ERROR_PAGE_BYTES.
+ */
+async function restricted(response: Response): Promise<boolean> {
+  const reader = response.body?.getReader();
+  if (!reader) return false;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const item = await reader.read();
+      if (item.done) break;
+      chunks.push(item.value);
+      size += item.value.byteLength;
+      if (size >= ERROR_PAGE_BYTES) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return /\bldst__error\b/u.test(Buffer.concat(chunks).toString("utf8"));
 }
 
 /** Execute only validated regional Lodestone URLs and bound the actual streamed network response. */
@@ -44,6 +89,7 @@ async function upstream(
   urlString: string,
   signal: AbortSignal,
   transport: NonNullable<ExecutionOptions["transport"]>,
+  gate: LodestoneGate,
 ): Promise<unknown> {
   const url = new URL(urlString);
   if (
@@ -52,47 +98,35 @@ async function upstream(
     !url.pathname.startsWith("/lodestone/")
   )
     return { type: "http_error", code: "invalid_response", retryAfter: 0 };
-  const previous = startLock;
-  // This promise mutex serializes starts, not entire requests: up to two requests can overlap.
-  let release = (): void => {};
-  startLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    // Monotonic time and a recheck prevent early timer wakeups from violating start spacing.
-    while (performance.now() < lastStart + environment.LODESTONE_START_MS) {
-      signal.throwIfAborted();
-      await Bun.sleep(Math.ceil(lastStart + environment.LODESTONE_START_MS - performance.now()));
-    }
-    signal.throwIfAborted();
-    lastStart = performance.now();
-  } finally {
-    release();
-  }
+  // While the Lodestone is throttling us, refuse locally with the remaining cooldown.
+  const cooling = await gate.admit(signal);
+  if (cooling > 0) return { type: "http_error", code: "rate_limited", retryAfter: cooling };
   try {
     const response = await transport(url, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(environment.LODESTONE_TIMEOUT_MS)]),
       redirect: "error",
     });
-    if (!response.ok) {
-      const retry = response.headers.get("retry-after");
-      const seconds = retry
-        ? /^\d+$/.test(retry)
-          ? Number(retry)
-          : Math.max(0, (Date.parse(retry) - Date.now()) / 1000)
-        : 0;
+    if (response.status === 429) {
+      // Close the gate for every request, not just this one; retryAfter is the whole cooldown.
+      const cooldown = gate.throttled(retryAfterSeconds(response));
+      // Throttled jobs wait quietly (debug), so the sidecar says once per 429 that the gate closed.
+      log({ event: "lodestone_throttled", ...gate.status(), cooldownSeconds: cooldown });
       await response.body?.cancel();
-      return {
-        type: "http_error",
-        code:
-          response.status === 404
-            ? "not_found"
-            : response.status === 429
-              ? "rate_limited"
-              : "unavailable",
-        retryAfter: Number.isFinite(seconds) ? seconds : 0,
-      };
+      return { type: "http_error", code: "rate_limited", retryAfter: cooldown };
+    }
+    gate.answered();
+    if (!response.ok) {
+      const retryAfter = retryAfterSeconds(response);
+      const code =
+        response.status === 404
+          ? "not_found"
+          : response.status === 403 &&
+              CHARACTER_PAGE.test(url.pathname) &&
+              (await restricted(response))
+            ? "private"
+            : "unavailable";
+      await response.body?.cancel().catch(() => {});
+      return { type: "http_error", code, retryAfter };
     }
     const reader = response.body?.getReader();
     if (!reader) throw new Error("Missing body");
@@ -142,7 +176,12 @@ export async function execute(
         const network = fetchMessage.safeParse(event.data);
         if (network.success) {
           try {
-            const reply = await upstream(network.data.url, combined, options.transport ?? fetch);
+            const reply = await upstream(
+              network.data.url,
+              combined,
+              options.transport ?? fetch,
+              options.gate ?? processGate,
+            );
             if (!combined.aborted) worker.postMessage(reply);
           } catch {
             resolve({ ok: false, code: "unavailable", retryAfter: 0 });
@@ -162,6 +201,13 @@ export async function execute(
   }
 }
 
+/** Every parser slot is taken; a slot frees within a request's deadline, usually a second. */
+const busyResponse = () =>
+  Response.json({ ok: false, code: "busy", retryAfter: 1 }, { status: 429 });
+/** Shutting down: the client treats a 5xx as the sidecar being unavailable and retries. */
+const stoppingResponse = () =>
+  Response.json({ ok: false, code: "unavailable", retryAfter: 1 }, { status: 503 });
+
 /** Admit bounded validated operations; probes never acquire a Lodestone page. */
 export function serve(port = environment.PORT, options: ExecutionOptions = {}) {
   return Bun.serve({
@@ -169,18 +215,23 @@ export function serve(port = environment.PORT, options: ExecutionOptions = {}) {
     maxRequestBodySize: 4096,
     async fetch(request) {
       if (new URL(request.url).pathname === "/health")
-        return Response.json({ ready: !stopping, active, upstream: updates?.status() ?? null });
-      if (stopping || active >= environment.LODESTONE_CONCURRENCY) {
-        return Response.json({ ok: false, code: "rate_limited", retryAfter: 1 }, { status: 429 });
-      }
+        return Response.json({
+          ready: !stopping,
+          active,
+          lodestone: (options.gate ?? processGate).status(),
+          upstream: updates?.status() ?? null,
+        });
+      // A stopping sidecar is unavailable; a full one is `busy`, never the Lodestone's rate limit.
+      if (stopping) return stoppingResponse();
+      if (active >= environment.LODESTONE_CONCURRENCY) return busyResponse();
       if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/parse")
         return new Response("Not found", { status: 404 });
       const body: unknown = await request.json().catch(() => null);
       const input = requestSchema.safeParse(body);
       if (!input.success) return new Response("Invalid operation", { status: 400 });
       // Parsing the request body yields; reserve capacity only after that await.
-      if (stopping || active >= environment.LODESTONE_CONCURRENCY)
-        return Response.json({ ok: false, code: "rate_limited", retryAfter: 1 }, { status: 429 });
+      if (stopping) return stoppingResponse();
+      if (active >= environment.LODESTONE_CONCURRENCY) return busyResponse();
       active++;
       try {
         return Response.json(await execute(input.data, request.signal, options), {
@@ -194,6 +245,7 @@ export function serve(port = environment.PORT, options: ExecutionOptions = {}) {
 }
 // Importing this module in tests exposes the factory without opening a production listener.
 if (import.meta.main) {
+  log = (event) => console.log(JSON.stringify({ service: "nodestone", ...event }));
   const revisions = revisionsSchema.parse(
     await Bun.file(new URL("./upstream-revisions.json", import.meta.url)).json(),
   );

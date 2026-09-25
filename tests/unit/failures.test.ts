@@ -57,6 +57,7 @@ const EXPECTED: Record<FailureCode, FailureCategory> = {
   unavailable: "upstream",
   incomplete: "upstream",
   invalid_response: "upstream",
+  private_profile: "upstream",
   blocked: "blocked",
   disabled: "paused",
   idempotency_conflict: "unexpected",

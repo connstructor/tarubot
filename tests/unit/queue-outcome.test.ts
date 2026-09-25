@@ -33,6 +33,22 @@ test("expected waits stay queued at debug level without consuming attempts", () 
   expect(jobOutcome(new Failure("ordered", "Earlier entry pending.", 30), 1).delaySeconds).toBe(30);
 });
 
+test("Lodestone throttling waits out the sidecar's cooldown without spending an attempt", () => {
+  // Before 2.17.0 a 429 spent an attempt and eight of them failed the job (the retry storm).
+  expect(jobOutcome(new Failure("rate_limited", "Lodestone rate limited.", 45), 8)).toMatchObject({
+    code: "rate_limited",
+    status: "queued",
+    waiting: true,
+    category: "wait",
+    level: "debug",
+    delaySeconds: 45,
+  });
+  // A 429 without a cooldown still waits at least a second rather than spinning.
+  expect(jobOutcome(new Failure("rate_limited", "Lodestone rate limited."), 1).delaySeconds).toBe(
+    1,
+  );
+});
+
 test("a continuous wait streak beyond the stale threshold escalates to warn", () => {
   for (const code of ["ordered", "busy", "cooldown", "superseded"] as const) {
     const wait = new Failure(code, "Still waiting.");
@@ -130,12 +146,13 @@ test("a recipient with DMs disabled ends failed but only at info", () => {
 });
 
 test("the catalog's waiting codes keep their 2.12.3 job outcomes", () => {
-  // Moving the set into failures.ts must not change which codes wait: the same five, no others.
+  // The 2.12.3 five, plus Lodestone throttling since 2.17.0, and no others.
   expect([...WAITING_CODES].sort()).toEqual([
     "busy",
     "cooldown",
     "lease_lost",
     "ordered",
+    "rate_limited",
     "superseded",
   ]);
   for (const code of ["ordered", "busy", "cooldown", "superseded"] as const)

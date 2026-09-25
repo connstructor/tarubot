@@ -7,7 +7,7 @@ import {
   type ParseRequest,
 } from "../../src/infrastructure/nodestone/protocol.js";
 import { Failure } from "../../src/domain/values.js";
-import { Nodestone } from "../../src/infrastructure/nodestone/client.js";
+import { Nodestone, WIRE_CODES } from "../../src/infrastructure/nodestone/client.js";
 
 // Real bundled workers have slower cold starts in cross-architecture image builds.
 const workerTestTimeout = 30000;
@@ -51,7 +51,8 @@ async function parse(
       worker.postMessage(requestSchema.parse(input));
     });
     const response = responseSchema.parse(result);
-    if (!response.ok) throw new Failure(response.code, response.code, response.retryAfter);
+    if (!response.ok)
+      throw new Failure(WIRE_CODES[response.code], response.code, response.retryAfter);
     return z.record(z.string(), z.unknown()).parse(response.data);
   } finally {
     worker.terminate();
@@ -135,13 +136,17 @@ describe("pinned source-built Nodestone under Bun", () => {
   test(
     "transport categories and retry metadata survive the parser boundary",
     async () => {
-      for (const code of ["not_found", "rate_limited", "unavailable"]) {
+      // 2.17.0 adds a private profile (the catalog's private_profile) to the categories.
+      for (const code of ["not_found", "rate_limited", "unavailable", "private"] as const) {
         await expect(
           parse(
             { operation: "fc", id: fcId },
             { code, retryAfter: code === "rate_limited" ? 7 : 0 },
           ),
-        ).rejects.toMatchObject({ code, retryAfter: code === "rate_limited" ? 7 : 0 });
+        ).rejects.toMatchObject({
+          code: WIRE_CODES[code],
+          retryAfter: code === "rate_limited" ? 7 : 0,
+        });
       }
     },
     workerTestTimeout,
@@ -198,6 +203,65 @@ describe("Lodestone failures name the page they concern", () => {
     } finally {
       adapter.stop();
       await server.stop(true);
+    }
+  });
+});
+
+describe("client retry policy (2.17.0)", () => {
+  /** A scripted sidecar: each request takes the next envelope; the count shows retries. */
+  function sidecar(script: unknown[]) {
+    let calls = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const input = requestSchema.parse(await request.json());
+        const next = script[Math.min(calls++, script.length - 1)];
+        if (next !== "profile") return Response.json(next, { status: 429 });
+        return Response.json({
+          ok: true,
+          data: {
+            ID: input.operation === "profile" ? input.id : "1",
+            Name: "Example Character",
+            World: "Diabolos",
+            DC: "Crystal",
+            FreeCompany: null,
+          },
+        });
+      },
+    });
+    return { server, calls: () => calls };
+  }
+
+  test("a busy sidecar is retried; the Lodestone's rate limit and a private profile are not", async () => {
+    const busy = sidecar([{ ok: false, code: "busy", retryAfter: 1 }, "profile"]);
+    const throttled = sidecar([{ ok: false, code: "rate_limited", retryAfter: 30 }, "profile"]);
+    const hidden = sidecar([{ ok: false, code: "private", retryAfter: 0 }, "profile"]);
+    const adapters = [busy, throttled, hidden].map(
+      ({ server }) => new Nodestone(`http://localhost:${server.port}`),
+    );
+    const [first, second, third] = adapters;
+    if (!first || !second || !third) throw new Error("Missing adapter");
+    try {
+      // The sidecar's own capacity clears within a second, so one request absorbs it.
+      await expect(first.profile("99000001")).resolves.toMatchObject({ id: "99000001" });
+      expect(busy.calls()).toBe(2);
+      // The sidecar refuses every start for the cooldown: fail fast with it as retryAfter, so the
+      // queue waits it out instead of spending the request deadline on refusals.
+      await expect(second.profile("99000001")).rejects.toMatchObject({
+        code: "rate_limited",
+        retryAfter: 30,
+      });
+      expect(throttled.calls()).toBe(1);
+      // Private is an answer about the character, with the approved wording and its resource.
+      await expect(third.profile("99000001")).rejects.toMatchObject({
+        code: "private_profile",
+        message: "The Lodestone profile for character ID 99000001 is private.",
+        detail: { kind: "resource", resource: "character", id: "99000001" },
+      });
+      expect(hidden.calls()).toBe(1);
+    } finally {
+      for (const adapter of adapters) adapter.stop();
+      for (const { server } of [busy, throttled, hidden]) await server.stop(true);
     }
   });
 });

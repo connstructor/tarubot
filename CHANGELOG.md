@@ -1,6 +1,50 @@
 # Version history
 
-The current application version is **2.16.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.17.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.17.0 — Lodestone hardening: paced refreshes, private profiles, and the two-404 unlink
+
+After the move to Linode, `/sync status` filled with failed profile refreshes, several for the same character. In production, three characters produced 125 failed profile jobs in a few hours:
+- one deleted character: Vanessa Wolfe, 35999242, which answers 404;
+- two private profiles: 13746792 and 51218446, which answer 403 "Access Restricted".
+
+Every job for them failed, and the scheduler kept making more. 2.17.0 fixes the causes and adds the owner's decisions of 2026-09-24 (REQUIREMENTS.md "Approved Lodestone amendments"). It adds migration `007_profile_checks.sql`, so it needs the stopped-writer migration procedure. There are no command changes.
+
+- **The retry storm.** The 30-second scheduler re-queued every stale profile with `enqueue`. On conflict, that pulled a job that was backing off forward to now, so eight attempts took about 2.5 minutes, and a new job followed each failure.
+  - The scheduler now uses the new `scheduleJob`, which leaves an active job alone.
+  - It stamps `characters.profile_retry_at` an hour ahead for each character it queues, so a character is refreshed at most once an hour, however the job ends.
+  - A startup catch-up is spread over a minute. Rosters are scheduled the same way.
+- **Deleted characters: the two-404 rule.** A profile 404 now completes the job instead of failing it.
+  - The first 404 is recorded in `characters.profile_missing_at`.
+  - A 404 at least an hour later ends every active link to the character, in every guild, through the same `endLink` path as `/unclaim`. It clears a main character for a nickname restore, records member loss, and reconciles the owner.
+  - Each unlink is audited as `character.unlink` with a null actor and `automatic: "lodestone_not_found"`. Officers get an `officer.notify` naming the character and mentioning the owner, without a ping.
+  - Any sighting in between clears the mark: a profile read, a private profile, or a roster listing.
+- **Private profiles.** The sidecar recognizes the Lodestone's own "Access Restricted" page on a character page by its `ldst__error` markup, and reports it as `private`, which the bot reports as `private_profile`. Any other 403, such as DigitalOcean's edge block, stays `unavailable`.
+  - A private profile completes the refresh job and waits for the profile interval.
+  - Commands show a new reply, "Lodestone profile is private", which asks for the profile to be made public. `/verify` adds that the token is still valid.
+- **Throttling.**
+  - The sidecar's new `LodestoneGate` (`sidecar/gate.ts`) keeps the start spacing and adds a shared cooldown after a Lodestone 429. New starts are refused locally for 15 s, doubling on consecutive 429s up to 5 min, or for a longer Retry-After of up to 15 min. Any other answer resets the escalation.
+  - `/health` reports `lodestone: {cooldownSeconds, strikes}`, and each 429 logs one `lodestone_throttled` line.
+  - The client no longer retries `rate_limited`.
+  - `rate_limited` is now a waiting code: a throttled job waits out the cooldown without spending attempts, and shows as `↻ WAITING`.
+  - A full sidecar now answers `busy`, which the client retries, instead of pretending to be Lodestone throttling. A stopping sidecar answers 503.
+  - A throttled roster crawl still records `last_error` for `/sync status`, but no longer queues a "Lodestone synchronization is degraded" officer notice. A throttled crawl now retries until the cooldown lifts, so it would otherwise send one each time.
+- **Tests:**
+  - unit tests of the gate's spacing, cooldown, escalation, Retry-After bound and aborts;
+  - sidecar contract tests: private versus edge-block 403s, the gate refusing starts after a 429, and `busy` capacity;
+  - client contract tests: `busy` is retried; `rate_limited` and `private` are not;
+  - the waiting-code catalog and the job-line markers;
+  - the new reply in every audience;
+  - PostgreSQL tests: a throttled roster crawl records `last_error` without re-queuing the officer notice; `scheduleJob` never moves an active job; the scheduler's hourly pacing; the private outcome; the full two-404 sequence (first, repeat within the hour, a sighting that clears, confirmation, then the link, audit, main, reconciliation and notice); migration 007 over 006.
+- **Docs:**
+  - REQUIREMENTS.md: the Lodestone amendments;
+  - NODESTONE.md: the codes, gate and client retries;
+  - OPERATIONS.md: a new section on refreshes, private profiles and deleted characters, with a query;
+  - REPLIES.md: the new reply;
+  - HOSTING.md: the sidecar health check;
+  - PERSISTENCE.md, CONFIGURATION.md and SETUP.md: migration 007;
+  - CLAUDE.md;
+  - the 2.16.1 rollout records in DEV_GUILD.md and VERIFICATION.md.
 
 ## 2.16.1 — Production on a Linode Docker host
 
