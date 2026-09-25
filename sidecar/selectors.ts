@@ -45,6 +45,33 @@ interface Baseline {
   readonly files: Record<string, Record<string, unknown>>;
 }
 
+/**
+ * A downloaded file's text, read at most FILE_BYTES into memory: a larger declared length is refused
+ * before reading, and the stream is cancelled as soon as it passes the limit, counted in bytes.
+ */
+async function boundedText(response: Response, path: string): Promise<string> {
+  const tooLarge = new Error(`${path} exceeds the size limit.`);
+  if (Number(response.headers.get("content-length")) > FILE_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw tooLarge;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const item = await reader.read();
+    if (item.done) break;
+    size += item.value.byteLength;
+    if (size > FILE_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge;
+    }
+    chunks.push(item.value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Whether a node is one selector definition rather than a group of them. */
 function isDefinition(node: unknown): boolean {
   return typeof node === "object" && node !== null && "selector" in node;
@@ -131,7 +158,9 @@ export class SelectorStore {
    * sidecar doesn't fall back to the bundled selectors until the next check. The set the pointer
    * names must still be there and pass the same validation as a download: adopting a missing or
    * damaged one would report it live while workers quietly used the bundled copy, and activate()
-   * would never fetch it again. Returns why a pointer was not adopted, or undefined.
+   * would never fetch it again. A rejected pointer is removed, because workers read it without these
+   * checks: without it they load the bundled copy the store then reports. Returns why a pointer was
+   * not adopted, or undefined.
    */
   async restore(): Promise<string | undefined> {
     let pointer: { file?: unknown; revision?: unknown; activatedAt?: unknown };
@@ -162,8 +191,13 @@ export class SelectorStore {
       };
       return undefined;
     } catch (error) {
-      // The bundled selectors stay active; the first check downloads HEAD again.
-      return error instanceof Error ? error.message : "unreadable";
+      // The bundled selectors stay active, for workers too; the first check downloads HEAD again.
+      // A pointer that can't be removed is reported rather than stopping the sidecar from starting.
+      const reason = error instanceof Error ? error.message : "unreadable";
+      return rm(`${this.directory}/active.json`, { force: true }).then(
+        () => reason,
+        () => `${reason} The pointer could not be removed.`,
+      );
     }
   }
 
@@ -188,8 +222,7 @@ export class SelectorStore {
         await response.body?.cancel();
         throw new Error(`Downloading ${path} failed (${response.status}).`);
       }
-      const text = await response.text();
-      if (text.length > FILE_BYTES) throw new Error(`${path} exceeds the size limit.`);
+      const text = await boundedText(response, path);
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -205,17 +238,24 @@ export class SelectorStore {
     // Workers read active.json whole; a rename replaces it atomically.
     const pointer = `${this.directory}/active.json.${process.pid}.tmp`;
     await writeFile(pointer, JSON.stringify({ file, revision, activatedAt }));
+    const replaced =
+      this.active.source === "upstream" ? `selectors-${this.active.revision}.json` : undefined;
     await rename(pointer, `${this.directory}/active.json`);
+    // The rename made the set live for new workers, so it is the active one from here on, whatever
+    // the cleanup below does.
+    this.active = { ...this.active, revision, source: "upstream", activatedAt };
     // Keep the new set and the one it replaced: a worker reads the pointer, then the set it names,
     // so one that read the old pointer just before the rename must still find the old set. Older
     // sets go: activations are at least one check interval (five minutes or more) apart, and a
-    // worker lives no longer than its request deadline.
-    const replaced =
-      this.active.source === "upstream" ? `selectors-${this.active.revision}.json` : undefined;
-    for (const name of await readdir(this.directory))
-      if (name.startsWith("selectors-") && name !== file && name !== replaced)
-        await rm(`${this.directory}/${name}`, { force: true });
-    this.active = { ...this.active, revision, source: "upstream", activatedAt };
+    // worker lives no longer than its request deadline. Cleanup is best effort: a leftover set is
+    // harmless, and the next activation tries again.
+    try {
+      for (const name of await readdir(this.directory))
+        if (name.startsWith("selectors-") && name !== file && name !== replaced)
+          await rm(`${this.directory}/${name}`, { force: true });
+    } catch {
+      // Unremovable old sets stay until the next activation.
+    }
     return revision;
   }
 }

@@ -3,7 +3,7 @@
  * activates it for new parser workers, or keeps the active set when it can't.
  */
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SelectorStore, validateSelectorFile } from "../../sidecar/selectors.js";
 
@@ -37,8 +37,15 @@ afterEach(async () => {
   directories = [];
 });
 
-/** A store over a fresh directory, with a fake GitHub serving `served` at any commit. */
-async function store(served: Record<string, unknown>, status = 200) {
+/**
+ * A store over a fresh directory, with a fake GitHub serving `served` at any commit, or answering
+ * every request with `answer`.
+ */
+async function store(
+  served: Record<string, unknown>,
+  status = 200,
+  answer?: () => Promise<Response>,
+) {
   const root = await mkdtemp(`${tmpdir()}/selectors-test-`);
   directories.push(root);
   const baselineFile = `${root}/baseline.json`;
@@ -46,6 +53,7 @@ async function store(served: Record<string, unknown>, status = 200) {
   const requests: string[] = [];
   const fetcher = async (url: string) => {
     requests.push(url);
+    if (answer) return answer();
     const path = url.split(/\/[0-9a-f]{40}\//u)[1] ?? "";
     return path in served
       ? new Response(JSON.stringify(served[path]), { status })
@@ -148,33 +156,84 @@ test("a restart adopts a saved set only when it is still there and valid", async
   const { store: live, restart, directory, requests } = await store(baseline.files);
   await live.activate(NEW);
   const set = `${directory}/selectors-${NEW}.json`;
+  const active = `${directory}/active.json`;
   const saved = await readFile(set, "utf8");
+  const pointer = await readFile(active, "utf8");
+  // Save a set and its pointer as a previous run would have left them.
+  const leave = async (setText: string, pointerText = pointer) => {
+    await writeFile(set, setText);
+    await writeFile(active, pointerText);
+  };
+  // Workers read the pointer without the store's checks, so a rejected one must be gone: they then
+  // load the bundled copy the store reports.
+  const pointerKept = () => Bun.file(active).exists();
   // The pointer survived but its set did not: the bundled set runs and says so, and the next
   // check downloads the revision again instead of treating it as already active.
   await rm(set);
   const missing = restart();
   expect(await missing.restore()).toContain("ENOENT");
   expect(missing.status()).toMatchObject({ revision: OLD, source: "bundled" });
+  expect(await pointerKept()).toBe(false);
   requests.length = 0;
   expect(await missing.activate(NEW)).toBe(NEW);
   expect(requests).toHaveLength(2);
   // A damaged set, or one whose file lost a column, isn't adopted either.
-  await writeFile(set, "{");
+  await leave("{");
   expect(await restart().restore()).toContain("JSON");
+  expect(await pointerKept()).toBe(false);
   const damaged = JSON.parse(saved);
   damaged.files["profile/character.json"] = { NAME: { selector: ".x" } };
-  await writeFile(set, JSON.stringify(damaged));
+  await leave(JSON.stringify(damaged));
   const lost = restart();
   expect(await lost.restore()).toContain("lost CLASSJOB_ICONS");
   expect(lost.status().source).toBe("bundled");
+  expect(await pointerKept()).toBe(false);
   // Nor a pointer naming a different set than its revision's.
-  await writeFile(set, saved);
-  const pointer = JSON.parse(await readFile(`${directory}/active.json`, "utf8"));
-  await writeFile(`${directory}/active.json`, JSON.stringify({ ...pointer, revision: LATER }));
+  await leave(saved, JSON.stringify({ ...JSON.parse(pointer), revision: LATER }));
   expect(await restart().restore()).toBe("The pointer names another set.");
-  // With nothing saved at all, there is nothing to report.
-  await rm(`${directory}/active.json`);
+  expect(await pointerKept()).toBe(false);
+  // A valid one is adopted and stays.
+  await leave(saved);
   expect(await restart().restore()).toBeUndefined();
+  expect(await pointerKept()).toBe(true);
+  // With nothing saved at all, there is nothing to report.
+  await rm(active);
+  expect(await restart().restore()).toBeUndefined();
+});
+
+test("a failed cleanup doesn't hide an activation that already went live", async () => {
+  const { store: live, directory } = await store(baseline.files);
+  await live.activate(NEW);
+  // An old set that can't be removed: a directory, which rm refuses.
+  await mkdir(`${directory}/selectors-${"9".repeat(40)}.json`);
+  expect(await live.activate(LATER)).toBe(LATER);
+  expect(live.status()).toMatchObject({ revision: LATER, source: "upstream" });
+  expect(JSON.parse(await readFile(`${directory}/active.json`, "utf8")).revision).toBe(LATER);
+});
+
+test("a selector file over the size limit is refused without reading it into memory", async () => {
+  // A declared length over the limit is refused before reading.
+  const declared = await store({}, 200, async () => {
+    return new Response("{}", { headers: { "content-length": String(600 * 1024) } });
+  });
+  await expect(declared.store.activate(NEW)).rejects.toThrow("exceeds the size limit");
+  // Without one, the read stops just past 512 KiB (8 chunks of 64 KiB), not at the 2 MiB end.
+  let pulled = 0;
+  const chunk = new Uint8Array(64 * 1024).fill(32);
+  const streamed = await store({}, 200, async () => {
+    return new Response(
+      new ReadableStream({
+        pull(controller) {
+          pulled += 1;
+          if (pulled > 32) controller.close();
+          else controller.enqueue(chunk);
+        },
+      }),
+    );
+  });
+  await expect(streamed.store.activate(NEW)).rejects.toThrow("exceeds the size limit");
+  expect(pulled).toBeLessThan(12);
+  expect(streamed.store.status().revision).toBe(OLD);
 });
 
 test("activation keeps the set it replaced, so a worker that just read the old pointer finds it", async () => {
