@@ -84,18 +84,7 @@ Verification always requests biography data through a new operation, independent
 
 ## Settings
 
-| Setting | Default | Scope |
-| --- | --- | --- |
-| `LODESTONE_REGION` | `na` | `na`, `eu`, `fr`, `de`, or `jp`: the Lodestone the bot reads (the sidecar's `PAGE_REGION` until 2.21.0) |
-| `LODESTONE_CONCURRENCY` | 2 | Parses at once; range 1–4. More requests wait for a slot |
-| `LODESTONE_START_MS` | 1,000 | Minimum spacing between actual request starts, process-wide |
-| `LODESTONE_TIMEOUT_MS` | 15,000 | One Lodestone fetch |
-| `LODESTONE_BODY_BYTES` | 2,000,000 | Maximum streamed page size |
-| `LODESTONE_REQUEST_TIMEOUT_MS` | 35,000 | One attempt: waiting for a slot and the gate, fetching and parsing |
-| `LODESTONE_JOB_TIMEOUT_MS` | 300,000 | A complete search or roster job, retries included |
-| `LODESTONE_ATTEMPTS` | 3 | Maximum attempts for transient outages |
-| `LODESTONE_MAX_PAGES` | 100 | Search/roster pagination bound |
-| `LODESTONE_SELECTOR_CHECK_SECONDS` | 900 | How often to check the selector repository's HEAD; minimum 300, or 0 to keep the bundled set (offline use) |
+The `LODESTONE_*` settings, with their defaults and ranges, are on the documentation site's [configuration page](../site/src/content/docs/deploy/configuration.md#lodestone) (moved there in 2.27.0). `client.ts` validates them at startup.
 
 2.21.0 removed `NODESTONE_URL`, `NODESTONE_RESPONSE_BYTES`, `NODESTONE_UPSTREAM_CHECK_SECONDS`, `NODESTONE_SELECTORS_DIR` and `PAGE_REGION`. Leftover values are ignored.
 

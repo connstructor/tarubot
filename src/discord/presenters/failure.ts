@@ -90,6 +90,7 @@ export const FAILURE_CONCEPTS = [
   "wait.claims_own",
   "wait.apply",
   "wait.issue",
+  "wait.suggest",
   "wait.retry",
   "eligible",
   "upstream.lodestone",
@@ -100,6 +101,7 @@ export const FAILURE_CONCEPTS = [
   "upstream.member_list",
   "upstream.join_context",
   "upstream.discord",
+  "upstream.github",
   "blocked",
   "paused",
   "unexpected",
@@ -189,6 +191,7 @@ export const EXAMPLES: Readonly<Record<string, readonly string[]>> = {
   ],
   unassign: ["/unassign member:123456789012345678 character:99000001 reason:Linked by mistake"],
   issue: ["/issue description:My Member role disappeared after I ran /main this morning."],
+  suggest: ["/suggest idea:Let officers schedule FC events and remind members an hour before."],
   characters: ["/characters member:123456789012345678"],
   "guest approve": ["/guest approve application:3f2b8c1e-5d4a-4b3c-9e2f-1a0b9c8d7e6f"],
   "guest deny": [
@@ -453,11 +456,19 @@ function forbiddenView(s: Situation): FailureView {
         fields: [
           {
             name: "How to qualify",
-            value: [
-              "1. Link your character with /claim and /verify, or ask an officer to /assign it.",
-              "2. Make sure that character is in the Free Company on the Lodestone.",
-              "3. Once a roster check confirms you, try again. /refresh can start one.",
-            ].join("\n"),
+            // /suggest (2.28.0) also accepts guests, so its steps lead to either role.
+            value: (s.scope.root === "suggest"
+              ? [
+                  "1. Link your character with /claim and /verify, or ask an officer to /assign it.",
+                  "2. TaruBot then gives you the Guest role, or the Member role once a roster check finds the character in the Free Company.",
+                  "3. An officer can also give you guest access with /guest grant.",
+                ]
+              : [
+                  "1. Link your character with /claim and /verify, or ask an officer to /assign it.",
+                  "2. Make sure that character is in the Free Company on the Lodestone.",
+                  "3. Once a roster check confirms you, try again. /refresh can start one.",
+                ]
+            ).join("\n"),
           },
         ],
       };
@@ -961,6 +972,14 @@ function waitView(s: Situation): FailureView {
       title: "You can send another report later",
       lead: s.message ?? "A report was sent a few minutes ago.",
     };
+  // 2.28.0: /suggest's own limits, and GitHub's rate limit on new issues, read alike.
+  if (limit === "suggest")
+    return {
+      ...base,
+      concept: "wait.suggest",
+      title: "You can suggest again later",
+      lead: s.message ?? "You sent a suggestion recently.",
+    };
   return {
     ...base,
     concept: "wait.retry",
@@ -975,8 +994,20 @@ function waitView(s: Situation): FailureView {
 
 // upstream ------------------------------------------------------------------------------------
 
-/** The Lodestone or Discord's API failed or returned something unusable. */
+/** The Lodestone, Discord's API or GitHub failed or returned something unusable. */
 function upstreamView(s: Situation): FailureView {
+  // 2.28.0: GitHub didn't confirm a /suggest post, which may exist anyway. The attempt counts
+  // toward the member's limits, so the card asks them to look before sending it again.
+  if (s.detail?.kind === "github")
+    return {
+      concept: "upstream.github",
+      tone: "warning",
+      title: "GitHub didn't confirm your suggestion",
+      lead: "TaruBot couldn't get an answer from GitHub, so your suggestion may or may not have been posted.",
+      tail: "Check TaruBot's GitHub issues before sending it again. This try counts toward your limits either way.",
+      unchanged: "unknown",
+      diagnostic: true,
+    };
   const discord = s.detail?.kind === "discord" ? s.detail.what : undefined;
   if (discord === "member_list")
     return {

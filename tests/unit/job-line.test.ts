@@ -232,7 +232,7 @@ describe("job markers and lines", () => {
     ).toBe("`– SKIPPED` changelog.post `1a2b3c4d` · <t:1790169000:R>\n> already announced");
   });
 
-  test("status posts (2.27.0) read as 'Status notice' for members, raw for officers", () => {
+  test("status posts (2.29.0) read as 'Status notice' for members, raw for officers", () => {
     expect(jobLabel("officer.status")).toBe("Status notice");
     const status = (overrides: Parameters<typeof job>[0]) =>
       jobLine(job({ kind: "officer.status", ...overrides }), VIEWERS.member);

@@ -18,6 +18,7 @@ import { project } from "../config/project.js";
 import { classifyFailure } from "../domain/failures.js";
 import type { Actor } from "../domain/policy.js";
 import {
+  after,
   AUTO_COMMENTS_PER_DAY,
   AUTO_ISSUES_PER_DAY,
   bounded,
@@ -35,6 +36,7 @@ import {
   REPEAT_COMMENT_SECONDS,
   type ReportSource,
   ROSTER_STALE_SECONDS,
+  secondsUntil,
   table,
   USER_REPORT_INTERVAL_SECONDS,
   when,
@@ -916,16 +918,6 @@ export class IssueReports {
 
 /** A saved report needs delivery: never delivered, or repeats past the hourly comment window. */
 const DUE = sql<boolean>`${t.issueReports.issue_number} IS NULL OR ${t.issueReports.posted_at} IS NULL OR ${t.issueReports.posted_at} <= now()-${REPEAT_COMMENT_SECONDS}*interval '1 second'`;
-
-/** Seconds from now until `seconds` after `from`, at least one. */
-function secondsUntil(from: Date, seconds: number): number {
-  return Math.max(1, Math.ceil((from.getTime() + seconds * 1000 - Date.now()) / 1000));
-}
-
-/** `seconds` after `from`. */
-function after(from: Date, seconds: number): Date {
-  return new Date(from.getTime() + seconds * 1000);
-}
 
 /** One line of user text for a title: no newlines, no GitHub @mentions, bounded. */
 function oneLine(text: string, limit: number): string {

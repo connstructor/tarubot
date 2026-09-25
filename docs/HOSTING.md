@@ -10,7 +10,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 | --- | --- |
 | Host | Linode `tarubot`: us-iad-2, 1 vCPU / 2 GB, Ubuntu 26.04. Reached as `tarubot@tarubot.deconfined.com`. The DNS zone is DNSSEC-signed and carries SSHFP records, so `ssh -o VerifyHostKeyDNS=yes` checks the host key. |
 | Bot | `~/tarubot` on the host: a clone of this repository, run with [`docker-compose.production.yml`](../docker-compose.production.yml). It has only `tarubot`: no bundled PostgreSQL, no parser sidecar (the Lodestone parser runs inside the bot since 2.21.0), the release pinned by `TARUBOT_IMAGE_TAG`, bounded logs. |
-| Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), and since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
+| Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below), and since 2.28.0 `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` (the TaruBot GitHub App behind `/suggest`; the key is a double-quoted multi-line PEM like the CA, and either one empty switches `/suggest` off; see [Public suggestions](#public-suggestions-the-github-app)). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
 | Database | Linode managed PostgreSQL `tarubot-pgsql`, PostgreSQL 18, us-iad-2. Use the **direct port 27520**, never the 27521 pool, which can't hold the writer lease. The login and database are `tarubot`, and `tarubot` owns the database. The admin login `akmadmin` is for provisioning only; the tool guard refuses it. The allow list holds the host and the operator's address. |
 | Settings copy | Encrypted with `age` in `~/tarubot-cutover/env-backups/` on the operator machine (2.23.0; see "Settings copy"). |
 | Backups | A daily encrypted dump at 04:30 UTC, and a settings copy, uploaded to Linode Object Storage `tarubot-backups` (2.24.0; see "Backups and recovery"). |
@@ -33,6 +33,8 @@ Readiness must report `database`, `writerLease`, `discord` and `effects` as true
 - `selectors` shows the live selector commit (`source: upstream`) or the bundled set.
 - `parsing` and `waiting` count parses running and requests waiting for a parse slot.
 
+**Retrying a job.** After fixing what a failed or blocked job needs, retry it from the operator machine with `prod dist/scripts/retry.js GUILD_ID JOB_ID` (`prod` is [MIGRATION.md](MIGRATION.md#e0-conventions) E0). What the tool retries and refuses is on the documentation site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#jobs-that-need-attention).
+
 ## Heartbeat
 
 Since 2.22.0 the bot pings a [healthchecks.io](https://healthchecks.io) check every five minutes while its readiness is fully green (database, writer lease, Discord). When the pings stop, healthchecks.io alerts the owner through Pushover and email. This catches what the issue reporter can't, because the reporter runs inside the bot: the host is down, the container is gone, the process hangs, or the bot has stayed unready.
@@ -53,6 +55,32 @@ tr -d '\r\n' < ~/tarubot-cutover/healthchecks-production.url | ssh tarubot@tarub
    chmod 600 "$tmp"; mv "$tmp" .env
    docker compose -f docker-compose.production.yml up -d --wait'
 ```
+
+## Public suggestions (the GitHub App)
+
+Since 2.28.0 (REQUIREMENTS.md "Approved public-suggestion amendments"), `/suggest idea:…` opens an issue in the **public** repository `deconfined/tarubot`, as the TaruBot GitHub App. It works only in Woven Souls (production's `deployments.production.guilds`), for holders of the bound Member or Guest role. What goes public, the limits, moderation and the failures members see are on the documentation site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#public-suggestions); this section holds the production-only parts. DevBot needs none of it: with `GITHUB_REPORTS_TOKEN` set it previews suggestions into the private `deconfined/tarubot-reports`, and it ignores the app settings.
+
+- **The app.** App ID 5076273, client ID in `GITHUB_APP_CLIENT_ID`. It has Issues write and Metadata read only, no webhook, and is installed on `deconfined/tarubot` alone. Its issues show the app's bot account as author.
+- **Key storage.** The private key lives only in the host's `.env` as `GITHUB_APP_PRIVATE_KEY` (a double-quoted multi-line PEM, like `DATABASE_CA_CERT`), and in the operator's `~/tarubot-cutover/` (mode 600). It is never pasted in chat and never goes into DevBot's `.env` or `docker-compose.yml`. After changing it, refresh the encrypted settings copy (`bun run host:env-backup`; see "Settings copy").
+- **Tokens.** Each post signs a nine-minute JWT with the key, looks up the app's installation on the repository and mints a one-hour installation token narrowed to that repository's issues. Nothing is cached or stored.
+- **Deploying it.** 2.28.0 is a restart with no migration. Put both settings in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA), refresh the settings copy, deploy, then register the commands with `register.js --global` (21 roots / 46 paths) and read them back. Probe the app (below) before announcing the command. Without the settings, `/suggest` tells members it is switched off.
+- **Rotation.** Generate a second key on the app's settings page, put it in the host's `.env`, recreate the bot with `docker compose -f docker-compose.production.yml up -d --wait` (a plain `docker compose restart` keeps the old `.env` values), check one `/suggest` or the probe below, then delete the old key on GitHub. There is no downtime.
+- **Probe (no issue created).** Inside the deployed image on the host, mint a token from the container's settings and POST an empty body to `/repos/deconfined/tarubot/issues`, printing only the status:
+
+  ```sh
+  docker compose -f docker-compose.production.yml run --rm --no-deps -T tarubot bun -e 'import {GitHubApp} from "./dist/src/infrastructure/github/app.js"; const app = new GitHubApp(process.env.GITHUB_APP_CLIENT_ID, process.env.GITHUB_APP_PRIVATE_KEY, "deconfined/tarubot"); const token = await app.installationToken(); const r = await fetch("https://api.github.com/repos/deconfined/tarubot/issues", {method: "POST", headers: {authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "TaruBot probe"}, body: "{}"}); console.log(r.status);'
+  ```
+
+  Expect `422` (the empty issue is rejected after authentication). A `configuration` failure or a 401, 403 or 404 means the key, the client ID or the installation is wrong.
+- **Off switch.** Empty `GITHUB_APP_CLIENT_ID` in the host's `.env`, then recreate the bot with `docker compose -f docker-compose.production.yml up -d --wait` in `~/tarubot` (no migration). A plain `docker compose restart` doesn't re-read `.env`, so it would leave `/suggest` on. Confirm with a `/suggest`: members are then told suggestions are switched off, and nothing is reported. On DevBot, `/suggest` is off whenever `GITHUB_REPORTS_TOKEN` is empty.
+- **Moderation and finding a sender.** Suggestions go up without review; the maintainers answer, label, close (for example as not planned), lock or delete them on GitHub. No issue names its sender, but each post leaves a private `audit` row. To find who sent issue `#N`, query the managed database from the operator machine with the `pg` helper (MIGRATION.md [E0 conventions](MIGRATION.md#e0-conventions), with the Linode values under [Updating to a release](#updating-to-a-release)). The site's `docker compose exec postgres` form needs the stock Compose file's bundled database, which production doesn't have.
+
+  ```sh
+  pg psql -d tarubot -c "SELECT guild_id, actor_id, event_at FROM audit WHERE action = 'suggestion.posted' AND target = '#N'"
+  ```
+
+  An attempt GitHub didn't confirm is recorded as `action = 'suggestion.unconfirmed'` with no target; match it by time against the issue's creation. Removing the member's Guest or Member role (a Guest with `/guest revoke`) ends their access to `/suggest`. The rest of the private record and the failures members see are on the site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#public-suggestions).
+- **Claude workflow.** `.github/workflows/claude.yml` never starts the agent for an issue whose body contains "Suggested in Discord with TaruBot". An `@claude` comment by a trusted account on a `from-discord` issue still starts it, and hands the member's text to the agent: treat that text as untrusted ([CI_CD.md](CI_CD.md#claude-review-and-assistant)).
 
 ## Updating to a release
 

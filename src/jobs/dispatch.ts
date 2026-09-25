@@ -152,7 +152,7 @@ export function dispatcher(
       await app.advanceChangelog(guild.id, changelog.from, project.version, null);
       return { skipped: "nothing for members", version: project.version };
     }
-    // Status posts (2.27.0): with no officer notifications channel nothing is saved for later
+    // Status posts (2.29.0): with no officer notifications channel nothing is saved for later
     // (owner decision 5), and the drop completes here, before the effects gate, so no job parks
     // just because the channel is unset. The lease fence comes first, as before every write.
     if (job.kind === "officer.status" && !guild.officer_notifications_channel_id) {

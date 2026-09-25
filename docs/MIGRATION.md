@@ -2,7 +2,7 @@
 
 > **Done 2026-09-24.** The cutover ran as written below and went live on App Platform at 22:02 UTC. Production then moved the same evening to a Linode Docker host with Linode managed PostgreSQL, because the Lodestone refuses DigitalOcean's addresses. See [the record](#record-of-the-2026-09-24-cutover). Operate production with [HOSTING.md](HOSTING.md). This runbook remains the record of the procedure. Its App Platform and `doadmin` steps describe the original target.
 
-This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14**, the "Approved launch amendments (2026-09-23)", and the "Approved reply-session amendments (2026-09-24)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [OPERATIONS.md](OPERATIONS.md#single-database-writer).
+This runbook moves the production guild `1036062273631952955` (linked FC `9232097761132958152`) from the legacy nextcord bot to TaruBot v2. It follows **MIG-12**, **MIG-13**, and **MIG-14**, the "Approved launch amendments (2026-09-23)", and the "Approved reply-session amendments (2026-09-24)" in [REQUIREMENTS.md](../REQUIREMENTS.md). Production runs on App Platform attached to the owner-provisioned Managed PostgreSQL cluster `tarubot-pg` (database and user `tarubot`); see [APP_PLATFORM.md](APP_PLATFORM.md). The single-writer lease and its `pg_locks` gate are in [the site's operations page](../site/src/content/docs/deploy/operations.md#single-database-writer).
 
 2.13.0 supplies the launch policy and the cutover tooling used below. **The cutover itself uses a published release at or above 2.16.0**: 2.14.0 replaces every JSON reply with the approved embeds, 2.15.0 ships the owner's reply-session decisions of 2026-09-24 (among them the guest-application switch this runbook relies on, the `unset_*` option names and `/officer reset` and `/guest reset`, with migration `006_guest_application_switch.sql`), and 2.16.0 adds the deployment safeguards: a migration guard that refuses pending migrations while a bot holds the writer lease, a schema re-check once a bot holds the lease, and the stale card for undeclared command shapes. Operational telemetry and officer alerts (OPS-10, OPS-11) follow in 2.17.0, after launch. `X.Y.Z` below is that release.
 
@@ -250,7 +250,7 @@ jq -n --slurpfile before work/discord-snapshot.json --slurpfile after work/role-
 
 Take the role IDs from `SELECT member_role_id, guest_role_id, officer_role_id, leader_role_id FROM guilds`. Officers resolve each difference explicitly through the commands above, never by hand-editing managed roles.
 
-Re-importing the legacy opening snapshot is never a post-activation recovery mechanism. Keep the dumps, snapshots, reports, and backups as immutable inputs. See [OPERATIONS.md](OPERATIONS.md) for backups, restore checks, and retries.
+Re-importing the legacy opening snapshot is never a post-activation recovery mechanism. Keep the dumps, snapshots, reports, and backups as immutable inputs. See [HOSTING.md](HOSTING.md#backups-and-recovery) for production backups, and the site's [operations](../site/src/content/docs/deploy/operations.md) and [monitoring](../site/src/content/docs/deploy/monitoring.md) pages for restore checks and retries.
 
 ## Record of the 2026-09-24 cutover
 

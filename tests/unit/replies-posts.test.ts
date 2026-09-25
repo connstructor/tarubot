@@ -5,7 +5,7 @@
  * same entry; the review message has one embed, disabled controls once decided and escaped answers;
  * the decision DM speaks to the applicant, with or without the server name; the update post
  * (2.25.0) lists at most ten releases without cutting anything and is byte-identical per view; the
- * officer status post (2.27.0) groups members by change and reason, names everyone a batch holds
+ * officer status post (2.29.0) groups members by change and reason, names everyone a batch holds
  * within its budget and guards the one case that can't fit; and the gateway sends each through
  * Discord's REST API with content '', allowed_mentions {parse: []} and the unchanged nonce keys,
  * while officer notices stay plain text.
@@ -472,7 +472,7 @@ describe("the decision DM", () => {
   });
 });
 
-describe("the officer status post (2.27.0)", () => {
+describe("the officer status post (2.29.0)", () => {
   /** A user ID for member n of a generated batch: 18 digits, like a Discord snowflake. */
   const user = (n: number) => String(100_000_000_000_000_000n + BigInt(n));
   /** n members who lost Member, each with one confirmed departure line when `departed`. */

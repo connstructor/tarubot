@@ -1,5 +1,5 @@
 /**
- * Officer status notices (2.27.0, issue #31; owner decisions of 2026-09-25, REQUIREMENTS.md
+ * Officer status notices (2.29.0, issue #31; owner decisions of 2026-09-25, REQUIREMENTS.md
  * "Approved status-notice amendments"): one post in the officer notifications channel about two
  * minutes after the first change, naming the members who gained or lost Member, Guest, Officer or
  * FC Leader and the linked characters that left the FC. The per-member state is on `guild_users`

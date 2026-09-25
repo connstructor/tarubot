@@ -83,7 +83,7 @@ export interface ChangelogPostView {
   readonly url: string;
 }
 /**
- * What an officer status post shows (2.27.0, issue #31): one frozen batch's entries in the order
+ * What an officer status post shows (2.29.0, issue #31): one frozen batch's entries in the order
  * they were frozen, and when the batch was frozen (the embed timestamp, ISO). Only stored values,
  * so a resend of the batch renders byte-identical JSON under its status:<batch> nonce key.
  */

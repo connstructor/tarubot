@@ -1,5 +1,5 @@
 /**
- * Officer status notices (2.27.0, issue #31; owner decisions of 2026-09-25, REQUIREMENTS.md
+ * Officer status notices (2.29.0, issue #31; owner decisions of 2026-09-25, REQUIREMENTS.md
  * "Approved status-notice amendments"): the per-member state behind the one post in the officer
  * notifications channel that lists gained or lost Member, Guest, Officer and FC Leader, and the
  * linked characters that left the FC. Pure: the application layer reads and writes the state on

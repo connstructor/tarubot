@@ -1,6 +1,7 @@
 /** Validate process configuration before startup creates any externally visible work. */
 import { z } from "zod";
 import { idSchema } from "../domain/values.js";
+import { project } from "./project.js";
 
 const schema = z.object({
   // Secrets are validated for presence/format but are never included in diagnostics.
@@ -31,7 +32,20 @@ const schema = z.object({
   GITHUB_REPORTS_REPO: z
     .string()
     .regex(/^[A-Za-z\d-]+\/[A-Za-z\d._-]+$/u, "owner/repository")
+    // Reports carry private diagnostics, so pointing them at TaruBot's public repository is a
+    // loud startup failure (2.28.0), never a silent leak.
+    .refine(
+      (repository) => repository.toLowerCase() !== project.repository.toLowerCase(),
+      "must be the private reports repository, not TaruBot's public one",
+    )
     .default("deconfined/tarubot-reports"),
+  // Public suggestions (2.28.0): the TaruBot GitHub App that opens /suggest issues in the public
+  // repository. Production only (/suggest); DevBot ignores both and previews into the reports
+  // repository. Either one empty switches /suggest off. The client ID isn't secret.
+  GITHUB_APP_CLIENT_ID: z.string().default(""),
+  // The app's private key: a PEM, quoted across lines like DATABASE_CA_CERT; production only. It
+  // isn't parsed at startup, so a bad key fails only /suggest (with a private report), never boot.
+  GITHUB_APP_PRIVATE_KEY: z.string().default(""),
   // Heartbeat (2.22.0): a healthchecks.io ping URL, pinged every five minutes while the bot is ready
   // so an outside check alerts when the pings stop. Empty turns it off (DevBot, CI).
   HEALTHCHECKS_PING_URL: z

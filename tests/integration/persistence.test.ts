@@ -18,6 +18,11 @@ import { capabilityMetrics } from "../../src/application/metrics.js";
 import { Service } from "../../src/application/service.js";
 import { GuildEvents } from "../../src/application/guild-events.js";
 import { IssueReports } from "../../src/application/issue-reports.js";
+import { Suggestions, type SuggestionTarget } from "../../src/application/suggestions.js";
+import { project } from "../../src/config/project.js";
+import { suggestionReply } from "../../src/discord/presenters/utility.js";
+import { SUGGESTION_HEADER } from "../../src/domain/suggestions.js";
+import { classifyFailure } from "../../src/domain/failures.js";
 import { RecentLogs } from "../../src/application/recent-logs.js";
 import { GitHubIssues, type IssueRef } from "../../src/infrastructure/github/issues.js";
 import {
@@ -56,7 +61,6 @@ import {
 } from "../../src/jobs/queue.js";
 import { dispatcher } from "../../src/jobs/dispatch.js";
 import { announceChangelog } from "../../src/jobs/queue.js";
-import { project } from "../../src/config/project.js";
 import { notesSince } from "../../src/domain/changelog.js";
 import { GuildAccess } from "../../src/application/guild-access.js";
 import { FakeGuildAccess } from "../fixtures/guild-access.js";
@@ -252,6 +256,8 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     HEALTH_PORT: 3000,
     GITHUB_REPORTS_TOKEN: "",
     GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
+    GITHUB_APP_CLIENT_ID: "",
+    GITHUB_APP_PRIVATE_KEY: "",
     HEALTHCHECKS_PING_URL: "",
   };
   const lodestone = new FakeLodestone();
@@ -4646,7 +4652,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
 
   test("the queue gives a run requeued for newer input a fresh attempt budget", async () => {
-    // Status posts (2.27.0) rely on this: a busy guild's post is requeued once per change.
+    // Status posts (2.29.0) rely on this: a busy guild's post is requeued once per change.
     const key = "queue:attempts:reset";
     const id = await enqueue(db.pool, "probe", key, {});
     const row = async () =>
@@ -7051,7 +7057,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await pinBoundary(fcId);
     // The running row is left to finish and counts as posted, so one recovery line is queued.
     // (If this send then fails and is retried, the degraded line can post after the recovery
-    // line: an accepted edge case, docs/OPERATIONS.md "Officer notices".)
+    // line: an accepted edge case, site/src/content/docs/deploy/monitoring.md "Officer notices".)
     expect((await notices(degraded))[1]).toMatchObject({
       id: sending.id,
       status: "running",
@@ -7128,6 +7134,387 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         [`officer:${leftId}:%`],
       ),
     ).toEqual([]);
+  });
+
+  // Public suggestions (2.28.0, issue #32) -----------------------------------------------------
+
+  /** Three guilds for /suggest: the allowlisted FC server, one outside the allowlist, and an
+   * allowlisted server with no configuration. Role IDs are the canary server's bound roles. The
+   * IDs sit above the officer-notice (…712–717) and changelog (…720–729) scenarios' guilds. */
+  const canaryGuild = "666666666666666731";
+  const foreignGuild = "666666666666666732";
+  const bareGuild = "666666666666666733";
+  const canaryFc = "9230000000000009901";
+  const CANARY_MEMBER_ROLE = "76001";
+  const CANARY_GUEST_ROLE = "76002";
+  const CANARY_OFFICER_ROLE = "76003";
+
+  /**
+   * A scripted suggestion target: records every create and every client() call, returns issue
+   * numbers 1, 2, …, and throws whatever a test queues for the next client() or create().
+   */
+  class FakeTarget implements SuggestionTarget {
+    creates: { title: string; body: string; labels: string[] }[] = [];
+    clients = 0;
+    next = 1;
+    clientFailures: unknown[] = [];
+    createFailures: unknown[] = [];
+    constructor(readonly repository = project.repository) {}
+    async client() {
+      this.clients++;
+      const failure = this.clientFailures.shift();
+      if (failure !== undefined) throw failure;
+      return {
+        create: async (title: string, body: string, labels: readonly string[]) => {
+          const thrown = this.createFailures.shift();
+          if (thrown !== undefined) throw thrown;
+          this.creates.push({ title, body, labels: [...labels] });
+          return { number: this.next++, state: "open" as const };
+        },
+      };
+    }
+  }
+
+  /** Suggestions against the real database, allowlisting the canary and the bare server. */
+  function suggestionHarness(target: FakeTarget | null = new FakeTarget()) {
+    const reports: string[] = [];
+    const suggestions = new Suggestions(
+      service,
+      target,
+      (_error, operation) => {
+        reports.push(operation);
+      },
+      [canaryGuild, bareGuild],
+    );
+    return { suggestions, target, reports };
+  }
+
+  /** A person in `guildId` holding `roleIds`, with no officer or manager flags unless given. */
+  const suggester = (userId: string, roleIds: string[], extra: Partial<Actor> = {}): Actor => ({
+    guildId: canaryGuild,
+    userId,
+    officer: false,
+    manageRoles: false,
+    roleIds,
+    ...extra,
+  });
+
+  /** The suggestion audit rows, oldest first. */
+  const suggestionRows = () =>
+    db.query<{
+      guild_id: string;
+      actor_id: string;
+      action: string;
+      target: string | null;
+      details: unknown;
+    }>(
+      "SELECT guild_id, actor_id, action, target, details FROM audit WHERE action LIKE 'suggestion.%' ORDER BY id",
+    );
+  const clearSuggestions = () => db.query("DELETE FROM audit WHERE action LIKE 'suggestion.%'");
+
+  /** Insert a suggestion audit row `ago` in the past, for the daily limits. */
+  const backdated = (userId: string, ago: string, action = "suggestion.posted") =>
+    db.query(
+      "INSERT INTO audit (guild_id, actor_id, action, target, details, event_at) VALUES ($1, $2, $3, '#0', '{}', now()-$4::interval)",
+      [canaryGuild, userId, action, ago],
+    );
+
+  /** A long enough idea, distinct per call so failures point at the right submission. */
+  const idea = (label: string) => `Suggestion ${label} for the TaruBot maintainers`;
+
+  test("/suggest setup: the allowlisted FC server, a foreign one, and an unconfigured one (2.28.0)", async () => {
+    await db.query(
+      "INSERT INTO free_companies (id, name, world) VALUES ($1, 'Canary FC', 'Diabolos')",
+      [canaryFc],
+    );
+    await db.query(
+      "INSERT INTO guilds (id, fc_id, member_role_id, guest_role_id, officer_role_id) VALUES ($1, $2, $3, $4, $5), ($6, NULL, '76101', '76102', '76103')",
+      [
+        canaryGuild,
+        canaryFc,
+        CANARY_MEMBER_ROLE,
+        CANARY_GUEST_ROLE,
+        CANARY_OFFICER_ROLE,
+        foreignGuild,
+      ],
+    );
+    await clearSuggestions();
+  });
+
+  test("/suggest posts only the cleaned idea and records who sent it (2.28.0 canary)", async () => {
+    const { suggestions, target } = suggestionHarness();
+    const member = suggester("300000000000000001", [CANARY_MEMBER_ROLE]);
+    const posted = await suggestions.submit(
+      member,
+      "<@333333333333333333> @claude #12 a@b.com https://discord.com/channels/1/2/3 na.finalfantasyxiv.com/lodestone/character/12345678/ 1234567890\u{AD}12345678",
+    );
+    expect(posted).toEqual({
+      number: 1,
+      url: "https://github.com/deconfined/tarubot/issues/1",
+      repository: "deconfined/tarubot",
+    });
+    expect(target?.creates).toHaveLength(1);
+    const [created] = target?.creates ?? [];
+    expect(created?.labels).toEqual(["enhancement", "from-discord"]);
+    for (const part of [created?.title ?? "", created?.body ?? ""]) {
+      expect(part).not.toContain("@");
+      expect(part).not.toMatch(/\d{17,}/u);
+      for (const secret of [
+        "333333333333333333",
+        member.userId,
+        canaryGuild,
+        canaryFc,
+        "Canary FC",
+        "a@b.com",
+        "discord.com",
+        "finalfantasyxiv",
+        "12345678/",
+      ])
+        expect(part).not.toContain(secret);
+    }
+    expect(created?.title).toBe(
+      "[member] ＠claude ＃12 [email removed] [link removed] [link removed] [ID removed]",
+    );
+    // Nothing outside the fence but the fixed header and the version.
+    expect(created?.body).toBe(
+      [
+        SUGGESTION_HEADER,
+        "",
+        "```text",
+        "[member] ＠claude #12 [email removed] [link removed] [link removed] [ID removed]",
+        "```",
+        "",
+        `Sent by TaruBot ${project.version}.`,
+      ].join("\n"),
+    );
+    // The private record of who sent it.
+    expect(await suggestionRows()).toEqual([
+      {
+        guild_id: canaryGuild,
+        actor_id: member.userId,
+        action: "suggestion.posted",
+        target: "#1",
+        details: { repository: "deconfined/tarubot", issue: 1 },
+      },
+    ]);
+    await clearSuggestions();
+  });
+
+  test("/suggest refuses before any GitHub call: foreign server, off switch, setup, no role (2.28.0)", async () => {
+    const { suggestions, target, reports } = suggestionHarness();
+    // Outside the allowlist, even a configured server's manager is refused, with no scope.
+    const manager = suggester("300000000000000002", ["76101"], {
+      guildId: foreignGuild,
+      officer: true,
+      manageRoles: true,
+      serverManager: true,
+    });
+    const foreign = await suggestions.submit(manager, idea("foreign")).catch((error) => error);
+    expect(foreign).toMatchObject({ code: "forbidden", detail: undefined });
+    // The off switch: forbidden too. The router logs each refusal at its classified level, and
+    // main.ts opens a private report only at error level, so both must classify at info.
+    const off = suggestionHarness(null);
+    const switchedOff = await off.suggestions
+      .submit(suggester("300000000000000003", [CANARY_MEMBER_ROLE]), idea("off"))
+      .catch((error) => error);
+    expect(switchedOff).toMatchObject({
+      code: "forbidden",
+      message: expect.stringContaining("switched off"),
+    });
+    for (const refusal of [foreign, switchedOff])
+      expect(classifyFailure(refusal)).toMatchObject({ category: "forbidden", level: "info" });
+    expect(off.reports).toEqual([]);
+    // An allowlisted server with no configuration gets the setup card.
+    await expect(
+      suggestions.submit(suggester("300000000000000004", [], { guildId: bareGuild }), idea("bare")),
+    ).rejects.toMatchObject({ code: "setup" });
+    // A lobby visitor, and an officer or server manager holding neither role, are refused.
+    for (const actor of [
+      suggester("300000000000000005", []),
+      suggester("300000000000000006", [CANARY_OFFICER_ROLE], { officer: true }),
+      suggester("300000000000000007", [], {
+        officer: true,
+        manageRoles: true,
+        serverManager: true,
+      }),
+    ])
+      await expect(suggestions.submit(actor, idea("refused"))).rejects.toMatchObject({
+        code: "forbidden",
+        message: "Only members and guests of this server can suggest features.",
+        detail: { kind: "scope", scope: "membership" },
+      });
+    expect(target?.clients).toBe(0);
+    expect(await suggestionRows()).toEqual([]);
+    // A member, a guest (owner decision, 2026-09-25) and an officer through their Member role pass.
+    for (const actor of [
+      suggester("300000000000000008", [CANARY_MEMBER_ROLE]),
+      suggester("300000000000000009", [CANARY_GUEST_ROLE]),
+      suggester("300000000000000010", [CANARY_MEMBER_ROLE, CANARY_OFFICER_ROLE], { officer: true }),
+    ])
+      expect((await suggestions.submit(actor, idea("allowed"))).repository).toBe(
+        "deconfined/tarubot",
+      );
+    expect(target?.creates).toHaveLength(3);
+    expect(reports).toEqual([]);
+    await clearSuggestions();
+  });
+
+  test("/suggest limits: one an hour, three a day per member, ten a day in total (2.28.0)", async () => {
+    const { suggestions, target } = suggestionHarness();
+    const member = suggester("300000000000000011", [CANARY_MEMBER_ROLE]);
+    await suggestions.submit(member, idea("first"));
+    const hourly = await suggestions.submit(member, idea("again")).catch((error) => error);
+    expect(hourly).toMatchObject({
+      code: "cooldown",
+      message: "You sent a suggestion in the last hour. You can send one an hour, and three a day.",
+      detail: { kind: "limit", limit: "suggest", until: expect.any(Date) },
+    });
+    expect(hourly.retryAfter).toBeGreaterThan(3500);
+    await clearSuggestions();
+    // Three in the last day (none in the last hour) refuse until the oldest is a day old.
+    const daily = "300000000000000012";
+    for (const ago of ["2 hours", "5 hours", "20 hours"]) await backdated(daily, ago);
+    const perMember = await suggestions
+      .submit(suggester(daily, [CANARY_MEMBER_ROLE]), idea("fourth"))
+      .catch((error) => error);
+    expect(perMember).toMatchObject({
+      code: "cooldown",
+      message: "You've sent three suggestions in the last day.",
+      detail: { kind: "limit", limit: "suggest" },
+    });
+    // The oldest of the three is 20 hours old, so the refusal lifts in about 4 hours.
+    expect(perMember.retryAfter).toBeGreaterThan(4 * 3600 - 120);
+    expect(perMember.retryAfter).toBeLessThan(4 * 3600 + 120);
+    await clearSuggestions();
+    // Ten from ten members (unconfirmed attempts included) fill the deployment's day.
+    for (let index = 0; index < 10; index++)
+      await backdated(
+        `30000000000000010${index}`,
+        `${index + 2} hours`,
+        index % 2 ? "suggestion.unconfirmed" : "suggestion.posted",
+      );
+    await expect(
+      suggestions.submit(suggester("300000000000000013", [CANARY_GUEST_ROLE]), idea("eleventh")),
+    ).rejects.toMatchObject({
+      code: "cooldown",
+      message: "TaruBot has posted 10 suggestions in the last day, its daily limit.",
+      detail: { kind: "limit", limit: "suggest" },
+    });
+    await clearSuggestions();
+    // Two at once from one member: exactly one post, and the other waits its turn and is refused.
+    const creates = target?.creates.length ?? 0;
+    const racer = suggester("300000000000000014", [CANARY_MEMBER_ROLE]);
+    const results = await Promise.allSettled([
+      suggestions.submit(racer, idea("race one")),
+      suggestions.submit(racer, idea("race two")),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "cooldown" },
+    });
+    expect((target?.creates.length ?? 0) - creates).toBe(1);
+    await clearSuggestions();
+  });
+
+  test("/suggest counts every attempt GitHub didn't confirm, and nothing it refused (2.28.0)", async () => {
+    const actions = async () => (await suggestionRows()).map((row) => row.action);
+    let userSequence = 20;
+    const next = () => suggester(`3000000000000000${userSequence++}`, [CANARY_MEMBER_ROLE]);
+
+    // GitHub's rate limit, on the create or on the app's sign-in: nothing was created, so no
+    // row, and the member waits.
+    for (const where of ["create", "client"] as const) {
+      const { suggestions, target } = suggestionHarness();
+      const limited = new Failure("rate_limited", "GitHub is rate limiting.", 42);
+      if (where === "create") target?.createFailures.push(limited);
+      else target?.clientFailures.push(limited);
+      await expect(suggestions.submit(next(), idea("rate limited"))).rejects.toMatchObject({
+        code: "rate_limited",
+        retryAfter: 42,
+        detail: { kind: "limit", limit: "suggest", until: expect.any(Date) },
+      });
+      expect(await actions()).toEqual([]);
+    }
+    // A refused credential passes through, and a rejected request becomes configuration: neither
+    // records a row, and the router reports both privately as unexpected.
+    for (const [thrown, code] of [
+      [new Failure("configuration", "GitHub refused the issue report (401)."), "configuration"],
+      [new Failure("invalid_data", "GitHub rejected the issue report (422)."), "configuration"],
+    ] as const) {
+      const { suggestions, target } = suggestionHarness();
+      target?.createFailures.push(thrown);
+      await expect(suggestions.submit(next(), idea("refused"))).rejects.toMatchObject({ code });
+      expect(await actions()).toEqual([]);
+    }
+    // An outage while creating, or while minting the client: unconfirmed, and a retry waits. The
+    // sign-in case posted nothing, but shares the one path and card by design.
+    for (const where of ["create", "client"] as const) {
+      const { suggestions, target } = suggestionHarness();
+      const member = next();
+      const outage = new Failure("unavailable", "GitHub answered 502.", 60);
+      if (where === "create") target?.createFailures.push(outage);
+      else target?.clientFailures.push(outage);
+      await expect(suggestions.submit(member, idea(`outage ${where}`))).rejects.toMatchObject({
+        code: "unavailable",
+        detail: { kind: "github" },
+      });
+      expect(await actions()).toEqual(["suggestion.unconfirmed"]);
+      await expect(suggestions.submit(member, idea("retry"))).rejects.toMatchObject({
+        code: "cooldown",
+      });
+      expect(target?.creates).toEqual([]);
+      await clearSuggestions();
+    }
+    // A plain error from create (a timeout reading a created issue's answer arrives as one):
+    // unconfirmed, reported privately once, and an immediate retry creates nothing.
+    for (const thrown of [
+      new Error("unexpected"),
+      new DOMException("The operation timed out.", "TimeoutError"),
+    ]) {
+      const { suggestions, target, reports } = suggestionHarness();
+      const member = next();
+      target?.createFailures.push(thrown);
+      await expect(suggestions.submit(member, idea("plain error"))).rejects.toMatchObject({
+        code: "unavailable",
+        detail: { kind: "github" },
+      });
+      expect(reports).toEqual(["/suggest publish"]);
+      expect(await suggestionRows()).toEqual([
+        {
+          guild_id: canaryGuild,
+          actor_id: member.userId,
+          action: "suggestion.unconfirmed",
+          target: null,
+          details: { repository: "deconfined/tarubot" },
+        },
+      ]);
+      await expect(suggestions.submit(member, idea("retry"))).rejects.toMatchObject({
+        code: "cooldown",
+      });
+      expect(target?.creates).toEqual([]);
+      await clearSuggestions();
+    }
+  });
+
+  test("/suggest on DevBot previews into the private reports repository (2.28.0)", async () => {
+    const { suggestions } = suggestionHarness(new FakeTarget("deconfined/tarubot-reports"));
+    const posted = await suggestions.submit(
+      suggester("300000000000000040", [CANARY_GUEST_ROLE]),
+      idea("preview"),
+    );
+    expect(posted).toEqual({
+      number: 1,
+      url: "https://github.com/deconfined/tarubot-reports/issues/1",
+      repository: "deconfined/tarubot-reports",
+    });
+    const embed = suggestionReply(posted).options.embeds[0];
+    expect(embed?.url).toBe(posted.url);
+    expect(embed?.description).toContain("deconfined/tarubot-reports#1");
+    expect((await suggestionRows())[0]).toMatchObject({
+      target: "#1",
+      details: { repository: "deconfined/tarubot-reports", issue: 1 },
+    });
+    await clearSuggestions();
   });
 
   test("a disconnected checked-out session releases locks and the pool reconnects", async () => {
@@ -7511,7 +7898,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   });
 
   /**
-   * Officer status notices (2.27.0, issue #31). Used by these tests: guilds
+   * Officer status notices (2.29.0, issue #31). Used by these tests: guilds
    * 666666666666666740-767, FCs 9232097761132950100-115, users 9310xxxx-9335xxxx (and the 18-digit
    * 9318…), characters 883xxxxx-887xxxxx and role and channel IDs 824xx. Each test builds its own
    * guild with the four roles bound, the officer notifications channel set and effects on, reads

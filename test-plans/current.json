@@ -1,18 +1,20 @@
 {
-  "title": "Session: 2.27.0 member status posts",
-  "objective": "2.27.0 posts member status changes (Member, Guest, Officer, FC Leader, and confirmed FC departures) in the officer notifications channel, one post about 2 minutes after the first change. Migration 010 and no command change. The first pass after the deploy only records everyone's status and posts nothing.",
+  "title": "Session: 2.29.0 member status posts",
+  "objective": "2.29.0 posts member status changes (Member, Guest, Officer, FC Leader, and confirmed FC departures) in the officer notifications channel, one post about 2 minutes after the first change. Migration 010 and no command change. The first pass after the deploy only records everyone's status and posts nothing. It follows 2.28.0 (/suggest).",
   "user": [
     "After the deploy: nothing posts in the officer notifications channel.",
     "/officer revoke on a rank officer: within about 3 minutes, one 'Member status changes' post with 'Officer removed · officer access revoked'. Then /officer reset: 'Officer added · FC officer rank' (run /refresh first if the roster is older than 6 hours).",
-    "On a visitor with no Guest role (no linked character): /guest grant, then /guest revoke within a minute, then /guest reset: no post. A /refresh that changes nothing posts nothing."
+    "On a visitor with no Guest role (no linked character): /guest grant, then /guest revoke within a minute, then /guest reset: no post. A /refresh that changes nothing posts nothing.",
+    "After the merge, read the site's 'Member status changes' section (Run a server → Officer notices and update posts) and flag anything unclear."
   ],
   "assistant": [
     "With the owner's go-ahead: stop, back up, restore-check at 009, rehearse migration 010 on the copy (the three guild_users columns NULL), migrate tarubot_dev, then up (ENABLE_EFFECTS=true). No command registration.",
     "After the startup pass: every member's status_since is NULL and no officer.status job ran. After the user's posts: status_since is clear again.",
+    "After the merge, confirm the Documentation site workflow published the status-post sections.",
     "Record the rollout in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.27.0 on schema 010.",
+    "Run compiled 2.29.0 on schema 010.",
     "Record each member's status silently on its first pass, then post what changed about 2 minutes after the first change.",
     "Post this responsibility-separated session plan in #chat."
   ]

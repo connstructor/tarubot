@@ -1,4 +1,4 @@
--- migrations/010_status_notices.sql (TaruBot 2.27.0; owner decisions of 2026-09-25, issue #31).
+-- migrations/010_status_notices.sql (TaruBot 2.29.0; owner decisions of 2026-09-25, issue #31).
 -- Officer status notices: one post in the officer notifications channel, about two minutes after the
 -- first change, lists the members who gained or lost Member, Guest, Officer or FC Leader (with the
 -- reason the bot decided it) and the linked characters that left the FC. Everything lives on the

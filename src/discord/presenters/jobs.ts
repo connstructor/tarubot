@@ -37,7 +37,7 @@ export const JOB_KIND: Readonly<Record<string, { readonly label: string; readonl
     "guest.review": { label: "Guest review message", done: "Guest review message posted" },
     "guest.dm": { label: "Decision DM", done: "Decision DM sent" },
     "officer.notify": { label: "Officer notice", done: "Officer notice sent" },
-    // The member status changes post in the officer notifications channel (2.27.0).
+    // The member status changes post in the officer notifications channel (2.29.0).
     "officer.status": { label: "Status notice", done: "Status notice posted" },
   };
 

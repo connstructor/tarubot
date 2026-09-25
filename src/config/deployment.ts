@@ -15,6 +15,8 @@ import { Failure } from "../domain/values.js";
 /**
  * Public Discord snowflakes (not credentials) owned by each managed deployment, and where each
  * registers its commands. A rotated application or a new guild is deliberately a code change.
+ * Since 2.28.0 production's guild list also gates /suggest at runtime: a server outside it can't
+ * post public suggestions, even if it invites the bot (src/application/suggestions.ts).
  */
 export const deployments = {
   production: {
@@ -418,7 +420,8 @@ function checkDatabase(
       if (!local) throw refuse(`${where} must be DevBot's local database (localhost or postgres).`);
       if (present(ca)) throw refuse(`${caSetting} must be empty for DevBot's local database.`);
       // The primary is exactly tarubot_dev, except that migrate.js --restore-rehearsal migrates the
-      // restore copy first (docs/OPERATIONS.md); the suffix was checked above.
+      // restore copy first (site/src/content/docs/deploy/operations.md); the suffix was checked
+      // above.
       if (primary ? target.name !== "tarubot_dev" && !rehearsingOnCopy : !restoreCopy)
         throw refuse(
           primary

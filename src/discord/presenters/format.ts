@@ -359,7 +359,7 @@ export function list(items: readonly string[], options: ListOptions = {}): strin
  * Pack pre-built lines into as few fields as their budget allows, naming them 'Needs attention
  * (1/2)' when a list spans several. A line is never split across fields; one over the budget on
  * its own is cut. Used for officer job lines, whose diagnostics make ten lines exceed one field,
- * and for the status post's mention groups, which join with ', ' instead of a newline (2.27.0).
+ * and for the status post's mention groups, which join with ', ' instead of a newline (2.29.0).
  */
 export function splitFields(
   name: string,

@@ -196,7 +196,7 @@ describe("formatting", () => {
     expect(splitFields("Runs", ["one"])).toEqual([{ name: "Runs", value: "one" }]);
   });
 
-  test("splitFields() joins with a given separator and counts it against the budget (2.27.0)", () => {
+  test("splitFields() joins with a given separator and counts it against the budget (2.29.0)", () => {
     // The status post's mention groups: 21-character mentions joined with ', ' fill a 1,024
     // field with 44 each ((1,024 + 2) / 23), so 100 of them take three fields.
     const mentions = Array.from(

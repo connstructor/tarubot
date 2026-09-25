@@ -773,3 +773,47 @@ describe("every option has an Example (owner decision, 2026-09-24)", () => {
     expect(run).toBe("`/sync status run_id:9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a`");
   });
 });
+
+describe("/suggest's cards (2.28.0)", () => {
+  test("the membership card's steps lead to the Member or the Guest role on /suggest only", () => {
+    const suggest = onlyEmbed(FAILURE_CASES["forbidden membership · /suggest · member"].render());
+    expect(suggest.title).toBe("FC membership needed");
+    expect(suggest.description).toBe(
+      "Only members and guests of this server can suggest features. Nothing was changed.",
+    );
+    expect(suggest.fields?.[0]?.value).toContain("the Guest role, or the Member role");
+    expect(suggest.fields?.[0]?.value).toContain("/guest grant");
+    // The ledger keeps its FC-only steps.
+    const ledger = onlyEmbed(
+      FAILURE_CASES["forbidden membership · /ledger deposit · member"].render(),
+    );
+    expect(ledger.fields?.[0]?.value).toContain("in the Free Company on the Lodestone");
+    expect(ledger.fields?.[0]?.value).not.toContain("Guest role");
+  });
+
+  test("an unconfirmed post asks the member to check GitHub, and blames neither upstream", () => {
+    const embed = onlyEmbed(FAILURE_CASES["github unconfirmed · /suggest · member"].render());
+    expect(embed.title).toBe("GitHub didn't confirm your suggestion");
+    expect(embed.description).toBe(
+      "TaruBot couldn't get an answer from GitHub, so your suggestion may or may not have been posted. Check TaruBot's GitHub issues before sending it again. This try counts toward your limits either way.",
+    );
+    expect(embed.description).not.toMatch(/Lodestone|Discord/u);
+    // Members get no diagnostic; officers do.
+    expect(embed.fields ?? []).toEqual([]);
+    const officer = onlyEmbed(FAILURE_CASES["github unconfirmed · /suggest · officer"].render());
+    expect(officer.fields?.[0]?.name).toBe("Diagnostic (officers only)");
+  });
+
+  test("GitHub's rate limit reads like /suggest's own limits", () => {
+    const limit = onlyEmbed(FAILURE_CASES["suggest limit · /suggest · member"].render());
+    const github = onlyEmbed(FAILURE_CASES["github rate limit · /suggest · member"].render());
+    expect([limit.title, github.title]).toEqual([
+      "You can suggest again later",
+      "You can suggest again later",
+    ]);
+    expect(github.description).toBe(
+      "GitHub is limiting new issues right now. Nothing was changed.",
+    );
+    expect(github.fields?.[0]?.name).toBe("Try again");
+  });
+});

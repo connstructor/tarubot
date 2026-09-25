@@ -213,7 +213,8 @@ async function supersedeAndRequeue(
       lease_until: null,
       last_error: null,
       // Keep reconcile.user's append-only `applied` evidence, as queue completion does: it is the
-      // only record of role changes Discord actually received (OPERATIONS.md).
+      // only record of role changes Discord actually received
+      // (site/src/content/docs/deploy/monitoring.md).
       result: sql`jsonb_build_object('skipped','superseded') || jsonb_strip_nulls(jsonb_build_object('applied',${t.jobs.result}->'applied'))`,
     })
     .where(
@@ -621,7 +622,7 @@ export class Queue {
         .set({
           status: sql`CASE WHEN ${t.jobs.generation}=${job.generation} THEN 'succeeded' ELSE 'queued' END`,
           // A run requeued for newer input gets a fresh attempt budget, as requeueParked and
-          // retryJob give (2.27.0): otherwise a busy guild's status post, requeued once per
+          // retryJob give (2.29.0): otherwise a busy guild's status post, requeued once per
           // change, would spend one attempt per run and fail on the first transient error after
           // about seven.
           attempts: sql`CASE WHEN ${t.jobs.generation}=${job.generation} THEN ${t.jobs.attempts} ELSE 0 END`,

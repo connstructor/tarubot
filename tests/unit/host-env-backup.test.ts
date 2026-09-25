@@ -66,6 +66,8 @@ test("a .env missing a setting production needs is refused by name", () => {
   const complete = ["TARUBOT_IMAGE_TAG", "DATABASE_URL", "DATABASE_CA_CERT", "DISCORD_TOKEN"];
   const expected = [
     "GITHUB_REPORTS_TOKEN",
+    "GITHUB_APP_CLIENT_ID",
+    "GITHUB_APP_PRIVATE_KEY",
     "HEALTHCHECKS_PING_URL",
     "BACKUP_STORAGE_ENDPOINT",
     "BACKUP_STORAGE_ACCESS_KEY",

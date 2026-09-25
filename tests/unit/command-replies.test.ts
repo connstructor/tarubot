@@ -15,6 +15,7 @@ import {
   applicationKey,
   issueReportsKey,
   roleAdministrationKey,
+  suggestionsKey,
   synchronizationKey,
 } from "../../src/application/keys.js";
 import { RoleAdministration } from "../../src/application/role-administration.js";
@@ -42,6 +43,8 @@ import syncCommand from "../../src/commands/synchronization/sync.command.js";
 import channelCommand from "../../src/commands/utility/channel.command.js";
 import { IssueReports } from "../../src/application/issue-reports.js";
 import issueCommand from "../../src/commands/utility/issue.command.js";
+import { Suggestions } from "../../src/application/suggestions.js";
+import suggestCommand from "../../src/commands/utility/suggest.command.js";
 import pingCommand from "../../src/commands/utility/ping.command.js";
 import { viewerOf } from "../../src/discord/presenters/audience.js";
 import { Presented } from "../../src/discord/presenters/reply.js";
@@ -725,6 +728,47 @@ test("/issue passes the member, reporter, Ref and description to the issue repor
   ]);
 });
 
+test("/suggest passes only the member and the idea to the suggestion service (2.28.0)", async () => {
+  // Nothing about the member goes public, so the command hands over no username or interaction
+  // ID: the service gets the actor (for the checks and the private audit row) and the idea.
+  const calls: unknown[][] = [];
+  const suggestions: unknown = Object.create(Suggestions.prototype);
+  if (!(suggestions instanceof Suggestions)) throw new Error("Invalid suggestions fixture");
+  Object.assign(suggestions, {
+    submit: async (...args: unknown[]) => {
+      calls.push(args);
+      return {
+        number: 34,
+        url: "https://github.com/deconfined/tarubot/issues/34",
+        repository: "deconfined/tarubot",
+      };
+    },
+  });
+  await open?.close();
+  const fixture = interactionFixture();
+  open = fixture;
+  const interaction = fixture.slash("suggest", [
+    text("idea", "Let officers schedule FC events and remind members an hour before."),
+  ]);
+  const result = await suggestCommand.execute?.({
+    client: fixture.client,
+    services: new Services().provide(suggestionsKey, suggestions),
+    allowsGuild: () => true,
+    isStopping: () => false,
+    report: () => {},
+    resolveActor: async () => MEMBER,
+    actor: MEMBER,
+    viewer: viewerOf(MEMBER, "1290000000000000001"),
+    interaction,
+  });
+  if (!(result instanceof Presented)) throw new Error("/suggest returned no reply");
+  expect(result.options.embeds[0]?.title).toBe("Suggestion posted");
+  expect(result.options.embeds[0]?.url).toBe("https://github.com/deconfined/tarubot/issues/34");
+  expect(calls).toEqual([
+    [MEMBER, "Let officers schedule FC events and remind members an hour before."],
+  ]);
+});
+
 test("a member naming someone else on /guest status is refused before any read", async () => {
   const { app, calls } = stubService({ guestStatus: G.record });
   const error = await run(
@@ -1203,12 +1247,17 @@ test("the path tables return one embed for every registered command path", async
   );
   const paths = await registeredPaths();
   // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24), plus /issue
-  // (2.18.0) and /config changelog (2.25.0).
-  expect(paths).toHaveLength(45);
+  // (2.18.0), /config changelog (2.25.0) and /suggest (2.28.0).
+  expect(paths).toHaveLength(46);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
-  // /version reads GitHub, which version.test stubs, and /issue has its own test below; every
-  // other path is exercised above.
-  expect(paths.filter((path) => !covered.has(path))).toEqual(["apply", "issue", "version"]);
+  // /version reads GitHub, which version.test stubs, and /issue and /suggest have their own tests
+  // below; every other path is exercised above.
+  expect(paths.filter((path) => !covered.has(path))).toEqual([
+    "apply",
+    "issue",
+    "suggest",
+    "version",
+  ]);
 });
 
 test("every registered command keeps its private default visibility", async () => {

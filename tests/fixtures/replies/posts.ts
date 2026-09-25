@@ -2,7 +2,7 @@
  * The channel post and DM catalog: one case per ledger post kind (approved ledger#29 and #32,
  * reply specs ledger#30 and #31), per review message and decision DM kind (reply specs
  * guests#29–#32 and the legacy review gap), the update post (2.25.0) and the officer status post
- * (2.27.0). Each renders a stored record the way the gateway renders it for the ledger.notify,
+ * (2.29.0). Each renders a stored record the way the gateway renders it for the ledger.notify,
  * guest.review, guest.dm, changelog.post and officer.status jobs. The samples are exported so the
  * gateway tests send the same posts through the REST recorder.
  */

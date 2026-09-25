@@ -92,6 +92,8 @@ export function lifecycleHarness(
     HEALTH_PORT: 0,
     GITHUB_REPORTS_TOKEN: "",
     GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
+    GITHUB_APP_CLIENT_ID: "",
+    GITHUB_APP_PRIVATE_KEY: "",
     HEALTHCHECKS_PING_URL: "",
     ...overrides,
   };

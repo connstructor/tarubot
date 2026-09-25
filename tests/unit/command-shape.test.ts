@@ -42,9 +42,9 @@ test("every declared path, with all of its options, fits its own command's shape
       expect(undeclaredShape(declared, invoke(path, supplied)), command.name).toBeNull();
     }
   }
-  // The registered surface: 45 paths across 20 roots (a root without subcommands is one path);
-  // 2.18.0 added /issue and 2.25.0 /config changelog.
-  expect(paths).toBe(45);
+  // The registered surface: 46 paths across 21 roots (a root without subcommands is one path);
+  // 2.18.0 added /issue, 2.25.0 /config changelog and 2.28.0 /suggest.
+  expect(paths).toBe(46);
 });
 
 test("shapes another release could register are refused", async () => {

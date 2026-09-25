@@ -1,5 +1,5 @@
 /**
- * The officer status post (2.27.0, issue #31; owner decisions of 2026-09-25), which the gateway
+ * The officer status post (2.29.0, issue #31; owner decisions of 2026-09-25), which the gateway
  * renders for the officer.status job: one embed in the officer notifications channel naming every
  * member of one frozen batch, grouped by what changed and why, then the linked characters that left
  * the FC. Mentions only, with character names on departure lines (decision 6); officers' own

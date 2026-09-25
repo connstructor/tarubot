@@ -1,5 +1,5 @@
 /**
- * Officer status notices (2.27.0, issue #31), the pure rules: which decisions count (the probe
+ * Officer status notices (2.29.0, issue #31), the pure rules: which decisions count (the probe
  * table for accessDecisive and rankDecisive), how one pass is recorded (baselines, changes,
  * cancelling, unbinding and rejoining), every reason, the entry a pending member contributes, the
  * mark after a post (including a rejoin while the post was in flight), and the no-channel drop.

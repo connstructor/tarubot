@@ -248,7 +248,7 @@ export class Synchronization {
           })
           .returning({ id: t.rosterSnapshots.id });
         if (!snapshot) throw new Error("Missing snapshot");
-        // Officer status notices (2.27.0) record confirmed departures in this transaction, which
+        // Officer status notices (2.29.0) record confirmed departures in this transaction, which
         // must lock the departing owners' guild_users rows before any characters row (the order
         // /unclaim, /assign and the two-404 unlink use). So every link's transition is decided
         // first, from the membership rows as they stand: nothing below writes membership before
@@ -718,7 +718,7 @@ export class Synchronization {
     const members = await this.app.discord.members(guildId);
     await this.app.db.transaction(async (client) => {
       const db = orm(client);
-      // The lock order (2.27.0; status-notices.ts has the whole rule): the guild row first, FOR
+      // The lock order (2.29.0; status-notices.ts has the whole rule): the guild row first, FOR
       // SHARE, then every existing member row of the guild in user order compared as plain strings,
       // then job rows. /config adoption, /setup and activation lock the guild row FOR UPDATE before
       // their member and job rows, so they now queue behind this pass (and it behind them) on the
@@ -978,7 +978,7 @@ export class Synchronization {
             gt(t.jobs.lease_until, sql`now()`),
           ),
         );
-      // Officer status notices (2.27.0): record this pass's decisive values once its roles were
+      // Officer status notices (2.29.0): record this pass's decisive values once its roles were
       // applied. Nickname errors don't matter here; a blocked role write records nothing, and the
       // pass after the fix compares against the stored state. Only values that don't depend on
       // the roles the member already holds are recorded (accessDecisive, rankDecisive).

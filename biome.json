@@ -6,6 +6,7 @@
       "!**/node_modules",
       "!**/.cache",
       "!**/dist",
+      "!**/.astro",
       "!**/artifacts",
       "!**/bun.lock",
       "!tarubot_backup.sql",
