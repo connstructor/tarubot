@@ -7105,10 +7105,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   // Public suggestions (2.26.0, issue #32) -----------------------------------------------------
 
   /** Three guilds for /suggest: the allowlisted FC server, one outside the allowlist, and an
-   * allowlisted server with no configuration. Role IDs are the canary server's bound roles. */
-  const canaryGuild = "666666666666666721";
-  const foreignGuild = "666666666666666722";
-  const bareGuild = "666666666666666723";
+   * allowlisted server with no configuration. Role IDs are the canary server's bound roles. The
+   * IDs sit above the officer-notice (…712–717) and changelog (…720–729) scenarios' guilds. */
+  const canaryGuild = "666666666666666731";
+  const foreignGuild = "666666666666666732";
+  const bareGuild = "666666666666666733";
   const canaryFc = "9230000000000009901";
   const CANARY_MEMBER_ROLE = "76001";
   const CANARY_GUEST_ROLE = "76002";
