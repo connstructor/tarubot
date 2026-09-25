@@ -19,7 +19,7 @@ TaruBot v2 has been live in Woven Souls since 2026-09-24. It was activated on Ap
 | Done | **2.22.0 (heartbeat)**, deployed 2026-09-25 12:33 UTC; the production check "TaruBot production" receives pings. |
 | Claude | **Robust and disposable host** (owner decision, 2026-09-25):
 - 2.22.0 added the heartbeat.
-- 2.23.0 adds the rebuild runbook and the encrypted settings copy.
+- 2.23.0 added the rebuild runbook and the encrypted settings copy (merged, PR #25).
 - 2.24.0 adds daily encrypted dumps to Linode Object Storage with their own healthchecks check. The first run was proven by a full restore; the schedule is installed when 2.24.0 deploys.
 - Next: deploys over SSH from GitHub Actions (2.25.0; needs a GitHub environment and a restricted deploy key).
 

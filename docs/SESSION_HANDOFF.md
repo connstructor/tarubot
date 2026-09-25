@@ -159,7 +159,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Why.** The robust, disposable host needs a way back when the host is gone: a rebuild runbook and an off-host copy of its settings. The owner declined Terraform for now ("too much trouble at least at this stage").
 - **Change.** `scripts/host-env-backup.ts` (`bun run host:env-backup`) reads the host's `.env` over SSH and encrypts it with `age` for `ops/age-recipients.txt`, writing only the encrypted copy; HOSTING.md gains "Settings copy" and an 11-step "Rebuilding the host".
 - **Found.** `sshd` offered password login (though `tarubot` had no password); the owner made it key-only the same day, confirmed from outside. No Linode Cloud Firewall is attached; that stays an owner item in OPEN_ITEMS.md.
-- **Status.** [PR #25](https://github.com/deconfined/tarubot/pull/25) open, with the review fixes (quote-aware setting names, verify-then-rename). Nothing to deploy.
+- **Status.** Merged ([PR #25](https://github.com/deconfined/tarubot/pull/25), `9cf2afd`) after one review round (quote-aware setting names, verify-then-rename). Nothing to deploy.
 
 **Update, 2.24.0 (current version):**
 - **Why.** The last piece of the backup layer: off-site dumps. The owner chose Linode Object Storage over B2 ("not really worried about Akamai going down"): bucket `tarubot-backups`, key `tarubot-backup-key` limited to it, and a second healthchecks check "TaruBot backups".
@@ -169,7 +169,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
   - The host's `.env` holds the storage settings, which the bot never sees.
 - **Proven.** A run from a scratch copy on the host uploaded a 381,594-byte dump. It decrypted and restored into a throwaway PostgreSQL 18 with all 27 table counts identical to production.
 - **Deploy.** A pull on the host (the bot needn't restart), then the crontab line from HOSTING.md.
-- **Status.** Branch `feat/backups-2.24.0`, stacked on 2.23.0; not yet pushed.
+- **Status.** Branch `feat/backups-2.24.0`, rebased onto `main` after PR #25; PR open.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
 
@@ -235,7 +235,7 @@ Keep these owner-approved decisions intact:
 1. Read [../AGENTS.md](../AGENTS.md) and [../CLAUDE.md](../CLAUDE.md), inspect `git status`/history, and fetch remote state. Check whether 2.18.0 (`feat/issue-reporter-2.18.0`) was pushed, merged and published.
 2. With the owner's go-ahead, deploy 2.18.0 to DevBot and to production with the migration procedure ([HOSTING.md](HOSTING.md#updating-to-a-release)). Put `GITHUB_REPORTS_TOKEN` in the host's `.env`, then register the commands (production `register.js --global`, DevBot's guild) and read them back. Then check that a test `/issue` opens an issue in `deconfined/tarubot-reports`.
 3. Remind the owner of the open items in [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover): W14 and W15, the DigitalOcean cleanup, rotating the legacy MariaDB login, DevBot's `GITHUB_REPORTS_TOKEN`, and regenerating the reports token.
-4. Merge 2.23.0 and 2.24.0, then on the host `git pull` and install the backup crontab line (HOSTING.md). Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
+4. Merge 2.24.0, then on the host `git pull` and install the backup crontab line (HOSTING.md). Then finish the robust, disposable host (owner decision, 2026-09-25): a rebuild runbook, an encrypted `.env` copy off the host, a heartbeat, backups, and the SSH deploy workflow.
 5. After that, OPS-10/OPS-11.
 
 Useful read-only starting checks from the repository:
