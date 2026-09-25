@@ -31,15 +31,15 @@ TaruBot is a single TypeScript process on [Bun](https://bun.sh), with [discord.j
 - **Discord** delivers interactions (slash commands, buttons, forms) and gateway events (members joining, leaving and changing; roles and channels changing). TaruBot changes roles, nicknames and channel permissions, and posts messages.
 - **PostgreSQL** holds all state: links, rosters, grants, the ledger, settings, the audit trail and the work queue. Nothing important lives only in memory.
 - **The Lodestone** is Square Enix's public character site. TaruBot reads character profiles (for ownership proofs and names), FC pages and member lists (for membership and ranks), and character searches.
-- **GitHub** supplies the Lodestone CSS selectors TaruBot's parser follows, `/version`'s commit history, and, when configured, the repository that receives issue reports.
+- **GitHub** supplies the Lodestone CSS selectors TaruBot's parser follows, `/version`'s commit history, and, when configured, the repository that receives issue reports. The project's own deployment also posts `/suggest` ideas to TaruBot's public repository, as a GitHub App.
 - **healthchecks.io** receives an optional heartbeat, so an outside check notices when the bot goes silent.
 
 ## Layers
 
 | Layer | Directory | What it holds |
 | --- | --- | --- |
-| Domain | `src/domain` | Pure rules: identifiers and exact values, authorization, desired access, departures, the failure catalog, report redaction. No I/O. |
-| Application | `src/application` | Transactional operations: claims, links, grants, the ledger, configuration, synchronization and reconciliation, the lifecycle, issue reports. |
+| Domain | `src/domain` | Pure rules: identifiers and exact values, authorization, desired access, departures, the failure catalog, report redaction, and the cleaning that makes a suggestion safe to publish. No I/O. |
+| Application | `src/application` | Transactional operations: claims, links, grants, the ledger, configuration, synchronization and reconciliation, the lifecycle, issue reports, public suggestions. |
 | Bot framework | `src/bot` | Module contracts, discovery, the service registry and the interaction router. |
 | Features | `src/commands`, `src/components`, `src/events` | One module per slash command, button namespace and gateway listener. |
 | Discord | `src/discord` | The gateway adapter, option builders, and the reply presenters. |

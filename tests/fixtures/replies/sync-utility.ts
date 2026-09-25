@@ -22,6 +22,7 @@ import {
   channelReply,
   issueReply,
   pingReply,
+  suggestionReply,
   type UtilityReplyKind,
 } from "../../../src/discord/presenters/utility.js";
 import { versionReply, type VersionReplyKind } from "../../../src/discord/presenters/version.js";
@@ -427,6 +428,20 @@ export const UTILITY_CASES = {
     title: "Report saved",
     timestamp: false,
     render: () => issueReply({ delivery: "saved", ref: "1290000000000000001" }),
+  },
+  // 2.28.0: /suggest's confirmation, linking the public issue.
+  "suggest.posted": {
+    spec: "2.28.0 public suggestions",
+    audience: "member",
+    tone: "success",
+    title: "Suggestion posted",
+    timestamp: false,
+    render: () =>
+      suggestionReply({
+        number: 34,
+        url: "https://github.com/deconfined/tarubot/issues/34",
+        repository: "deconfined/tarubot",
+      }),
   },
 } as const satisfies ReplyCatalog<UtilityReplyKind>;
 

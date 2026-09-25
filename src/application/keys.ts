@@ -8,6 +8,7 @@ import { ApplicationLifecycle } from "./lifecycle.js";
 import { Service } from "./service.js";
 import { Synchronization } from "./synchronization.js";
 import { RoleAdministration } from "./role-administration.js";
+import { Suggestions } from "./suggestions.js";
 import { VersionInformation } from "./version-information.js";
 
 /** Runtime guards keep dependency retrieval safe even for dynamically imported modules. */
@@ -49,4 +50,9 @@ export const versionInformationKey = new ServiceKey(
 export const issueReportsKey = new ServiceKey(
   "issue reports",
   (value): value is IssueReports => value instanceof IssueReports,
+);
+/** Public suggestions (2.28.0): /suggest posts through it to the public repository. */
+export const suggestionsKey = new ServiceKey(
+  "public suggestions",
+  (value): value is Suggestions => value instanceof Suggestions,
 );

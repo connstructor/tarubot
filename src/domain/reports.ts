@@ -31,9 +31,11 @@ export type ReportSource = "user" | "error" | "job" | "trouble";
 /**
  * Patterns for credentials that must never reach a report, whatever text carried them: Discord bot
  * tokens, GitHub tokens, Authorization values, passwords in connection URLs, PEM blocks, and
- * healthchecks.io ping URLs (anyone holding one can ping the check and hide an outage).
+ * healthchecks.io ping URLs (anyone holding one can ping the check and hide an outage). Exported
+ * since 2.28.0: public suggestions (src/domain/suggestions.ts) apply the same shapes, but never
+ * the deployment's exact secret values, so a member can't use /suggest to test a guess.
  */
-const SECRET_PATTERNS: readonly [RegExp, string][] = [
+export const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   [/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gu, "[pem redacted]"],
   [
     /\b[MNO][A-Za-z\d_-]{23,27}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27,}\b/gu,
@@ -57,6 +59,19 @@ export function redact(text: string, secrets: readonly string[] = []): string {
   for (const [pattern, replacement] of SECRET_PATTERNS)
     result = result.replace(pattern, replacement);
   return result;
+}
+
+/**
+ * Whole seconds from now until `seconds` after `from`, at least one: a limit's Failure.retryAfter.
+ * Shared by /issue's and /suggest's limits (moved here from issue-reports.ts in 2.28.0).
+ */
+export function secondsUntil(from: Date, seconds: number): number {
+  return Math.max(1, Math.ceil((from.getTime() + seconds * 1000 - Date.now()) / 1000));
+}
+
+/** `seconds` after `from`: when a limit that started at `from` lifts. */
+export function after(from: Date, seconds: number): Date {
+  return new Date(from.getTime() + seconds * 1000);
 }
 
 /** A short, stable fingerprint of the parts that identify one kind of trouble. */

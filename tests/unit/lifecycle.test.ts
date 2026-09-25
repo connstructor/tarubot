@@ -2,7 +2,8 @@
  * Writer-lease sequencing without PostgreSQL: a fake pool client stands in for the dedicated lease
  * session, so readiness, startup refusal, log escalation, release, loss (an error event, a silent
  * session, or a missing lock found by the periodic check), a session that goes silent while waiting,
- * and the shutdown deadline's exit status run in every unit pass.
+ * the shutdown deadline's exit status, and shutdown's wait for drained work (2.28.0) run in every
+ * unit pass.
  * tests/integration/lifecycle.test.ts repeats the contention and release against real advisory locks.
  */
 import { afterEach, expect, test } from "bun:test";
@@ -324,6 +325,33 @@ test("a shutdown that hangs still exits at the deadline, with status 1 after a l
   expect(stopping.reports).toEqual([]);
   expect(held.released).toBe(false);
   expect(heldOrder).toEqual(["close"]);
+});
+
+test("shutdown waits for drained work before it releases the lease and closes the pool (2.28.0)", async () => {
+  // main.ts drains /suggest here: a post still at GitHub must write its audit row while this
+  // process holds the lease and the pool is open, or the next writer's limits would miss it.
+  const client = new FakeLeaseClient();
+  client.available = true;
+  const order: string[] = [];
+  const finish = Promise.withResolvers<void>();
+  const { lifecycle } = harness(client, order, {
+    drain: async () => {
+      await finish.promise;
+      order.push(client.released === undefined ? "drained while held" : "drained after release");
+    },
+  });
+  await lifecycle.prepare();
+  const stopped = observe(lifecycle.stop());
+  await Bun.sleep(30);
+  // Still draining: the lease is held and nothing is unlocked or closed.
+  expect(stopped.settled()).toBe(false);
+  expect(client.statements.some((text) => text.includes("pg_advisory_unlock"))).toBe(false);
+  expect(order).toEqual([]);
+  finish.resolve();
+  await stopped.result;
+  expect(order).toEqual(["drained while held", "close"]);
+  expect(client.statements.at(-1)).toContain("pg_advisory_unlock");
+  expect(client.released).toBe(false);
 });
 
 test("a writer checks the schema again once it holds the lease, and refuses a migrated database", async () => {

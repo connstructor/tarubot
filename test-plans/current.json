@@ -1,18 +1,26 @@
 {
-  "title": "Session: 2.27.0 documentation site",
-  "objective": "2.27.0 publishes the documentation site at deconfined.github.io/tarubot from site/ (Astro Starlight, built with pnpm). The bot is unchanged: no migration, no command change, and nothing to deploy. Check that the site reads well and matches what the bot does.",
+  "title": "Session: 2.28.0 public suggestions",
+  "objective": "2.28.0 adds /suggest: members and guests post feature ideas as public GitHub issues, cleaned of links, mentions, emails and IDs. DevBot previews into the private reports repository. Limits: 1 an hour and 3 a day per member, 10 a day in total. No migration (schema 009 from 2.25.0); 21 roots / 46 paths. It follows 2.27.0, the documentation site (2.26.0 was skipped).",
   "user": [
-    "Open https://deconfined.github.io/tarubot/ after the merge: the six sidebar groups, search (try adopt_holders), dark mode and an Edit page link.",
-    "Compare one Use TaruBot page with the bot: run /claim or /characters and check the page describes what you see.",
-    "Read the Run a server pages you'd send an officer, including Officer notices and update posts, and flag anything unclear."
+    "Run /suggest idea:<an idea of 10+ characters> as a member or guest: the reply links a preview issue in deconfined/tarubot-reports.",
+    "Open that issue: check the title, the fixed first line, the fenced text, 'Sent by TaruBot 2.28.0.' and the labels enhancement and from-discord.",
+    "Put a link, an @mention and a long ID in an idea: none of them appear in the issue. (Wait an hour, or use another account.)",
+    "Run /suggest again within the hour: 'You can suggest again later', with when.",
+    "Optional: an idea under 10 visible characters once invisible ones are removed gets 'Check your input' with the Example (Discord itself refuses anything under 10).",
+    "From an account without the Member or Guest role: 'FC membership needed', with steps to either role.",
+    "If a changelog channel is set: after the deploy, one post 'TaruBot updated to v2.28.0' with the /suggest note.",
+    "After the merge, read the site's two /suggest pages (Use TaruBot, Run a server) and flag anything unclear."
   ],
   "assistant": [
-    "After the merge, confirm the Documentation site workflow deployed and the site serves search and a 404 page.",
-    "Keep the site current: a change to a command, option, setting or reply code updates its page in the same change set.",
-    "Record the first deploy in docs/VERIFICATION.md."
+    "After the merge, confirm the Documentation site workflow published the /suggest pages.",
+    "Deploy 2.28.0 to DevBot with the owner's go-ahead (restart, no migration), register guild commands and read them back (21 roots / 46 paths).",
+    "With the go-ahead, put GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY in the production host's .env and refresh the settings copy.",
+    "Deploy to production, probe the GitHub App (expect 422, no issue created), then register.js --global and commands.js list (21 global).",
+    "Record the rollouts and the owner's test /suggest in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Keep running the release already deployed; 2.27.0 changes no running code.",
+    "Run compiled 2.28.0 on the current schema with no migration.",
+    "Answer /suggest only in the test guild, for holders of the Member or Guest role, previewing into the reports repository.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

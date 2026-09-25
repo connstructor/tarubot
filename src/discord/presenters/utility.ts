@@ -1,10 +1,11 @@
 /**
  * Utility presenters: /ping and /channel (guests-sync-utility#50–#53), neutral reference replies
- * with no service behind them, and /issue's confirmation (2.18.0). Pure.
+ * with no service behind them, /issue's confirmation (2.18.0) and /suggest's (2.28.0). Pure.
  */
 import { ChannelType } from "discord.js";
-import { code, mentionChannel, plain } from "./format.js";
+import { code, link, mentionChannel, plain } from "./format.js";
 import type { IssueSubmitted } from "../../application/issue-reports.js";
+import type { SuggestionPosted } from "../../application/suggestions.js";
 import { reply, type Presented, type ReplySpec } from "./reply.js";
 
 /**
@@ -18,6 +19,7 @@ const TIMESTAMP = {
   "channel.unavailable": false,
   "issue.received": false,
   "issue.saved": false,
+  "suggest.posted": false,
 } as const satisfies Record<string, boolean>;
 
 /** A utility reply state; tests catalogue one case per kind. */
@@ -137,5 +139,27 @@ export function issueReply(submitted: IssueSubmitted): Presented {
       "Thanks. Your report is on its way to TaruBot's maintainers, with a snapshot of TaruBot's state right now.",
     fields: [included],
     footer: `Ref ${submitted.ref}`,
+  });
+}
+
+/**
+ * /suggest (2.28.0): the suggestion is a public issue now. The reply links to it, names the
+ * repository (DevBot's previews go to the private reports one), and says exactly what was posted.
+ * It never echoes the idea back.
+ */
+export function suggestionReply(posted: SuggestionPosted): Presented {
+  return card("suggest.posted", {
+    tone: "success",
+    title: "Suggestion posted",
+    url: posted.url,
+    description: `Thanks. It's on GitHub as ${link(`${posted.repository}#${posted.number}`, posted.url)}.`,
+    fields: [
+      {
+        name: "What was posted",
+        value:
+          "Your idea, without links, Discord mentions, email addresses or long ID numbers, and TaruBot's version. Nothing about you or this server.",
+      },
+      { name: "Next", value: "Follow it on GitHub. To report a problem instead, use **/issue**." },
+    ],
   });
 }

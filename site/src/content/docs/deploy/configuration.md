@@ -26,7 +26,7 @@ Read by the running bot.
 | `HEALTH_PORT` | `3000` | The port of `/health/live` and `/health/ready` inside the container. |
 | `DATABASE_CA_CERT` | (empty) | A PEM root certificate for an external PostgreSQL over TLS. With it set, certificate and hostname checks are enforced, whatever the URL's SSL options say. Not needed for the bundled database. |
 | `GITHUB_REPORTS_TOKEN` | (empty) | A fine-grained GitHub token with read and write access to the issues of one repository, for [issue reports](/tarubot/deploy/monitoring/#issue-reports). Empty saves reports in the database without sending them. Secret. |
-| `GITHUB_REPORTS_REPO` | `deconfined/tarubot-reports` | The `owner/name` repository reports open issues in. The default is the upstream project's own private repository, so **set your own whenever you set the token**, or leave the token empty. |
+| `GITHUB_REPORTS_REPO` | `deconfined/tarubot-reports` | The `owner/name` repository reports open issues in. The default is the upstream project's own private repository, so **set your own whenever you set the token**, or leave the token empty. It may never name TaruBot's public repository, `deconfined/tarubot`, in any letter case: the bot refuses to start, so private reports can't go public. |
 | `HEALTHCHECKS_PING_URL` | (empty) | A [healthchecks.io](https://healthchecks.io) ping URL, such as `https://hc-ping.com/<your-check-uuid>`, which the ready bot pings every five minutes. Empty turns the [heartbeat](/tarubot/deploy/monitoring/#heartbeat) off. Keep it private: anyone with it can ping your check. |
 
 ## Lodestone
@@ -76,13 +76,24 @@ A setting derived from the bot's own connection, such as `RESTORE_DATABASE_URL`,
 | `RESTORE_DATABASE_CA_CERT` | (empty) | A CA for `RESTORE_DATABASE_URL` when it differs from the primary's; empty reuses `DATABASE_CA_CERT`. |
 | `MIGRATE_WRITER_WAIT_SECONDS` | `90` | How long `migrate.js` waits for a stopping bot to release the database before refusing a pending migration, 0 to 600. In the container, pass it with `-e` as above. |
 
+## Upstream production only
+
+The TaruBot project's own production deployment posts [`/suggest`](/tarubot/admin/suggestions/) ideas to TaruBot's public repository as its GitHub App. `/suggest` posts publicly only from the FC server that deployment serves, so every other deployment refuses it in every server, whatever these say. The one exception is a development deployment's test server ([`TEST_GUILD_ID`](#development-only)), where `/suggest` ignores these settings and previews privately into `GITHUB_REPORTS_REPO` when `GITHUB_REPORTS_TOKEN` is set. Leave them unset: the stock `docker-compose.yml` doesn't pass them to the bot, and they are never needed for a development deployment.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `GITHUB_APP_CLIENT_ID` | (empty) | The client ID of the GitHub App that opens `/suggest` issues. Not a secret. Empty switches `/suggest` off: members are told suggestions are switched off. |
+| `GITHUB_APP_PRIVATE_KEY` | (empty) | That app's private key, the PEM file GitHub downloads, written as a double-quoted multi-line value like `DATABASE_CA_CERT`. Empty also switches `/suggest` off. It isn't read at startup, so a bad key fails only `/suggest`, with an issue report naming these settings. Secret. |
+
+A change to either takes effect when the bot's container is recreated (`docker compose up -d --wait`); a plain `docker compose restart` keeps the old values.
+
 ## Development only
 
 For a development deployment attached to one test server. Leave them at these values on a real deployment.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `TEST_GUILD_ID` | (empty) | Confines the bot to one test server: it ignores every other server, posts the test-session plan there at startup, labels issue reports as development ones, and refuses global command registration. |
+| `TEST_GUILD_ID` | (empty) | Confines the bot to one test server: it ignores every other server, posts the test-session plan there at startup, labels issue reports as development ones, and refuses global command registration. `/suggest` then works in that server and posts its previews into `GITHUB_REPORTS_REPO` with `GITHUB_REPORTS_TOKEN` (never publicly); without the token it is off. |
 | `PUBLIC_TEST_RESPONSES` | `false` | With `true`, replies in the test server are visible to everyone there, so testers can watch a session. |
 | `TEST_PLAN_CHANNEL_ID` | (empty) | Where the test-session plan is posted; empty looks for the test server's `#chat`. |
 | `TEST_PLAN_FILE` | `test-plans/current.json` | The plan file posted at startup. |

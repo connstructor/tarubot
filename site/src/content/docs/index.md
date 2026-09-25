@@ -21,8 +21,8 @@ hero:
 
 ## Who these pages are for
 
-- **[Use TaruBot](/tarubot/use/getting-started/)** is for members and visitors of a server that runs TaruBot: linking your characters, nicknames, guest access, the FC ledger, and what to do when something goes wrong.
-- **[Run a server](/tarubot/admin/add-to-server/)** is for officers and server managers: adding the bot, who can do what, setting a server up, roles, officers, guest applications, the ledger, officer notices and update posts, and health checks.
+- **[Use TaruBot](/tarubot/use/getting-started/)** is for members and visitors of a server that runs TaruBot: linking your characters, nicknames, guest access, the FC ledger, what to do when something goes wrong, and suggesting features.
+- **[Run a server](/tarubot/admin/add-to-server/)** is for officers and server managers: adding the bot, who can do what, setting a server up, roles, officers, guest applications, the ledger, officer notices and update posts, health checks, and feature suggestions.
 - **[Deploy and operate](/tarubot/deploy/requirements/)** is for people who run their own TaruBot: requirements, the Discord application, installation, configuration, updates and backups, monitoring and the maintenance tools.
 - **[Architecture and design](/tarubot/architecture/overview/)** is for contributors and the curious: how the bot is built, how it decides access, what it stores, and why.
 - **[Reference](/tarubot/reference/commands/)** lists every command and option, and every reply code.

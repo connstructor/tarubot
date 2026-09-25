@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", "Approved changelog amendments (2026-09-25)", and "Approved documentation-site amendments (2026-09-25)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", "Approved changelog amendments (2026-09-25)", "Approved documentation-site amendments (2026-09-25)", and "Approved public-suggestion amendments (2026-09-25)".
 
 ## Project map
 
@@ -19,12 +19,13 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
   - `heartbeat.ts`: the healthchecks.io dead-man's switch (2.22.0), pinged every five minutes while ready (`HEALTHCHECKS_PING_URL`; empty is off).
   - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
+  - `suggestions.ts`: `/suggest` (2.28.0), public feature suggestions posted at once to `deconfined/tarubot` as the TaruBot GitHub App (`src/infrastructure/github/app.ts` signs the JWT and mints an installation token per post), with limits counted from the audit table. The pure cleaning, public format and final check live in `src/domain/suggestions.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
   - `values.ts` holds `Failure`, `json`, and ID parsing.
   - `changelog.ts` decides update posts (2.25.0): the release range and what one `changelog.post` job does. `release-notes.ts` is the member-note map it reads.
-- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard.
+- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard; since 2.28.0 its production guild list also gates `/suggest` at runtime.
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
@@ -98,7 +99,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11.
+  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11. Since then: 2.24.3 officer Lodestone notices, 2.25.0 update posts (migration 009), 2.27.0 the documentation site (docs only; 2.26.0 was skipped because the site merged first), and 2.28.0 `/suggest`; #31 follows as 2.29.0 (migration 010), and the SSH deploy workflow takes the next free minor after it.
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
@@ -124,6 +125,12 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
   - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` and the production host's both hold it (rotated on 2026-09-25).
+- Public suggestions (2.28.0):
+  - Text reaches the public repository only through `normalise`, `clean` (the shared `PUBLIC_PATTERNS`, repeated until nothing changes) and `assertPublic`, never through `IssueReports`. A change to the rules changes both the cleaner and the check.
+  - `/suggest` needs the bound Member or Guest role in an allowlisted server (production's `deployments.production.guilds`, or DevBot's test guild). Officer access alone doesn't qualify.
+  - `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` are production-only: they go in `docker-compose.production.yml` and the host's `.env`, never in `docker-compose.yml` or DevBot's `.env`. DevBot previews into the reports repository with `GITHUB_REPORTS_TOKEN`. Either app setting empty switches `/suggest` off.
+  - Nothing is saved first. Limits come from `audit` rows (`suggestion.posted`, `suggestion.unconfirmed`); any GitHub error other than `rate_limited`, `invalid_data` or `configuration`, at the app's sign-in or the post, writes `suggestion.unconfirmed`. Submissions run one at a time, and the lifecycle's `drain` option waits for the one in progress before releasing the writer lease; later ones are refused as `stopping`.
+  - Any new workflow gated on the OWNER, MEMBER or COLLABORATOR association must also skip issues carrying `SUGGESTION_MARKER` ("Suggested in Discord with TaruBot"), as `claude.yml` does. A trusted `@claude` comment on a `from-discord` issue still hands the member's text to the agent.
 - With `role_layout_enabled` off, `roles.layout` jobs complete as `skipped: layout disabled`. That is intended, not a failure.
 - Officer Lodestone notices (2.24.3, #29):
   - "FC roster accepted" posts only in the test guild (`guild.id === TEST_GUILD_ID`), on `officer:<guild>`. Production posts no roster line.

@@ -29,6 +29,7 @@ The reply gives a run ID. Follow it with `/sync status run_id:<the ID>`. Officer
 - [`/version`](/tarubot/reference/commands/#version) shows the version this server runs, links to its source code and license, and the most recent commits on GitHub (five by default, up to ten).
 - [`/ping`](/tarubot/reference/commands/#ping) shows Discord's gateway latency, a quick check that the bot is alive.
 - [`/channel`](/tarubot/reference/commands/#channel) shows the current channel's ID, name and type, handy when an officer asks for a channel ID.
+- [`/suggest`](/tarubot/reference/commands/#suggest) sends an idea for TaruBot to its public GitHub repository, from the FC's own server. See [Suggest a feature](/tarubot/use/suggest-a-feature/).
 
 ## Report a problem
 

@@ -89,7 +89,7 @@ Status markers describe saved, queued and delivered work. They are plain Unicode
 | `= NO CHANGE` | It was already that way | (a no-op result) |
 | `– SKIPPED` | There was nothing to do | `succeeded` with a `skipped` result |
 
-Completion words (applied, posted, sent, secured) belong only to `✓ DONE`, and only a view that reads stored jobs back (`/sync status`, `/guest status`, `/ledger balance` and `history`) can show it.
+Completion words (applied, posted, sent, secured) belong only to `✓ DONE`, and only a view that reads stored jobs back (`/sync status`, `/guest status`, `/ledger balance` and `history`) can show it. The one exception is a result an outside service confirmed within the same request, with no job behind it: `/suggest`'s "Suggestion posted" (2.28.0) appears only after GitHub returned the new issue's number.
 
 `/config validate` uses a separate health-check vocabulary, never mixed with the markers: `[OK]`, `[WARN]`, `[FAIL]`, `[OFF]` and `[WAIT]` (configuration#7–#9). Awaiting activation is `[WAIT]` where configuration#9 shows it, and `[WARN]` marks the warnings configuration#8 shows, including `ENABLE_EFFECTS=false` and a review channel without a Guest role. From 2.15.0, `[WARN]` also marks guest applications switched on with no review channel ([below](#guest-applications-in-config-show-and-validate)). The one other place these tokens appear is `/setup`'s approved Channel access line (configuration#37).
 
@@ -282,7 +282,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | forbidden.owner | `forbidden` {owner} | forbidden | Only your own records | Only your own records | error | info |
 | forbidden.manager | `forbidden` {manager, manage_roles, manage_channels} | forbidden | Server managers only | Server managers only | error | info |
 | forbidden.hierarchy | `forbidden` {hierarchy} | forbidden | That role is above yours | That role is above yours | error | info |
-| forbidden.membership | `forbidden` {membership} | forbidden | FC membership needed | FC membership needed | warning | info |
+| forbidden.membership | `forbidden` {membership} | forbidden | FC membership needed | FC membership needed (on `/suggest`, since 2.28.0, its How to qualify steps lead to the Member or the Guest role) | warning | info |
 | forbidden.context | `forbidden` {human, current_member} | forbidden | Not available here | Not available here | error | info |
 | forbidden.test_guild | `forbidden` {test_guild} | forbidden | Test instance | Test instance | error | info |
 | setup.guild | `setup` {guild} | setup | TaruBot isn't set up here yet | Finish setup first | info / warning | info |
@@ -306,6 +306,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | wait.claims_own | `cooldown` {claims_own} | wait | Too many unfinished claims | Too many unfinished claims | pending | info |
 | wait.apply | `cooldown` {apply} | wait | You can apply again later | You can apply again later | pending | info |
 | wait.issue | `cooldown` {issue} | wait | You can send another report later | You can send another report later (2.18.0: one report per member per 10 minutes, twenty per server per day) | pending | info |
+| wait.suggest | `cooldown`, `rate_limited` {suggest} | wait | You can suggest again later | You can suggest again later (2.28.0: one suggestion per member per hour, three per member and ten in total a day, and GitHub's rate limit on new issues) | pending | info |
 | wait.retry | `cooldown`, `rate_limited`, `busy`, `transient`, `stopping` | wait | Please wait a moment | Please wait a moment | pending | info |
 | eligible | `eligible` | eligible | No application needed | No application needed | info | info |
 | upstream.lodestone | `unavailable` | upstream | The Lodestone isn't responding | The Lodestone isn't responding, with the diagnostic | warning | warn |
@@ -316,6 +317,7 @@ Codes are grouped into categories; each category logs at one level. A concept's 
 | upstream.member_list | `incomplete` {member_list} | upstream | Couldn't read the member list | Couldn't read the member list | warning | warn |
 | upstream.join_context | `incomplete` {join_context} | upstream | Couldn't read your join details | Couldn't read your join details; "Couldn't read that member's join details" when it names someone else (an `/assign` or `/officer` target, an applicant) | warning | warn |
 | upstream.discord | `unavailable` {api}; raw Discord 429 and 5xx | upstream | Discord isn't responding | Discord isn't responding | warning | warn |
+| upstream.github | `unavailable` {github} | upstream | GitHub didn't confirm your suggestion | GitHub didn't confirm your suggestion, with the diagnostic (2.28.0: the post may exist, so the card asks the member to check GitHub first, and the try counts toward the limits) | warning | warn |
 | blocked | `blocked`; raw Discord 50001, 50013, 10003, 10011 | blocked | Server setup issue | Discord permissions need attention, with Affected and Then, plus How to fix when the refusal is about TaruBot's role position or channel permissions (errors-and-style#8) | warning | warn |
 | paused | `disabled` | paused | Discord changes paused | Discord changes paused | pending | warn |
 | unexpected | `unexpected` and the internal codes (`idempotency_conflict`, `invalid_job`, `lease_lost`, `ordered`, `dm_blocked`, `configuration`, `schema`, `test_plan`, `writer_lease`) | unexpected | Something went wrong | Something went wrong | error | error |
@@ -414,3 +416,11 @@ The 27 inconsistencies the reply specs recorded are pinned one by one in `reply-
 - **Report saved** (pending): issue reporting isn't connected on this deployment yet, so the report waits.
 
 Both list what the report carries under "Sent with it": the description, the member's linked characters and settings in this server, their recent TaruBot activity, and TaruBot's health and recent logs. The footer is `Ref <interaction ID>`, which the issue also carries. A description under 10 characters is an input failure with the command's Example. The limits are `wait.issue`.
+
+## /suggest (2.28.0)
+
+`/suggest idea:…` answers with one card in the utility catalog (`suggestionReply`):
+
+- **Suggestion posted** (success): the embed links to the new issue, and the description names it as `owner/repository#N`, so DevBot's testers see that previews go to the private reports repository. "What was posted" says exactly what went public: the idea without links, Discord mentions, email addresses or long ID numbers, and TaruBot's version, and nothing about the member or the server. "Next" points to GitHub, and to `/issue` for problems. The idea itself is never echoed, and there is no footer or button.
+
+The refusals: outside the deployment's own server, `forbidden.context` ("Suggestions can be sent only from the Free Company server this TaruBot serves."), and the same concept when suggestions are switched off. Without the Member or Guest role, `forbidden.membership` with the lead "Only members and guests of this server can suggest features." and steps to either role. An unconfigured server gets the setup card. An idea under 10 characters once invisible characters are removed is an input failure with the command's Example. The limits and GitHub's rate limit (on the post or the app's sign-in) are `wait.suggest`; an unconfirmed post is `upstream.github`. A submission refused because shutdown began is `wait.retry` ("TaruBot is restarting right now."). A refused GitHub App credential, or a request GitHub rejects, is `unexpected` with a private issue report.

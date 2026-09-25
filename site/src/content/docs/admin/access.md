@@ -9,7 +9,7 @@ TaruBot checks who may run a command every time it runs, against the member's cu
 
 ## Anyone
 
-Every human member can link their own characters, choose a main and a nickname setting, check their own guest status and background work, report a problem, and use the utilities. Confirmed FC members can also record deposits and read the ledger.
+Every human member can link their own characters, choose a main and a nickname setting, check their own guest status and background work, report a problem, and use the utilities. Confirmed FC members can also record deposits and read the ledger. Holders of the Member or Guest role can [suggest features](/tarubot/admin/suggestions/) in the FC's own server.
 
 ## Officers
 

@@ -1,11 +1,11 @@
 ---
 title: Data and privacy
-description: What TaruBot stores, how it keeps values exact and history intact, what issue reports carry, and what members see.
+description: What TaruBot stores, how it keeps values exact and history intact, what issue reports and public suggestions carry, and what members see.
 sidebar:
   order: 3
 ---
 
-Everything TaruBot knows lives in one PostgreSQL database per deployment, run by that deployment's operator. Nothing is sent to the TaruBot project unless the operator points issue reports there.
+Everything TaruBot knows lives in one PostgreSQL database per deployment, run by that deployment's operator. Nothing is sent to the TaruBot project unless the operator points issue reports there. The one exception is [public suggestions](#public-suggestions), which only the project's own deployment accepts.
 
 ## The data model
 
@@ -55,6 +55,16 @@ When an operator configures a reports repository, `/issue` and automatic reports
 - the newest log records.
 
 Before a report is saved, TaruBot removes known secret shapes (Discord and GitHub tokens, authorization headers, passwords in URLs, PEM blocks, heartbeat ping URLs) and the deployment's own secret values. A member's own description goes into the issue as a quoted block, so it can't mention anyone on GitHub. Reports go to the repository the operator chose; the operator should keep it private.
+
+## Public suggestions
+
+`/suggest` is the one command whose words go public. In the FC server the TaruBot project's own deployment serves, it posts a member's idea as an issue in TaruBot's public GitHub repository, as the project's GitHub App. Other servers refuse it, except a development deployment's test server (`TEST_GUILD_ID`), which previews suggestions into the operator's private reports repository instead and never posts publicly.
+
+- **Posted:** the idea, after TaruBot removes links, IP addresses, Discord mentions, email addresses, credential shapes, long ID numbers and invisible characters, and turns `@` into `＠`; a fixed first line; and the running version. A final check refuses the post if anything slipped through.
+- **Never posted:** the member's Discord name or ID, the server, its channels and roles, characters and FC data, logs and settings.
+- **Kept privately:** an `audit` row per suggestion records who sent which issue, and the limits count those rows. Nothing else about a suggestion is saved.
+
+A public issue can be closed or deleted, but GitHub's notification emails, event feed and archives may already hold a copy. [Suggest a feature](/tarubot/use/suggest-a-feature/#what-goes-public) is the members' version of this list.
 
 ## Replies and messages
 

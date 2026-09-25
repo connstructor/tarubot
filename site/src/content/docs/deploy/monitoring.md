@@ -1,6 +1,6 @@
 ---
 title: Monitoring
-description: Health probes, logs, background jobs, Lodestone refreshes, officer notices, update posts, issue reports and the optional heartbeat.
+description: Health probes, logs, background jobs, Lodestone refreshes, officer notices, update posts, issue reports, public suggestions and the optional heartbeat.
 sidebar:
   order: 6
 ---
@@ -175,6 +175,41 @@ With `GITHUB_REPORTS_TOKEN` and your own `GITHUB_REPORTS_REPO` set, TaruBot open
 **What a report contains:** the version and readiness; the Lodestone's reachability, cooldown and selectors; active and recently failed jobs; the server's settings and roster state; for member reports, the member's links, main character, nickname state, guest and officer standing, recent work and audit; and the newest log records. Known secret shapes (tokens, authorization headers, passwords in URLs, PEM blocks, ping URLs) and the deployment's own secret values are removed first.
 
 **Delivery.** Reports are saved in the database first, then sent by background jobs, so a GitHub outage loses nothing. Without a token, reports stay saved and are sent once a token is set and the bot restarts. A refused token (401, 403 or 404) fails the delivery job with `configuration`: fix the token or repository, then [retry the job](#jobs-that-need-attention).
+
+## Public suggestions
+
+[`/suggest`](/tarubot/reference/commands/#suggest) posts a member's idea as a public issue in TaruBot's repository ([what officers see](/tarubot/admin/suggestions/), [what members see](/tarubot/use/suggest-a-feature/)). Only the TaruBot project's own production deployment posts publicly: as its GitHub App ([settings](/tarubot/deploy/configuration/#upstream-production-only)), from the one FC server that `src/config/deployment.ts` lists. Adding a server there is a code change. Any other deployment answers "Not available here" in every server. A development deployment (`TEST_GUILD_ID` set) previews suggestions into `GITHUB_REPORTS_REPO` with `GITHUB_REPORTS_TOKEN` instead, creating the two labels there, so testing never posts publicly.
+
+**What goes public:** only the member's cleaned text, in a code block under a fixed first line saying it came from Discord, and "Sent by TaruBot X.Y.Z.", with the labels `enhancement` and `from-discord`. Before posting, TaruBot:
+
+- folds compatibility forms (NFKC) and removes controls and invisible characters, so an ID or link split by an invisible mark is seen whole;
+- removes links, with or without a scheme and in any script, including a domain followed only by a port, query or fragment; IPv4 addresses; and global IPv6 addresses. A global IPv6 address has a first group of four hex digits starting with 2 or 3, at least two colons, and an address's shape (`::`, or all eight groups), bare or in brackets, with any port, path, query or fragment;
+- turns Discord mentions into `[member]`, `[role]` and `[channel]`, and custom emoji and command mentions into their names;
+- removes email addresses, the credential shapes issue reports redact, and runs of 17 or more digits;
+- turns every `@` into `＠`, and `#` in the title into `＃`.
+
+A final check refuses anything that slipped through, as an unexpected failure with an issue report. The member's name and ID, the server's, channels' and roles' IDs, FC and character data, logs and settings never go public.
+
+**Accepted limits.** These can't be recognised without garbling ordinary text: names typed freely; IDs split with visible separators; a host whose `。` sits next to a Chinese or Japanese label or top-level domain, which reads as the end of a sentence; look-alike dots, slashes and colons with no compatibility form (`discord·gg`, `discord.gg∕x`, `2001∶db8∶∶1`); IPv4 addresses written as one to three decimal numbers (`127.1`), which read like ratings and counts; a global IPv6 address inside a longer run of letters, digits or colons (`ip2001:db8::1`, `2001:db8::1x`; Chinese, Japanese, Korean, Thai, Lao, Khmer and Myanmar text around one doesn't count); and the start of one written without `::` (`2001:db8:1234`), which reads like a date or a score. Non-global IPv6 addresses (link-local `fe80::…`, unique-local `fd00::…`, loopback `::1`) stay, since they don't identify a connection publicly.
+
+**The private record.** Nothing is saved before posting, and there's no table or job for suggestions: the limits and the record of who sent what are `audit` rows. `suggestion.posted`, with the target `#N`, is written once GitHub confirms the issue. `suggestion.unconfirmed`, with no target, is written when GitHub's answer was unclear, because the issue may exist. Both count toward the limits (one per member an hour, three per member and ten in total in any 24 hours, by the database's clock). Submissions run one at a time, so the limits are exact. To find who sent issue `#N`:
+
+```sh
+docker compose exec -T postgres psql -U tarubot -d tarubot \
+  -c "SELECT guild_id, actor_id, event_at FROM audit WHERE action = 'suggestion.posted' AND target = '#N'"
+```
+
+Match an unconfirmed attempt by time against the issue's creation. Removing a member's Guest or Member role (a Guest with `/guest revoke`) ends their access to `/suggest`.
+
+**Failures, and what members see:**
+
+- **The limits, and GitHub's rate limit** on the post or the app's sign-in: "You can suggest again later", with when, logged at info. GitHub's rate limit records nothing.
+- **GitHub didn't confirm the post** (an outage, a timeout, an unreadable answer): "GitHub didn't confirm your suggestion", code `unavailable`, logged at warn. The try is recorded as `suggestion.unconfirmed` and counts toward the limits, so the card asks the member to check GitHub before sending it again. An outage during the app's sign-in reads and counts the same, although nothing was posted.
+- **A refused key, client ID or installation, or a request GitHub rejects:** the unexpected card, and an [issue report](#issue-reports) naming the app's settings. Nothing is recorded, so the member can try again once it's fixed.
+- **Switched off, or another server:** "Not available here", logged at info and never reported.
+- **A restart:** a post already at GitHub finishes and records its row before the bot gives up the [writer lease](/tarubot/deploy/operations/#single-database-writer); one still waiting behind it gets "Please wait a moment" ("TaruBot is restarting right now.") and records nothing.
+
+**Moderation.** Suggestions go up immediately. The maintainers close them (for example as not planned), lock or delete them. Deleting an issue can't recall notification emails, GitHub's events feed or archives that already copied it.
 
 ## Heartbeat
 

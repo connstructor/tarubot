@@ -673,6 +673,20 @@ Show Discord's gateway latency.
 
 This command has no options.
 
+### /suggest
+
+Suggest a TaruBot feature or improvement. It's posted at once as a public issue in TaruBot's GitHub repository, with only the cleaned idea and TaruBot's version, and the reply links to it. See [Suggest a feature](/tarubot/use/suggest-a-feature/).
+
+**Who can use it:** holders of the server's Member or Guest role, in the FC's own server: the one server the TaruBot project's own deployment serves. Officer access alone doesn't count, and other servers get "Not available here", even for their managers (a development deployment's test server previews suggestions privately instead; see [configuration](/tarubot/deploy/configuration/#development-only)). Each member can send one suggestion an hour and three a day, and the deployment posts at most ten a day.
+
+| Option | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `idea` | Text | Yes | The idea, 10 to 1,000 characters. It's posted publicly, so leave out names, personal details and security problems. Links, mentions, email addresses and long ID numbers are removed first. |
+
+```text
+/suggest idea:Let officers schedule FC events and remind members an hour before.
+```
+
 ### /version
 
 Show the running version, links to the source code and license, and recent commits from GitHub.

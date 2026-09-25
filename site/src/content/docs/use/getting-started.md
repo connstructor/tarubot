@@ -60,4 +60,6 @@ Your Lodestone token is never stored; only a one-way fingerprint of it is. A gue
 
 `/issue` sends a report to the people who run this TaruBot deployment. It includes your description, your Discord username and ID, your linked characters and settings in this server, your recent TaruBot activity, and the bot's health. Known secrets are removed first. See [Progress and problems](/tarubot/use/progress-and-problems/#report-a-problem).
 
+`/suggest` posts an idea publicly on GitHub, in the FC's own server. Only your cleaned text and TaruBot's version are posted, never your name, your characters or anything about the server. See [Suggest a feature](/tarubot/use/suggest-a-feature/#what-goes-public).
+
 For the full picture, see [Data and privacy](/tarubot/architecture/data-and-privacy/).
