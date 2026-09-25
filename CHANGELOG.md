@@ -1,6 +1,24 @@
 # Version history
 
-The current application version is **2.24.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.24.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.24.1 — `/sync status` shows only unresolved failures
+
+The owner saw "a ton of errors" in `/sync status` and asked whether they were stuck. None was. All 167 were profile refreshes from the first night:
+- 149 Lodestone refusals while production was on App Platform;
+- 13 rate limits after the move;
+- 5 for a deleted character.
+
+Every one of the 79 characters had a later refresh succeed, and no job had failed since 2.17.0. They stayed listed because the work list showed the newest non-succeeded jobs with no age limit, and nothing newer had failed. There is no migration and no command change.
+
+- **Change.** `Service.syncStatus` leaves a failed job out of the work list once the same work (its dedupe key) has succeeded after the failure. A failure after an earlier success, or one with no success since, is still listed. Job rows stay as history, and run totals are unchanged.
+- **Failure time (review fix).** "After the failure" needs to know when a job failed, and `retry.js` re-runs a row in place, keeping its creation time.
+  - The queue now stamps `completed_at` when a job ends failed, as it does on success. An error that ends a job as succeeded (`gone`) is stamped too.
+  - `retry.js` clears the stamp when it requeues a row.
+  - A row retried after a success that fails again therefore stays listed.
+  - Rows that failed before 2.24.1 have no failure time and fall back to their creation time.
+- **Effect in production.** A read-only query applying the same rule lists 0 of the 167 failed jobs.
+- **Tests.** An integration test covers a resolved failure (left out), a lone failure, a failure after a success, a row retried in place that failed after a newer success (all three listed), and a failure from before 2.24.1 that later succeeded (left out). A second test has the queue fail a job, finding its `completed_at` stamped, and `retry.js` clear it. Both fail against the first version of this change.
 
 ## 2.24.0 — Daily encrypted off-site database backups
 

@@ -21,6 +21,20 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 
 ## Automated suites
 
+**2.24.1** (`/sync status` shows only unresolved failures) passed strict type checking, lint, formatting, the compiled build and `ci:version`.
+- **Tests.** A new integration test, run against a throwaway PostgreSQL 18, gives the scenario its own guild so the 25-row limit holds only its jobs. It lists exactly the lone failure and the failure after an earlier success, leaving out the failure that later succeeded. It fails against the 2.24.0 service. The existing `/sync status` test still passes.
+- **Review round.** The review found that comparing creation times missed `retry.js`, which re-runs a failed row in place.
+  - The queue now stamps a failure's `completed_at`, `retry.js` clears it, and the rule compares the success's `completed_at` with the failure time (or the creation time, for rows from before 2.24.1).
+  - The listing test adds a row retried in place that failed after a newer success (listed), and a pre-2.24.1 failure that later succeeded (left out).
+  - A new test has the queue fail a job, finding `completed_at` stamped, and `retry.js` clear it.
+  - Both fail against the first version and pass now, with the existing `retry.js` test.
+  - A `due_at`-based rule was tried against production's data first and rejected: `due_at` includes the retry backoff, which would have kept 4 resolved failures listed, one of them for good.
+- **Suites.** `bun run test:unit` passed **1,152 tests** and `bun run test:contract` **26**. After the review round, the full container run passed **1,278 tests / 37,319 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+- **Production, read-only.** Of 167 failed jobs, 0 lack a later success under the same dedupe key.
+  - They are all profile refreshes from 2026-09-24 22:01 to 2026-09-25 00:32: 149 `unavailable` from the App Platform window, 13 `rate_limited`, and 5 `not_found` for the deleted 35999242.
+  - All 79 affected characters had a later refresh succeed.
+  - The dedupe index covers only queued, running and blocked jobs, so failed rows never blocked a retry.
+
 **2.24.0** (daily encrypted off-site backups) passed strict type checking, lint, formatting, the compiled build and `ci:version`. New cases in `tests/unit/backup-job.test.ts`:
 - `bash -n` and strict mode;
 - the dump piped straight into `age`;

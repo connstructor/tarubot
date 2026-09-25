@@ -1443,6 +1443,87 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     // A completed run finished when its last child job did, decoded as a Date.
     expect(completed.runs[0]?.completed_at).toBeInstanceOf(Date);
   });
+  test("sync status leaves out failures whose work later succeeded (2.24.1)", async () => {
+    // A guild of its own, so the 25 newest listed jobs are only this scenario's.
+    const statusGuild = "888888888888888813";
+    const officer = await displayGuild(statusGuild, "9230000000000098013");
+    const key = (name: string) => `user:${statusGuild}:status-${name}`;
+    // A job row as history leaves it: created, and finished (a success, or a failure since 2.24.1)
+    // some minutes ago; `finished: null` is a failure from before 2.24.1, with no failure time.
+    const insert = (
+      name: string,
+      status: "failed" | "succeeded",
+      created: number,
+      finished: number | null,
+    ) =>
+      db.query<{ id: string }>(
+        `INSERT INTO jobs (kind, dedupe_key, payload, guild_id, user_id, status, last_error, created_at, completed_at)
+         VALUES ('reconcile.user', $1, '{}'::jsonb, $2, '98070', $3, $4,
+           now() - make_interval(mins => $5),
+           CASE WHEN $6::int IS NULL THEN NULL ELSE now() - make_interval(mins => $6::int) END)
+         RETURNING id::text`,
+        [
+          key(name),
+          statusGuild,
+          status,
+          status === "failed" ? "unavailable: Lodestone unavailable." : null,
+          created,
+          finished,
+        ],
+      );
+    // Resolved: it failed, then the same work succeeded. Left out.
+    const [resolved] = await insert("resolved", "failed", 120, 110);
+    await insert("resolved", "succeeded", 60, 60);
+    // A failure alone, and a failure after an earlier success: both still listed.
+    const [lone] = await insert("lone", "failed", 90, 90);
+    await insert("relapsed", "succeeded", 120, 120);
+    const [relapse] = await insert("relapsed", "failed", 60, 55);
+    // Retried in place (retry.js keeps the row and its creation time) and failed again after a
+    // newer row succeeded: still listed, because it failed after that success (review of 2.24.1).
+    const [retried] = await insert("retried", "failed", 180, 5);
+    await insert("retried", "succeeded", 60, 60);
+    // A failure from before 2.24.1, with no failure time: its creation time decides. Left out.
+    const [legacy] = await insert("legacy", "failed", 120, null);
+    await insert("legacy", "succeeded", 60, 60);
+    if (!resolved || !lone || !relapse || !retried || !legacy)
+      throw new Error("Missing inserted jobs");
+    const listed = (await service.syncStatus(officer, null)).work.map((row) => row.id).sort();
+    expect(listed).toEqual([lone.id, relapse.id, retried.id].sort());
+    expect(listed).not.toContain(resolved.id);
+    expect(listed).not.toContain(legacy.id);
+  });
+
+  test("the queue stamps when a job failed, and retry.js clears it (2.24.1)", async () => {
+    const failGuild = "888888888888888814";
+    await displayGuild(failGuild, "9230000000000098014");
+    // Only this job may be claimed.
+    await db.query("UPDATE jobs SET status='disabled' WHERE status IN ('queued','running')");
+    const id = await enqueue(db.pool, "probe", `probe:${failGuild}:failure-time`, {}, failGuild);
+    const queue = new Queue(
+      db,
+      async () => {
+        throw new Failure("invalid_job", "The probe always fails.");
+      },
+      () => {},
+    );
+    const job = await queue.claim();
+    if (job?.id !== id) throw new Error("Missing lease");
+    await queue.perform(job);
+    const row = async () =>
+      (
+        await db.query<{ status: string; completed_at: Date | null }>(
+          "SELECT status, completed_at FROM jobs WHERE id=$1",
+          [id],
+        )
+      )[0];
+    const failed = await row();
+    expect(failed?.status).toBe("failed");
+    expect(failed?.completed_at).toBeInstanceOf(Date);
+    await db.transaction((client) => retryJob(client, failGuild, id));
+    expect(await row()).toMatchObject({ status: "queued", completed_at: null });
+    await db.query("UPDATE jobs SET status='disabled' WHERE id=$1", [id]);
+  });
+
   test("failed nickname writes do not invent a successful write; manual races are preserved", async () => {
     const owner = "90011";
     await service.assign(

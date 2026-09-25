@@ -318,7 +318,14 @@ export async function retryJob(client: PoolClient, guild: string, job: string): 
   try {
     await db
       .update(t.jobs)
-      .set({ status: "queued", attempts: 0, due_at: sql`now()`, last_error: null })
+      // A retried row is unfinished again, so its previous failure time no longer applies.
+      .set({
+        status: "queued",
+        attempts: 0,
+        due_at: sql`now()`,
+        last_error: null,
+        completed_at: null,
+      })
       .where(eq(t.jobs.id, job));
   } catch (error) {
     // An enqueue for the same key committed after the check above: refuse the same way.
@@ -588,6 +595,10 @@ export class Queue {
           .set({
             status: outcome.status,
             due_at: sql`now()+${outcome.delaySeconds}*interval '1 second'`,
+            // When the job ended (2.24.1): a terminal failure is timestamped like a success, so
+            // /sync status can tell whether the same work succeeded after it. Otherwise unfinished.
+            completed_at:
+              outcome.status === "failed" || outcome.status === "succeeded" ? sql`now()` : null,
             lease_until: null,
             last_error: outcome.diagnostic,
             attempts: outcome.waiting ? sql`greatest(0,${t.jobs.attempts}-1)` : t.jobs.attempts,

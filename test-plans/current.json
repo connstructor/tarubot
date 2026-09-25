@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.24.0 daily encrypted backups",
-  "objective": "2.24.0 adds a daily encrypted database dump from the production host to Linode Object Storage, with its own healthchecks.io check. The bot itself doesn't change: DevBot and production keep running, and deploying is a pull plus a crontab line on the host.",
+  "title": "Session: 2.24.1 unresolved failures only",
+  "objective": "2.24.1 makes /sync status list a failed job only until the same work later succeeds, so the first night's resolved Lodestone failures stop showing. With 2.24.0, the host also starts its daily encrypted backup. No migration and no command change.",
   "user": [
-    "Keep the 'TaruBot backups' check at period 1 day, grace 3 hours, with Pushover for down.",
-    "After the first scheduled run (04:30 UTC), confirm the check shows the dump size.",
-    "Optional: attach a Linode Cloud Firewall to the tarubot Linode (inbound SSH and ICMP only)."
+    "Run /sync status as an officer: the old profile failures are gone, and runs and pending work read as before.",
+    "Say if any failure you'd expect to see is missing.",
+    "Check the 'TaruBot backups' check after the first scheduled run (04:30 UTC)."
   ],
   "assistant": [
-    "After the merge, pull on the host and install the backup schedule (no bot restart).",
-    "Check the first scheduled run in ~/tarubot-backup.log and the bucket.",
-    "Prepare 2.25.0: deploys over SSH from GitHub Actions."
+    "Deploy 2.24.1 to DevBot and production with the owner's go-ahead (restarts, no migration).",
+    "Install the backup crontab line on the host and confirm its first scheduled run.",
+    "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Keep running 2.22.0 on schema 008 with the heartbeat on in production.",
-    "Nothing changes in the running bot for this session.",
-    "Post this responsibility-separated session plan in #chat on DevBot's next restart."
+    "Run compiled 2.24.1 on schema 008, heartbeat on in production.",
+    "List only unresolved failures in /sync status.",
+    "Post this responsibility-separated session plan in #chat."
   ]
 }
