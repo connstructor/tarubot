@@ -156,9 +156,12 @@ export function yesNo(value: boolean | null | undefined): string {
   return value === null || value === undefined ? "—" : value ? "yes" : "no";
 }
 
-/** A duration in the largest sensible unit: 45 s, 12 min, 3.7 h, 2.1 d. */
-export function duration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+/**
+ * A duration in the largest sensible unit: 45 s, 12 min, 3.7 h, 2.1 d. Anything that isn't a
+ * finite number (null for "no roster yet", a missing field) is a dash, never "0 s".
+ */
+export function duration(seconds: unknown): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "—";
   if (seconds < 90) return `${Math.round(seconds)} s`;
   if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
   if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;
@@ -178,6 +181,20 @@ const LEVELS: Readonly<Record<number, string>> = {
 const LOG_NOISE = new Set(["level", "time", "pid", "hostname", "msg"]);
 /** Periodic records that repeat every 30 seconds; readiness already shows their numbers. */
 const LOG_ROUTINE = new Set(["Capability status"]);
+
+/**
+ * Whether a serialized record is routine and worth no space in the recent-log buffer. The buffer
+ * skips these as they are written, so on an idle bot its slots still hold the useful records
+ * instead of half an hour of the same periodic line.
+ */
+export function routineLog(line: string): boolean {
+  try {
+    const entry = JSON.parse(line) as { msg?: unknown };
+    return typeof entry.msg === "string" && LOG_ROUTINE.has(entry.msg);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * pino JSON records as readable lines: `03:07:37 INFO Modules loaded · commands=20 events=15`.

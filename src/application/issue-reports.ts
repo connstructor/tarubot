@@ -670,7 +670,7 @@ export class IssueReports {
       ["Discord changes", flag(status.effects)],
       ["Pending jobs", capabilities.pending ?? "—"],
       ["Blocked jobs", capabilities.blocked ?? "—"],
-      ["Oldest roster", duration(Number(capabilities.oldest_roster_age_seconds))],
+      ["Oldest roster", duration(capabilities.oldest_roster_age_seconds)],
       ["Degraded FCs", capabilities.degraded_fcs ?? "—"],
     ]);
   }
@@ -705,7 +705,7 @@ export class IssueReports {
         [
           ["Ready", yesNo(health.ready === true)],
           ["Parses running", health.active ?? "—"],
-          ["429 cooldown", duration(Number(gate.cooldownSeconds ?? 0))],
+          ["429 cooldown", duration(gate.cooldownSeconds)],
           ["429s in a row", gate.strikes ?? "—"],
           ["Upstream parsers", upstream.status ?? "—"],
         ],

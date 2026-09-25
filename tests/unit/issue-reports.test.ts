@@ -136,3 +136,12 @@ test("log records become readable lines without routine or per-process noise (2.
     "not json",
   ]);
 });
+
+test("the recent-log buffer keeps useful records through a long quiet stretch (2.18.1 review)", () => {
+  // Two hours of 30-second Capability status records must not push out the one useful record.
+  const logs = new RecentLogs(60);
+  logs.write('{"level":40,"time":1790305690000,"msg":"Retrying"}');
+  for (let index = 0; index < 240; index++)
+    logs.write(`{"level":30,"time":${1790305700000 + index * 30000},"msg":"Capability status"}`);
+  expect(logs.recent()).toEqual(['{"level":40,"time":1790305690000,"msg":"Retrying"}']);
+});

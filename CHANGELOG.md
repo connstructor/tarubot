@@ -13,6 +13,7 @@ The owner's first `/issue` (issue #1) worked, but read poorly on GitHub. A code 
   - the member's main character is shown by name.
 - **Logs.** `logLines()` turns pino records into `03:07:37 INFO Modules loaded · commands=20 …`, and drops `pid`, `hostname` and the routine `Capability status` records.
 - **Footer.** Only automatic reports end with their occurrence count and fingerprint.
+- **Review round (PR #20).** An unknown roster age (`null`: no roster accepted yet) no longer reads as "0 s", because `duration()` shows a dash for anything that isn't a finite number. The recent-log buffer now skips routine records as they are written. Before, the filter ran after the newest 30 were taken, so an idle bot's log section could come out empty while useful records sat earlier in the buffer.
 - **Tests.** Unit tests cover the new helpers. The `/issue` delivery test now requires every code fence to start its line, no raw ISO times, and no occurrence footer on a member's report. A sample was verified through GitHub's Markdown renderer.
 - **Records.** The 2.18.0 rollouts are recorded in DEV_GUILD.md and VERIFICATION.md.
 

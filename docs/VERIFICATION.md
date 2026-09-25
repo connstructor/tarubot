@@ -24,9 +24,10 @@ Live registration, gateway connection/restart, complete member enumeration, hier
 **2.18.1** (readable issue reports) passed strict type checking, lint, formatting, the compiled build and `ci:version` (2.18.1 above 2.18.0). New cases:
 - two-column record tables, UTC times, durations and yes/no;
 - log records as readable lines, without routine `Capability status` records or per-process fields;
+- review round: an unknown duration reads as a dash, never "0 s", and the buffer keeps a useful record through two hours of routine ones;
 - in the `/issue` delivery test, every code fence starting its line, no raw ISO times, and no occurrence footer on a member's report.
 
-A sample body built from the new helpers rendered through GitHub's Markdown API (`POST /markdown`) as 6 tables, 2 code blocks and the collapsible logs, with no stray fence markers. `bun run test:unit` passed **1,132 tests** and `bun run test:contract` **24**. The full container run passed **1,254 tests / 37,306 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
+A sample body built from the new helpers rendered through GitHub's Markdown API (`POST /markdown`) as 6 tables, 2 code blocks and the collapsible logs, with no stray fence markers. `bun run test:unit` passed **1,133 tests** and `bun run test:contract` **24**. The full container run passed **1,255 tests / 37,307 assertions** with no failures, both with the supplied `tarubot_backup.sql` and with the synthetic CI fixture.
 
 **2.18.0 rollouts (2026-09-25).** DevBot and production applied migration 008, production with about 30 s of downtime (restore point 03:08:59.951594 UTC) and a backup kept off Linode. `/issue` was registered in DevBot's guild and globally, and both read-backs were clean. The owner's test report opened issue #1 ([DEV_GUILD.md](DEV_GUILD.md#2180-rollout--2026-09-25)).
 
