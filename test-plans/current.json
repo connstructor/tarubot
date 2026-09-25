@@ -1,19 +1,19 @@
 {
-  "title": "Session: 2.21.0 Lodestone parser inside the bot",
-  "objective": "Check 2.21.0, which moves the Lodestone parser into the bot and removes the sidecar container, while keeping everything else the same: characters, rosters and searches read exactly as before. It also brings 2.19.0 (live selectors) and 2.20.0 (TaruBot's own parser). No migration and no command change.",
+  "title": "Session: 2.22.0 healthchecks.io heartbeat",
+  "objective": "Check 2.22.0, which pings a healthchecks.io check every five minutes while the bot is ready, so an outside check alerts when the host or bot goes silent. DevBot runs with the heartbeat off; production gets the ping URL. No migration and no command change.",
   "user": [
-    "Approve the restart, then run `/claim` by name and world, `/characters` and `/sync status`; everything reads as before.",
-    "Optional: `/refresh force:true` as an officer, and check the roster count still matches the FC.",
-    "Say if any name, world or rank looks different."
+    "Keep the 'TaruBot production' check at period 5 minutes, grace 10 minutes, with Pushover for down.",
+    "After the deploy, confirm the check turns green and its event log shows the status line.",
+    "Optional: pause and resume the check once to see the notifications."
   ],
   "assistant": [
-    "Deploy 2.21.0 to DevBot and production with the owner's go-ahead (restarts with --remove-orphans, no migration).",
-    "Check readiness's lodestone object (selectors current), that no sidecar container remains, and one roster and one profile refresh in the logs.",
-    "Record the rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "Deploy 2.22.0 to DevBot and production with the owner's go-ahead (restarts, no migration).",
+    "Put the ping URL into the host's .env from ~/tarubot-cutover/healthchecks-production.url, never through chat.",
+    "Record both rollouts in docs/DEV_GUILD.md and docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run compiled 2.21.0 on schema 008 with the Lodestone parser in process.",
-    "Follow the selectors' upstream HEAD live and parse every page exactly as before.",
+    "Run compiled 2.22.0 on schema 008 with the Lodestone parser in process.",
+    "Ping healthchecks.io every five minutes while ready (production only), with a one-line status.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

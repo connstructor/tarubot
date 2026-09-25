@@ -92,6 +92,7 @@ export function lifecycleHarness(
     HEALTH_PORT: 0,
     GITHUB_REPORTS_TOKEN: "",
     GITHUB_REPORTS_REPO: "deconfined/tarubot-reports",
+    HEALTHCHECKS_PING_URL: "",
     ...overrides,
   };
   // A real SDK client that never logs in; only readiness and identity are replaced.

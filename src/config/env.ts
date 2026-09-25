@@ -32,6 +32,11 @@ const schema = z.object({
     .string()
     .regex(/^[A-Za-z\d-]+\/[A-Za-z\d._-]+$/u, "owner/repository")
     .default("deconfined/tarubot-reports"),
+  // Heartbeat (2.22.0): a healthchecks.io ping URL, pinged every five minutes while the bot is ready
+  // so an outside check alerts when the pings stop. Empty turns it off (DevBot, CI).
+  HEALTHCHECKS_PING_URL: z
+    .union([z.literal(""), z.string().url().startsWith("https://")])
+    .default(""),
 });
 export type Configuration = z.infer<typeof schema>;
 /** Report setting names and expected formats while avoiding raw environment values. */

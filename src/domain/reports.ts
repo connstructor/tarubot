@@ -30,7 +30,8 @@ export type ReportSource = "user" | "error" | "job" | "trouble";
 
 /**
  * Patterns for credentials that must never reach a report, whatever text carried them: Discord bot
- * tokens, GitHub tokens, Authorization values, passwords in connection URLs, and PEM blocks.
+ * tokens, GitHub tokens, Authorization values, passwords in connection URLs, PEM blocks, and
+ * healthchecks.io ping URLs (anyone holding one can ping the check and hide an outage).
  */
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gu, "[pem redacted]"],
@@ -42,6 +43,7 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/\bgh[pousr]_[A-Za-z\d]{20,}\b/gu, "[github token redacted]"],
   [/\b(Bot|Bearer|token)\s+[A-Za-z\d._~+/=-]{16,}/giu, "$1 [redacted]"],
   [/([a-z][a-z\d+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/giu, "$1[credentials redacted]@"],
+  [/\bhc-ping\.com\/[^\s"'<>)]+/giu, "hc-ping.com/[ping URL redacted]"],
 ];
 
 /**

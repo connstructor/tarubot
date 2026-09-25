@@ -23,6 +23,7 @@ Normal deployments use published GHCR images. Pull updates with `docker compose 
 | `VERIFICATION_SECONDS` | 1,800; proof challenge lifetime |
 | `GUEST_COOLDOWN_SECONDS` | 86,400; denied-application cooldown |
 | `HEALTH_PORT` | 3,000 inside the bot container |
+| `HEALTHCHECKS_PING_URL` | Empty (off); a healthchecks.io ping URL the ready bot pings every five minutes (2.22.0, [HOSTING.md](HOSTING.md#heartbeat)) |
 
 Lodestone request, worker, retry, body, pagination, region and selector settings are in [LODESTONE.md](LODESTONE.md#settings). The bot's initial schema check rejects incompatible versions. Migrations are serialized with an advisory transaction lock and checksum-verified against applied versions.
 

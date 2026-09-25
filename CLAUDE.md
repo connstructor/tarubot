@@ -17,6 +17,7 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `access-facts.ts` and `rank-policy.ts`: eligibility inputs.
   - `lifecycle.ts`: readiness, startup, and the database writer lease.
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
+  - `heartbeat.ts`: the healthchecks.io dead-man's switch (2.22.0), pinged every five minutes while ready (`HEALTHCHECKS_PING_URL`; empty is off).
   - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
@@ -91,7 +92,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, and 2.21.0 moved the parser into the bot (no sidecar); then OPS-10/OPS-11.
+  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11.
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
