@@ -25,6 +25,7 @@ import { existingRoleId } from "../domain/role-selection.js";
 import { changelogPost } from "./presenters/changelog.js";
 import { decisionDm, guestReviewPost } from "./presenters/guests.js";
 import { ledgerPost } from "./presenters/ledger.js";
+import { statusPost } from "./presenters/officer.js";
 import type { Presented } from "./presenters/reply.js";
 
 /**
@@ -440,6 +441,7 @@ export class DiscordGateway implements DiscordPort {
     if (message.kind === "ledger") return DiscordGateway.sendable(ledgerPost(message.view));
     if (message.kind === "review")
       return DiscordGateway.sendable(guestReviewPost(message.application));
+    if (message.kind === "status") return DiscordGateway.sendable(statusPost(message.view));
     return {
       content: message.text.slice(0, 1950),
       allowedMentions: { parse: [] as [] },

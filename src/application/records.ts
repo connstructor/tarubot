@@ -7,6 +7,7 @@ import type {
 } from "../infrastructure/postgres/schema.js";
 import type { AccessRoles, AccessSnapshot, ChannelAudience } from "../domain/channel-access.js";
 import type { ReleaseNote } from "../domain/changelog.js";
+import type { StatusEntry } from "../domain/status.js";
 
 /** Configuration revision fences queued effects; activation is separate from bot membership. */
 export type GuildRecord = Omit<typeof guilds.$inferSelect, "created_at">;
@@ -82,6 +83,15 @@ export interface ChangelogPostView {
   readonly url: string;
 }
 /**
+ * What an officer status post shows (2.27.0, issue #31): one frozen batch's entries in the order
+ * they were frozen, and when the batch was frozen (the embed timestamp, ISO). Only stored values,
+ * so a resend of the batch renders byte-identical JSON under its status:<batch> nonce key.
+ */
+export interface StatusPostView {
+  readonly frozenAt: string;
+  readonly entries: readonly StatusEntry[];
+}
+/**
  * A channel post as data; the gateway renders it through the reply presenters, so jobs never
  * build message text. `text` is the documented plain-text exclusion (officer.notify, and the
  * DevBot smoke check): already escaped by its caller and sent as content.
@@ -90,7 +100,8 @@ export type PostMessage =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "changelog"; readonly view: ChangelogPostView }
   | { readonly kind: "ledger"; readonly view: LedgerPostView }
-  | { readonly kind: "review"; readonly application: ApplicationRecord };
+  | { readonly kind: "review"; readonly application: ApplicationRecord }
+  | { readonly kind: "status"; readonly view: StatusPostView };
 /** A direct message as data: the applicant's approval or denial, with the reapply cooldown. */
 export interface DirectMessage {
   readonly kind: "decision";

@@ -1,7 +1,8 @@
 /**
- * Migration rehearsals (005 through 009) in private PostgreSQL schemas, isolated from
+ * Migration rehearsals (005 through 010) in private PostgreSQL schemas, isolated from
  * persistence.test.ts's public schema: import/activation backfill, the new CHECKs, the
- * guest-application switch, the changelog columns, an empty database, and the real migrate() runner.
+ * guest-application switch, the changelog columns, the status-notice columns, an empty database,
+ * and the real migrate() runner.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
@@ -535,6 +536,63 @@ describe.skipIf(!url)("migration 009 changelog channel", () => {
         (await client.query<{ changelog_version: string }>("SELECT changelog_version FROM guilds"))
           .rows,
       ).toEqual([{ changelog_version: "2.25.0-rc.1" }]);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+});
+
+const STATUS_NOTICES = "010_status_notices.sql";
+
+describe.skipIf(!url)("migration 010 status notices", () => {
+  if (!url) return;
+  const db = new Database(url);
+  afterAll(async () => {
+    await db.close();
+  });
+
+  test("existing members start never observed: the three new columns are NULL", async () => {
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("CREATE SCHEMA m010_rehearsal");
+      await client.query("SET LOCAL search_path TO m010_rehearsal");
+      for (const file of (await migrationFiles()).filter((name) => name < STATUS_NOTICES))
+        await client.query(await migration(file));
+      // A schema-009 member row (guild_users references guilds and users), with the reserved #31
+      // test guild ID.
+      await client.query("INSERT INTO guilds (id) VALUES ('666666666666666740')");
+      await client.query("INSERT INTO users (id) VALUES ('93100001')");
+      await client.query(
+        "INSERT INTO guild_users (guild_id, user_id, present, joined_at) VALUES ('666666666666666740', '93100001', true, now())",
+      );
+      await client.query(await migration(STATUS_NOTICES));
+      expect(
+        (
+          await client.query<{
+            status_state: unknown;
+            status_since: Date | null;
+            status_posting: unknown;
+          }>("SELECT status_state, status_since, status_posting FROM guild_users")
+        ).rows,
+      ).toEqual([{ status_state: null, status_since: null, status_posting: null }]);
+      // The types the bot writes: JSON documents and a database-clock instant, with no default.
+      expect(
+        (
+          await client.query<{ column_name: string; data_type: string; column_default: null }>(
+            "SELECT column_name, data_type, column_default FROM information_schema.columns WHERE table_schema='m010_rehearsal' AND table_name='guild_users' AND column_name LIKE 'status%' ORDER BY column_name",
+          )
+        ).rows,
+      ).toEqual([
+        { column_name: "status_posting", data_type: "jsonb", column_default: null },
+        {
+          column_name: "status_since",
+          data_type: "timestamp with time zone",
+          column_default: null,
+        },
+        { column_name: "status_state", data_type: "jsonb", column_default: null },
+      ]);
     } finally {
       await client.query("ROLLBACK");
       client.release();

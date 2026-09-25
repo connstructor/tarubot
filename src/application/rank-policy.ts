@@ -153,3 +153,14 @@ export function desiredRankRole(
 ): boolean {
   return state === "unknown" ? held : state === "yes" && (manual || fresh || held);
 }
+
+/**
+ * Whether desiredRankRole decides the same whether or not the member already holds the role
+ * (officer status notices, issue #31): "no" always is, "yes" is with a manual grant or fresh
+ * evidence, and "unknown" never is, since it keeps whatever is held.
+ */
+export function rankDecisive(state: RankState, fresh: boolean, manual = false): boolean {
+  return (
+    desiredRankRole(state, true, fresh, manual) === desiredRankRole(state, false, fresh, manual)
+  );
+}

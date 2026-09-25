@@ -232,6 +232,32 @@ describe("job markers and lines", () => {
     ).toBe("`– SKIPPED` changelog.post `1a2b3c4d` · <t:1790169000:R>\n> already announced");
   });
 
+  test("status posts (2.27.0) read as 'Status notice' for members, raw for officers", () => {
+    expect(jobLabel("officer.status")).toBe("Status notice");
+    const status = (overrides: Parameters<typeof job>[0]) =>
+      jobLine(job({ kind: "officer.status", ...overrides }), VIEWERS.member);
+    expect(status({ status: "succeeded", completed_at: NOW })).toBe(
+      "`✓ DONE` Status notice posted <t:1790169000:R>",
+    );
+    // A window whose changes cancelled out, and a guild with no officer notifications channel.
+    expect(
+      status({ status: "succeeded", completed_at: NOW, result: { skipped: "nothing to post" } }),
+    ).toBe("`– SKIPPED` Status notice: nothing to do");
+    expect(
+      jobLine(
+        job({
+          kind: "officer.status",
+          status: "succeeded",
+          completed_at: NOW,
+          result: { skipped: "officer notifications unconfigured" },
+        }),
+        VIEWERS.officer,
+      ),
+    ).toBe(
+      "`– SKIPPED` officer.status `1a2b3c4d` · <t:1790169000:R>\n> officer notifications unconfigured",
+    );
+  });
+
   test("paused work names the deployment switch when effects are off for the deployment", () => {
     expect(
       jobLine(job({ status: "disabled" }), VIEWERS.member, { effectsMode: "deployment_disabled" }),

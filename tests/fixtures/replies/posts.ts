@@ -1,16 +1,18 @@
 /**
  * The channel post and DM catalog: one case per ledger post kind (approved ledger#29 and #32,
  * reply specs ledger#30 and #31), per review message and decision DM kind (reply specs
- * guests#29–#32 and the legacy review gap), and the update post (2.25.0). Each renders a stored
- * record the way the gateway renders it for the ledger.notify, guest.review, guest.dm and
- * changelog.post jobs. The samples are exported so the gateway tests send the same posts through
- * the REST recorder.
+ * guests#29–#32 and the legacy review gap), the update post (2.25.0) and the officer status post
+ * (2.27.0). Each renders a stored record the way the gateway renders it for the ledger.notify,
+ * guest.review, guest.dm, changelog.post and officer.status jobs. The samples are exported so the
+ * gateway tests send the same posts through the REST recorder.
  */
 import type {
   ApplicationRecord,
   ChangelogPostView,
   LedgerPostView,
+  StatusPostView,
 } from "../../../src/application/records.js";
+import type { Flags, StatusEntry } from "../../../src/domain/status.js";
 import {
   changelogPost,
   type ChangelogPostKind,
@@ -21,7 +23,8 @@ import {
   type GuestPostKind,
 } from "../../../src/discord/presenters/guests.js";
 import { ledgerPost, type LedgerPostKind } from "../../../src/discord/presenters/ledger.js";
-import { GUEST_ID, GUILD_ID, OFFICER_ID } from "../results.js";
+import { statusPost, type StatusPostKind } from "../../../src/discord/presenters/officer.js";
+import { GUEST_ID, GUILD_ID, MEMBER_ID, OFFICER_ID } from "../results.js";
 import { APPLICATION_ID } from "./guests.js";
 import { E41, E42, E43, ENTRY_IDS, entry } from "./ledger.js";
 import type { ReplyCatalog } from "./index.js";
@@ -61,6 +64,90 @@ export const CHANGELOG_POST: ChangelogPostView = {
     },
   ],
   url: "https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md",
+};
+
+/** Access flags for a status entry; unset flags are null (unbound, or never decided). */
+export const statusFlags = (values: Partial<Flags> = {}): Flags => ({
+  member: null,
+  guest: null,
+  officer: null,
+  leader: null,
+  ...values,
+});
+
+/** One member's frozen status lines: announced `from`, posted `to`, reasons and departures. */
+export const statusEntry = (
+  user: string,
+  from: Partial<Flags>,
+  to: Partial<Flags> = from,
+  extra: Partial<StatusEntry> = {},
+): StatusEntry => ({
+  user,
+  joined: "2026-01-01T00:00:00.000Z",
+  from: statusFlags(from),
+  to: statusFlags(to),
+  reasons: {},
+  departed: [],
+  ...extra,
+});
+
+/** Two more members for the status post: an officer whose access was revoked, and an alt's owner. */
+export const STATUS_USERS = {
+  a: MEMBER_ID,
+  b: "567890123456789012",
+  c: GUEST_ID,
+  d: OFFICER_ID,
+  e: "678901234567890124",
+} as const;
+
+/**
+ * The status post of the plan approved on #31: two members lost Member (one's alt left the FC), a
+ * guest grant, an officer revocation, and an alt's departure whose owner keeps Member elsewhere.
+ */
+export const STATUS_POST: StatusPostView = {
+  frozenAt: "2026-09-25T18:00:00.000Z",
+  entries: [
+    statusEntry(
+      STATUS_USERS.a,
+      { member: true, guest: false },
+      { member: false, guest: true },
+      {
+        reasons: { member: "not_in_fc", guest: "former_member" },
+        departed: [
+          { character: "1001", name: "Example Alt", world: "Example World", snapshot: "s1" },
+        ],
+      },
+    ),
+    statusEntry(
+      STATUS_USERS.b,
+      { member: true, guest: false },
+      { member: false, guest: true },
+      { reasons: { member: "not_in_fc", guest: "registered" } },
+    ),
+    statusEntry(
+      STATUS_USERS.c,
+      { member: false, guest: false },
+      { member: false, guest: true },
+      { reasons: { guest: "guest_grant" } },
+    ),
+    statusEntry(
+      STATUS_USERS.d,
+      { member: true, guest: false, officer: true },
+      { member: true, guest: false, officer: false },
+      { reasons: { officer: "officer_revoked" } },
+    ),
+    statusEntry(
+      STATUS_USERS.e,
+      {},
+      {},
+      {
+        joined: null,
+        departed: [
+          { character: "1002", name: "Second Alt", world: "Example World", snapshot: "s1" },
+        ],
+      },
+    ),
+  ],
 };
 
 /** A time as the reply specs' <t:…> values write it. */
@@ -218,4 +305,14 @@ export const POST_CASES = {
     timestamp: false,
     render: () => changelogPost(CHANGELOG_POST),
   },
-} as const satisfies ReplyCatalog<LedgerPostKind | GuestPostKind | ChangelogPostKind>;
+  "status.changes": {
+    spec: null,
+    audience: "channel",
+    tone: "info",
+    title: "Member status changes",
+    timestamp: true,
+    render: () => statusPost(STATUS_POST),
+  },
+} as const satisfies ReplyCatalog<
+  LedgerPostKind | GuestPostKind | ChangelogPostKind | StatusPostKind
+>;

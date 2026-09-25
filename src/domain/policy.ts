@@ -129,6 +129,26 @@ export function desiredAccess(facts: AccessFacts): { member: boolean; guest: boo
   };
 }
 
+/**
+ * Which desiredAccess decisions don't depend on the roles the member already holds (officer status
+ * notices, issue #31). The real policy runs once per combination of holding Member and Guest; a
+ * flag is decisive when all four agree. Only decisive values are recorded for status posts, so a
+ * rebind, an out-of-date roster or a hand edit the policy keeps can never read as a change.
+ * Probing the function itself keeps this right if the policy changes. Worked out by class:
+ * - member: `member` is decisive only with fresh evidence; `guest` when fresh or revoked (false);
+ * - uncertain: `member` never is; `guest` only when revoked (a grant still defers to held Member);
+ * - ineligible: `member` always is (false); `guest` is, except for a registered user with stale
+ *   evidence and no grant, FC history or revocation (then a held Guest is kept).
+ */
+export function accessDecisive(facts: AccessFacts): { member: boolean; guest: boolean } {
+  const probes = [false, true].flatMap((hasMember) =>
+    [false, true].map((hasGuest) => desiredAccess({ ...facts, hasMember, hasGuest })),
+  );
+  const agree = (flag: "member" | "guest") =>
+    probes.every((probe) => probe[flag] === probes[0]?.[flag]);
+  return { member: agree("member"), guest: agree("guest") };
+}
+
 /** Advance only on accepted complete observations; reappearance clears pending departure. */
 export function departure(
   previous: "present" | "missing" | "absent" | undefined,

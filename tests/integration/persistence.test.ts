@@ -70,6 +70,9 @@ import applyComponent from "../../src/components/guest-application.component.js"
 import reviewComponent from "../../src/components/guest-review.component.js";
 import { guestApplicationModal } from "../../src/discord/guest-application.js";
 import { ledgerPost } from "../../src/discord/presenters/ledger.js";
+import { statusFits, statusPost } from "../../src/discord/presenters/officer.js";
+import { statusNoticeKey } from "../../src/application/status-notices.js";
+import type { StatusState } from "../../src/domain/status.js";
 import { GUEST_APPLICATIONS_CLOSED } from "../../src/domain/guest-application.js";
 import {
   activateGuild,
@@ -7474,5 +7477,1033 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         notes: [{ version: project.version, note: "The running release." }],
       });
     });
+  });
+
+  /**
+   * Officer status notices (2.27.0, issue #31). Reserved for these tests: guilds
+   * 666666666666666740-769, FCs 9232097761132950100-129, users 931xxxxx-933xxxxx (and the 18-digit
+   * 9318…), characters 883xxxxx-887xxxxx and role and channel IDs 824xx. Each test builds its own
+   * guild with the four roles bound, the officer notifications channel set and effects on, reads
+   * `sent` by guild, and stands in for the two-minute window by moving `status_since` back.
+   */
+  describe("officer status notices", () => {
+    const reserved = (n: number) => String(666666666666666740n + BigInt(n));
+    const reservedFc = (n: number) => String(9232097761132950100n + BigInt(n));
+    const CHANNEL = "82401";
+    const ROLE = { member: "82411", guest: "82412", officer: "82413", leader: "82414" } as const;
+    const JOINED = new Date("2026-01-01T00:00:00Z");
+    const STALE =
+      "UPDATE free_companies SET last_successful_roster_at=now()-interval '7 hours' WHERE id=$1";
+    /** An officer, and a server manager, of a reserved guild. */
+    const officerOf = (guildId: string): Actor => ({ ...actor, guildId });
+    const managerOf = (guildId: string): Actor => ({ ...actor, guildId, serverManager: true });
+    /** A guild with its own FC (or none), the four roles bound, the channel given and effects on. */
+    async function statusGuild(
+      guildId: string,
+      fcId: string | null,
+      channel: string | null = CHANNEL,
+    ) {
+      if (fcId)
+        await db.orm
+          .insert(t.freeCompanies)
+          .values({ id: fcId, name: `Status FC ${fcId}`, world: "Diabolos", dc: "Crystal" })
+          .onConflictDoNothing();
+      await db.orm.insert(t.guilds).values({
+        id: guildId,
+        fc_id: fcId,
+        effects_enabled: true,
+        member_role_id: ROLE.member,
+        guest_role_id: ROLE.guest,
+        officer_role_id: ROLE.officer,
+        leader_role_id: ROLE.leader,
+        officer_notifications_channel_id: channel,
+      });
+    }
+    /** A roster member with a plain rank and a known FC Leader flag, so leader decisions count. */
+    const fcMember = (id: string, fcId: string, name = `Status ${id}`) => ({
+      id,
+      name,
+      world: "Diabolos",
+      dc: "Crystal",
+      fcId,
+      fcRankName: "Member",
+      isFcLeader: false,
+    });
+    /** A current Discord member with a guild_users row (as enumeration makes) and active links. */
+    async function statusMember(
+      guildId: string,
+      user: string,
+      characters: readonly string[] = [],
+      roles: string[] = [],
+    ) {
+      members.set(user, memberView(guildId, user, roles, JOINED));
+      await ensureUser(db.pool, guildId, user, JOINED);
+      for (const character of characters) await linkCharacter(guildId, user, character);
+    }
+    /** A member's stored status columns, and the row version (xmin) to tell whether it was written. */
+    const statusOf = async (guildId: string, user: string) =>
+      (
+        await db.query<{
+          state: StatusState | null;
+          since: Date | null;
+          posting: { batch: string } | null;
+          xmin: string;
+        }>(
+          "SELECT status_state AS state, status_since AS since, status_posting AS posting, xmin::text AS xmin FROM guild_users WHERE guild_id=$1 AND user_id=$2",
+          [guildId, user],
+        )
+      )[0];
+    /** The members of a guild with something waiting to be announced. */
+    const waiting = async (guildId: string) =>
+      (
+        await db.query<{ user_id: string }>(
+          "SELECT user_id FROM guild_users WHERE guild_id=$1 AND status_since IS NOT NULL ORDER BY user_id",
+          [guildId],
+        )
+      ).map((row) => row.user_id);
+    /** The guild's status job rows, oldest first; `ahead` is a due time still about a window away. */
+    const statusJobs = (guildId: string) =>
+      db.query<{ id: string; status: string; ahead: boolean }>(
+        "SELECT id,status,due_at>now()+interval '100 seconds' AS ahead FROM jobs WHERE dedupe_key=$1 ORDER BY created_at,id",
+        [statusNoticeKey(guildId)],
+      );
+    /** Two minutes pass for every waiting change of the guild. */
+    const elapse = (guildId: string) =>
+      db.query(
+        "UPDATE guild_users SET status_since=status_since-interval '121 seconds' WHERE guild_id=$1 AND status_since IS NOT NULL",
+        [guildId],
+      );
+    /** The status posts handed to Discord for a guild. */
+    const statusPosts = (guildId: string) =>
+      sent.filter((item) => item.guild === guildId && item.message.kind === "status");
+    /** A sent post's frozen entries. */
+    const entriesOf = (item: (typeof sent)[number] | undefined) =>
+      item?.message.kind === "status" ? item.message.view.entries : [];
+    /** A sent status post as officers read it: its fields' names and values. */
+    const shown = (item: (typeof sent)[number] | undefined) =>
+      item?.message.kind === "status"
+        ? (statusPost(item.message.view).options.embeds[0]?.fields ?? []).map(
+            ({ name, value }) => ({
+              name,
+              value,
+            }),
+          )
+        : [];
+    const mention = (user: string) => `<@${user}>`;
+    /** Grant Guest as an officer would, then run the member's pass. */
+    async function grant(guildId: string, user: string) {
+      await service.guestAction(officerOf(guildId), user, false, "Status fixture", randomUUID());
+      await reconcileIn(guildId, user);
+    }
+    /**
+     * Run the guild's active status job through the queue and the real dispatcher, whatever its due
+     * time, and return the row it left.
+     */
+    async function runStatus(guildId: string, app: Service = service) {
+      const [active] = await db.query<{ id: string }>(
+        "SELECT id FROM jobs WHERE dedupe_key=$1 AND status IN ('queued','running','blocked') ORDER BY created_at DESC, id LIMIT 1",
+        [statusNoticeKey(guildId)],
+      );
+      if (!active) throw new Error("Missing status job");
+      await new Queue(db, dispatcher(app, sync, access), () => {}).perform(await leased(active.id));
+      return (
+        await db.query<{
+          id: string;
+          status: string;
+          result: unknown;
+          last_error: string | null;
+          attempts: number;
+        }>("SELECT id,status,result,last_error,attempts FROM jobs WHERE id=$1", [active.id])
+      )[0];
+    }
+    /** Wait until some session waits on a lock: the operation under test reached it. */
+    async function blockedOnLock() {
+      for (let tries = 0; tries < 200; tries++) {
+        const [row] = await db.query<{ waiting: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock') AS waiting",
+        );
+        if (row?.waiting) return;
+        await Bun.sleep(25);
+      }
+      throw new Error("Nothing waited on a lock");
+    }
+
+    test("the first pass records a silent baseline; an unchanged pass writes nothing", async () => {
+      const [guildId, fcId, user, character] = [reserved(0), reservedFc(0), "93100001", "88310001"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, user, [character]);
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual([ROLE.member]);
+      const first = await statusOf(guildId, user);
+      const flags = { member: true, guest: false, officer: false, leader: false };
+      expect(first?.state).toEqual({
+        joined: JOINED.toISOString(),
+        announced: flags,
+        current: flags,
+        reasons: {},
+        departed: [],
+      });
+      expect(first?.since).toBeNull();
+      // Nothing moved against a baseline, so nothing is queued or sent.
+      expect(await statusJobs(guildId)).toEqual([]);
+      await reconcileIn(guildId, user);
+      expect((await statusOf(guildId, user))?.xmin).toBe(first?.xmin ?? "");
+      expect(statusPosts(guildId)).toEqual([]);
+    });
+
+    test("/guest grant posts once after the window; a grant revoked inside it cancels out", async () => {
+      const [guildId, fcId, visitor, fleeting] = [
+        reserved(1),
+        reservedFc(1),
+        "93110001",
+        "93110002",
+      ];
+      await statusGuild(guildId, fcId);
+      for (const user of [visitor, fleeting]) {
+        await statusMember(guildId, user);
+        await reconcileIn(guildId, user);
+      }
+      expect((await statusOf(guildId, visitor))?.state?.announced).toEqual({
+        member: false,
+        guest: false,
+        officer: false,
+        leader: false,
+      });
+      await grant(guildId, visitor);
+      expect(members.get(visitor)?.roles).toEqual([ROLE.guest]);
+      expect(await waiting(guildId)).toEqual([visitor]);
+      const [queued] = await statusJobs(guildId);
+      // Due one window after the change.
+      expect(queued).toMatchObject({ status: "queued", ahead: true });
+      await elapse(guildId);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { status: "delivered", posts: 1, members: 1, messageIds: ["123456789"] },
+      });
+      const [posted] = statusPosts(guildId);
+      expect(posted?.channel).toBe(CHANNEL);
+      expect(posted?.key).toMatch(/^status:[0-9a-f-]{36}$/);
+      expect(shown(posted)).toEqual([
+        { name: "No access → Guest · guest grant", value: mention(visitor) },
+      ]);
+      // The post moved the announced state, and nothing waits any more.
+      const after = await statusOf(guildId, visitor);
+      expect(after?.state?.announced.guest).toBe(true);
+      expect(after).toMatchObject({ since: null, posting: null });
+      // Its delivery is recorded like every outbound kind's.
+      expect(
+        (
+          await db.query<{ status: string; message_id: string | null }>(
+            "SELECT status, message_id FROM delivery_attempts WHERE job_id=$1 ORDER BY id",
+            [queued?.id],
+          )
+        ).map((attempt) => [attempt.status, attempt.message_id]),
+      ).toEqual([
+        ["started", null],
+        ["delivered", "123456789"],
+      ]);
+      // A grant revoked inside the window: the job finds nothing to post.
+      await grant(guildId, fleeting);
+      await service.guestAction(officerOf(guildId), fleeting, true, "Changed mind", randomUUID());
+      await reconcileIn(guildId, fleeting);
+      expect(await waiting(guildId)).toEqual([]);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { skipped: "nothing to post" },
+      });
+      expect(statusPosts(guildId)).toHaveLength(1);
+    });
+
+    test("stale-roster hand edits and Member rebinds record nothing; fresh passes post nothing", async () => {
+      const [guildId, fcId, user, character] = [reserved(2), reservedFc(2), "93120001", "88320001"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, user, [character]);
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      await db.query(STALE, [fcId]);
+      // An officer strips Member by hand; with stale evidence the bot can't add it back.
+      const view = members.get(user);
+      if (view) view.roles = [];
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual([]);
+      expect(await waiting(guildId)).toEqual([]);
+      // The next accepted roster restores it: the decisive value never left the announced one.
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual([ROLE.member]);
+      expect(await waiting(guildId)).toEqual([]);
+      // A Member rebind while the roster is stale strips the old role and can't add the new one:
+      // not decisive, so not recorded.
+      await db.query(STALE, [fcId]);
+      await service.configure(officerOf(guildId), "member_role_id", "82421");
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual([]);
+      expect((await statusOf(guildId, user))?.state?.announced.member).toBe(true);
+      expect(await waiting(guildId)).toEqual([]);
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual(["82421"]);
+      // With fresh evidence a rebind keeps the value.
+      await service.configure(officerOf(guildId), "member_role_id", "82431");
+      await reconcileIn(guildId, user);
+      expect(members.get(user)?.roles).toEqual(["82431"]);
+      expect(await waiting(guildId)).toEqual([]);
+      expect(await statusJobs(guildId)).toEqual([]);
+    });
+
+    test("a new Officer role replacing a bound one announces only adopted non-officers", async () => {
+      const guildId = reserved(3);
+      const [officer, holder, bystander] = ["93130001", "93130002", "93130003"];
+      await statusGuild(guildId, reservedFc(3));
+      await statusMember(guildId, officer, [], [ROLE.officer]);
+      await statusMember(guildId, holder, [], ["82419"]);
+      await statusMember(guildId, bystander);
+      // The officer holds an override, as /officer grant or an earlier adoption leaves it.
+      await db.orm.insert(t.officerOverrides).values({
+        guild_id: guildId,
+        user_id: officer,
+        state: "granted",
+        actor_id: actor.userId,
+        reason: "Status fixture",
+      });
+      for (const user of [officer, holder, bystander]) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual([]);
+      expect(await service.configure(managerOf(guildId), "officer_role_id", "82419")).toMatchObject(
+        { officerHolders: { adopt: true, adopted: 1, sample: [holder] } },
+      );
+      for (const user of [officer, holder, bystander]) await reconcileIn(guildId, user);
+      // The officer moves to the new role and stays an officer: nothing to announce.
+      expect(members.get(officer)?.roles).toEqual(["82419"]);
+      expect(await waiting(guildId)).toEqual([holder]);
+      expect((await statusOf(guildId, holder))?.state).toMatchObject({
+        announced: { officer: false },
+        current: { officer: true },
+        reasons: { officer: "officer_override" },
+      });
+      await elapse(guildId);
+      await runStatus(guildId);
+      expect(statusPosts(guildId).map(shown)).toEqual([
+        [{ name: "Officer added · officer override", value: mention(holder) }],
+      ]);
+    });
+
+    test("/setup naming a new FC for linked users is silent: unevaluated links, then a baseline", async () => {
+      const [guildId, fcId] = [reserved(4), reservedFc(4)];
+      const users = ["93140001", "93140002"];
+      const characters = ["88340001", "88340002"];
+      await db.orm
+        .insert(t.guilds)
+        .values({ id: guildId, effects_enabled: true, officer_notifications_channel_id: CHANNEL });
+      for (const [index, user] of users.entries())
+        await statusMember(guildId, user, [characters[index] ?? ""]);
+      // The precondition: no role is bound yet, so every flag stays null.
+      expect(
+        await db.orm
+          .select({
+            member: t.guilds.member_role_id,
+            guest: t.guilds.guest_role_id,
+            officer: t.guilds.officer_role_id,
+            leader: t.guilds.leader_role_id,
+          })
+          .from(t.guilds)
+          .where(eq(t.guilds.id, guildId)),
+      ).toEqual([{ member: null, guest: null, officer: null, leader: null }]);
+      for (const user of users) await reconcileIn(guildId, user);
+      for (const user of users)
+        expect((await statusOf(guildId, user))?.state?.announced).toEqual({
+          member: null,
+          guest: null,
+          officer: null,
+          leader: null,
+        });
+      let serial = 82440;
+      const provisioner: RoleProvisioner = {
+        ...discord,
+        async members() {
+          return [];
+        },
+        async ensureRole() {
+          return { id: String(++serial), created: true };
+        },
+      };
+      await new RoleAdministration(service, provisioner, access).setup(
+        managerOf(guildId),
+        "Status",
+        fcId,
+        null,
+      );
+      const configured = await service.guild(officerOf(guildId));
+      expect(configured).toMatchObject({ fc_id: fcId, officer_notifications_channel_id: CHANNEL });
+      // Reconciled before the first roster: every link is unevaluated, so only Officer is decided.
+      for (const user of users) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual([]);
+      await publishRoster(
+        fcId,
+        characters.map((character) => fcMember(character, fcId)),
+      );
+      for (const user of users) await reconcileIn(guildId, user);
+      for (const user of users) {
+        expect(members.get(user)?.roles).toContain(configured.member_role_id ?? "");
+        expect((await statusOf(guildId, user))?.state?.announced).toEqual({
+          member: true,
+          guest: false,
+          officer: false,
+          leader: false,
+        });
+      }
+      expect(await waiting(guildId)).toEqual([]);
+      expect(await statusJobs(guildId)).toEqual([]);
+    });
+
+    test("unlinking the FC posts Member → Guest; relinking posts Guest → Member after its first roster", async () => {
+      const [guildId, fcId] = [reserved(5), reservedFc(5)];
+      const users = ["93150001", "93150002"];
+      const characters = ["88350001", "88350002"];
+      const roster = characters.map((character) => fcMember(character, fcId));
+      await statusGuild(guildId, fcId);
+      for (const [index, user] of users.entries())
+        await statusMember(guildId, user, [characters[index] ?? ""]);
+      await publishRoster(fcId, roster);
+      for (const user of users) await reconcileIn(guildId, user);
+      await service.unlinkCompany(officerOf(guildId), fcId);
+      for (const user of users) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual(users);
+      await elapse(guildId);
+      await runStatus(guildId);
+      expect(statusPosts(guildId).map(shown)).toEqual([
+        [
+          {
+            name: "Member → Guest · the server has no linked FC",
+            value: users.map(mention).join(", "),
+          },
+        ],
+      ]);
+      // The relink comes after the FC's last roster went out of date (with a fresh one, the same
+      // post would come at once): until a new roster, nothing is decisive.
+      await db.query(STALE, [fcId]);
+      expect(await service.configure(officerOf(guildId), "fc_id", fcId)).toMatchObject({
+        status: "saved",
+      });
+      for (const user of users) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual([]);
+      await publishRoster(fcId, roster);
+      for (const user of users) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual(users);
+      await elapse(guildId);
+      await runStatus(guildId);
+      expect(shown(statusPosts(guildId).at(-1))).toEqual([
+        {
+          name: "Guest → Member · a linked character is in the FC",
+          value: users.map(mention).join(", "),
+        },
+      ]);
+      expect(statusPosts(guildId)).toHaveLength(2);
+    });
+
+    test("a grant while the only link is unchecked posts once the roster decides it", async () => {
+      const [guildId, fcId] = [reserved(6), reservedFc(6)];
+      const [user, newcomer] = ["93160001", "93160002"];
+      await statusGuild(guildId, fcId);
+      // A baseline first: no link yet, so No access is decisive.
+      await statusMember(guildId, user);
+      await reconcileIn(guildId, user);
+      await linkCharacter(guildId, user, "88360001");
+      await grant(guildId, user);
+      // Guest is added at once (the link is unevaluated and the grant counts), but not recorded.
+      expect(members.get(user)?.roles).toEqual([ROLE.guest]);
+      expect(await waiting(guildId)).toEqual([]);
+      // The same sequence for a member with no baseline yet.
+      await statusMember(guildId, newcomer, ["88360002"]);
+      await grant(guildId, newcomer);
+      expect(members.get(newcomer)?.roles).toEqual([ROLE.guest]);
+      expect(await waiting(guildId)).toEqual([]);
+      // A roster without either character decides both: one change, one silent baseline.
+      await publishRoster(fcId, [fcMember("88360099", fcId)]);
+      for (const id of [user, newcomer]) await reconcileIn(guildId, id);
+      expect(await waiting(guildId)).toEqual([user]);
+      expect((await statusOf(guildId, newcomer))?.state?.announced).toMatchObject({
+        member: false,
+        guest: true,
+      });
+      await elapse(guildId);
+      await runStatus(guildId);
+      expect(statusPosts(guildId).map(shown)).toEqual([
+        [{ name: "No access → Guest · guest grant", value: mention(user) }],
+      ]);
+    });
+
+    test("an unbound role records nothing and a rebind is a silent baseline", async () => {
+      const [guildId, fcId, user, character] = [reserved(7), reservedFc(7), "93170001", "88370001"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, user, [character]);
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      await service.configure(officerOf(guildId), "member_role_id", null);
+      await service.configure(officerOf(guildId), "guest_role_id", null);
+      await reconcileIn(guildId, user);
+      expect((await statusOf(guildId, user))?.state?.announced).toEqual({
+        member: null,
+        guest: null,
+        officer: false,
+        leader: false,
+      });
+      // The member's only character is unlinked while Member and Guest are unbound.
+      await service.unclaim(officerOf(guildId), user, character, "Moved to another FC");
+      await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual([]);
+      await service.configure(officerOf(guildId), "member_role_id", "82471");
+      await service.configure(officerOf(guildId), "guest_role_id", "82472");
+      await reconcileIn(guildId, user);
+      // FC history keeps Guest; both values are the new baseline, taken silently.
+      const rebound = await statusOf(guildId, user);
+      expect(rebound?.state).toMatchObject({
+        announced: { member: false, guest: true },
+        current: { member: false, guest: true },
+      });
+      expect(rebound?.since).toBeNull();
+      await reconcileIn(guildId, user);
+      expect((await statusOf(guildId, user))?.xmin).toBe(rebound?.xmin ?? "");
+      expect(await statusJobs(guildId)).toEqual([]);
+    });
+
+    test("a rejoin is a silent baseline, with no lost access posted during a stale window", async () => {
+      const [guildId, fcId, user, character] = [reserved(8), reservedFc(8), "93180001", "88380001"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, user, [character]);
+      await publishRoster(fcId, [fcMember(character, fcId)]);
+      await reconcileIn(guildId, user);
+      await db.query(STALE, [fcId]);
+      // The member leaves and rejoins: Discord drops their roles, and the join time moves.
+      const rejoined = new Date("2026-06-01T00:00:00Z");
+      members.set(user, memberView(guildId, user, [], rejoined));
+      await ensureUser(db.pool, guildId, user, rejoined);
+      await reconcileIn(guildId, user);
+      const flags = { member: null, guest: null, officer: false, leader: false };
+      expect((await statusOf(guildId, user))?.state).toEqual({
+        joined: rejoined.toISOString(),
+        announced: flags,
+        current: flags,
+        reasons: {},
+        departed: [],
+      });
+      expect(await waiting(guildId)).toEqual([]);
+      expect(await statusJobs(guildId)).toEqual([]);
+    });
+
+    test("no guild_users row records nothing; a blocked role write records nothing until fixed", async () => {
+      const guildId = reserved(9);
+      const [unknown, blocked] = ["93190001", "93190002"];
+      await statusGuild(guildId, null);
+      members.set(unknown, memberView(guildId, unknown));
+      expect(await reconcileIn(guildId, unknown)).toMatchObject({ status: "applied" });
+      expect(await statusOf(guildId, unknown)).toBeUndefined();
+      expect(await statusJobs(guildId)).toEqual([]);
+      await statusMember(guildId, blocked);
+      await reconcileIn(guildId, blocked);
+      await service.guestAction(officerOf(guildId), blocked, false, "Blocked", randomUUID());
+      const roles = discord.roles;
+      discord.roles = async () => {
+        throw new Failure("blocked", "Test role hierarchy blocked.");
+      };
+      try {
+        await expect(reconcileIn(guildId, blocked)).rejects.toThrow("Test role hierarchy blocked.");
+      } finally {
+        discord.roles = roles;
+      }
+      expect(await waiting(guildId)).toEqual([]);
+      expect((await statusOf(guildId, blocked))?.state?.current.guest).toBe(false);
+      // After the fix the change is compared with the stored state, and waits to be posted.
+      await reconcileIn(guildId, blocked);
+      expect(await waiting(guildId)).toEqual([blocked]);
+      expect((await statusOf(guildId, blocked))?.state?.reasons).toEqual({ guest: "guest_grant" });
+    });
+
+    test("confirmed departures: one post with the lost Member and every Left the FC line", async () => {
+      const [guildId, fcId] = [reserved(10), reservedFc(10)];
+      // One member's only character leaves; an alt leaves while its owner stays in the FC; an owner
+      // who already left Discord loses their character.
+      const [single, alt, gone] = ["93200001", "93200002", "93200003"];
+      const [lone, kept, second, orphan] = ["88400001", "88400002", "88400003", "88400004"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, single, [lone]);
+      await statusMember(guildId, alt, [kept, second]);
+      await statusMember(guildId, gone, [orphan]);
+      await publishRoster(
+        fcId,
+        [lone, kept, second, orphan].map((character) => fcMember(character, fcId)),
+      );
+      for (const user of [single, alt, gone]) await reconcileIn(guildId, user);
+      absent.add(gone);
+      try {
+        const start = Date.now() + 1000;
+        await publishRoster(fcId, [fcMember(kept, fcId)], new Date(start));
+        // The first absence changes nothing: a missing character still counts as confirmed.
+        expect(await waiting(guildId)).toEqual([]);
+        await publishRoster(fcId, [fcMember(kept, fcId)], new Date(start + 61_000));
+        expect(await waiting(guildId)).toEqual([single, alt, gone]);
+        expect((await statusOf(guildId, gone))?.state?.departed).toEqual([
+          {
+            character: orphan,
+            name: `Status ${orphan}`,
+            world: "Diabolos",
+            snapshot: expect.any(String),
+          },
+        ]);
+        for (const user of [single, alt, gone]) await reconcileIn(guildId, user);
+        await elapse(guildId);
+        expect(await runStatus(guildId)).toMatchObject({
+          status: "succeeded",
+          result: { status: "delivered", posts: 1, members: 3 },
+        });
+        expect(statusPosts(guildId).map(shown)).toEqual([
+          [
+            {
+              name: "Member → Guest · no linked character is in the FC",
+              value: mention(single),
+            },
+            {
+              name: "Left the FC",
+              value: [
+                `Status ${lone} @ Diabolos (${mention(single)})`,
+                `Status ${second} @ Diabolos (${mention(alt)})`,
+                `Status ${orphan} @ Diabolos (${mention(gone)})`,
+              ].join("\n"),
+            },
+          ],
+        ]);
+        for (const user of [single, alt, gone])
+          expect(await statusOf(guildId, user)).toMatchObject({ since: null, posting: null });
+      } finally {
+        absent.delete(gone);
+      }
+    });
+
+    test("an FC unlink over 105 members and two former-member guests posts 100, then the rest", async () => {
+      const [guildId, fcId] = [reserved(11), reservedFc(11)];
+      const linked = Array.from({ length: 105 }, (_, index) => String(93300001 + index));
+      const characters = linked.map((_, index) => String(88500001 + index));
+      const former = ["93309001", "93309002"];
+      const formerCharacters = ["88509001", "88509002"];
+      await statusGuild(guildId, fcId);
+      for (const [index, user] of linked.entries())
+        await statusMember(guildId, user, [characters[index] ?? ""]);
+      for (const [index, user] of former.entries())
+        await statusMember(guildId, user, [formerCharacters[index] ?? ""]);
+      await publishRoster(
+        fcId,
+        [...characters, ...formerCharacters].map((character) => fcMember(character, fcId)),
+      );
+      // The former members' links end (as /unclaim would), leaving FC history: Guest.
+      await db.orm
+        .update(t.links)
+        .set({ active: false, ended_at: sql`now()` })
+        .where(and(eq(t.links.guild_id, guildId), inArray(t.links.user_id, former)));
+      for (const user of [...linked, ...former]) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toEqual([]);
+      expect((await statusOf(guildId, former[0] ?? ""))?.state?.announced).toMatchObject({
+        member: false,
+        guest: true,
+      });
+      await service.unlinkCompany(officerOf(guildId), fcId);
+      for (const user of [...linked, ...former]) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toHaveLength(107);
+      await elapse(guildId);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { status: "delivered", posts: 2, members: 107 },
+      });
+      const posts = statusPosts(guildId);
+      expect(posts.map((item) => entriesOf(item).length)).toEqual([100, 7]);
+      // Two batches never share a nonce key.
+      expect(new Set(posts.map((item) => item.key)).size).toBe(2);
+      const named = posts.flatMap((item) =>
+        shown(item).flatMap((field) => field.value.split(", ")),
+      );
+      expect(named.sort()).toEqual([...linked, ...former].map(mention).sort());
+      for (const item of posts) {
+        if (item.message.kind !== "status") throw new Error("Expected a status post");
+        expect(statusPost(item.message.view).truncated).toBe(false);
+        expect(shown(item).map((field) => field.name)).not.toContain("Not listed");
+      }
+      expect(shown(posts[1])).toContainEqual({
+        name: "Guest → No access · no grant, registration or FC history",
+        value: former.map(mention).join(", "),
+      });
+      expect(await waiting(guildId)).toEqual([]);
+    }, 60_000);
+
+    test("a batch heavy with departures is sized by the post's budget; the rest follow at once", async () => {
+      const [guildId, fcId] = [reserved(12), reservedFc(12)];
+      // Discord-length user IDs, so the lines are as long as real ones.
+      const users = Array.from({ length: 80 }, (_, index) =>
+        String(931800000000000001n + BigInt(index)),
+      );
+      const characters = users.map((_, index) => String(88600001 + index));
+      await statusGuild(guildId, fcId);
+      for (const [index, user] of users.entries())
+        await statusMember(guildId, user, [characters[index] ?? ""]);
+      await publishRoster(
+        fcId,
+        characters.map((character, index) =>
+          fcMember(character, fcId, `Departed Character ${index}`),
+        ),
+      );
+      for (const user of users) await reconcileIn(guildId, user);
+      const start = Date.now() + 1000;
+      await publishRoster(fcId, [], new Date(start));
+      await publishRoster(fcId, [], new Date(start + 61_000));
+      for (const user of users) await reconcileIn(guildId, user);
+      expect(await waiting(guildId)).toHaveLength(80);
+      await elapse(guildId);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { status: "delivered", posts: 2, members: 80 },
+      });
+      const posts = statusPosts(guildId);
+      const [first, rest] = posts.map((item) => entriesOf(item));
+      expect(first?.length).toBeLessThan(80);
+      expect((first?.length ?? 0) + (rest?.length ?? 0)).toBe(80);
+      // The freeze stopped where one more member would not have fit.
+      expect(
+        statusFits({
+          frozenAt: new Date().toISOString(),
+          entries: [...(first ?? []), ...(rest ?? []).slice(0, 1)],
+        }),
+      ).toBe(false);
+      for (const item of posts) {
+        if (item.message.kind !== "status") throw new Error("Expected a status post");
+        expect(statusFits(item.message.view)).toBe(true);
+        const fields = shown(item);
+        expect(fields.map((field) => field.name)).not.toContain("Not listed");
+        // Everyone in a post is named: in the access group and on their departure line.
+        for (const entry of item.message.view.entries) {
+          expect(
+            fields.some(
+              (field) =>
+                field.name.startsWith("Member → Guest") &&
+                field.value.split(", ").includes(mention(entry.user)),
+            ),
+          ).toBe(true);
+          expect(
+            fields.some(
+              (field) =>
+                field.name.startsWith("Left the FC") &&
+                field.value.includes(`(${mention(entry.user)})`),
+            ),
+          ).toBe(true);
+        }
+      }
+    }, 60_000);
+
+    test("the roster locks a departing owner's row before any characters row", async () => {
+      const [guildId, fcId, owner] = [reserved(13), reservedFc(13), "93210001"];
+      const [leaving, staying] = ["88700001", "88700002"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, owner, [leaving]);
+      await publishRoster(fcId, [fcMember(leaving, fcId), fcMember(staying, fcId)]);
+      const start = Date.now() + 1000;
+      await publishRoster(fcId, [fcMember(staying, fcId)], new Date(start));
+      const holder = await db.pool.connect();
+      const probe = await db.pool.connect();
+      let confirming: Promise<unknown> | undefined;
+      try {
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
+          [guildId, owner],
+        );
+        confirming = publishRoster(fcId, [fcMember(staying, fcId)], new Date(start + 61_000));
+        await blockedOnLock();
+        // A roster member's characters row is still free: the roster waits before storing any.
+        await probe.query("BEGIN");
+        await probe.query("SELECT id FROM characters WHERE id=$1 FOR UPDATE NOWAIT", [staying]);
+        await probe.query("ROLLBACK");
+        await holder.query("COMMIT");
+        await confirming;
+      } finally {
+        await holder.query("ROLLBACK").catch(() => {});
+        await probe.query("ROLLBACK").catch(() => {});
+        await confirming?.catch(() => {});
+        holder.release();
+        probe.release();
+      }
+      expect((await statusOf(guildId, owner))?.state?.departed).toEqual([
+        {
+          character: leaving,
+          name: `Status ${leaving}`,
+          world: "Diabolos",
+          snapshot: expect.any(String),
+        },
+      ]);
+      expect(await statusJobs(guildId)).toHaveLength(1);
+    });
+
+    test("sync.guild locks the guild's rows up front, in user order", async () => {
+      const guildId = reserved(14);
+      // The member who left has the lowest user ID, so the ordered lock reaches it first.
+      const [left, present] = ["93220001", "93220002"];
+      await statusGuild(guildId, null);
+      await ensureUser(db.pool, guildId, left, JOINED);
+      await statusMember(guildId, present);
+      const enumerate = discord.members;
+      discord.members = async () => [memberView(guildId, present, [], JOINED)];
+      const holder = await db.pool.connect();
+      const probe = await db.pool.connect();
+      let enumerating: Promise<unknown> | undefined;
+      try {
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE",
+          [guildId, left],
+        );
+        const parent = await enqueue(db.pool, "reconcile.guild", `guild:${guildId}`, {}, guildId);
+        enumerating = sync.guild(guildId, parent);
+        await blockedOnLock();
+        // The present member's row is still free: the pass waits at its first statement.
+        await probe.query("BEGIN");
+        await probe.query(
+          "SELECT user_id FROM guild_users WHERE guild_id=$1 AND user_id=$2 FOR UPDATE NOWAIT",
+          [guildId, present],
+        );
+        await probe.query("ROLLBACK");
+        await holder.query("COMMIT");
+        expect(await enumerating).toMatchObject({ enumerationComplete: true, humans: 1 });
+      } finally {
+        await holder.query("ROLLBACK").catch(() => {});
+        await probe.query("ROLLBACK").catch(() => {});
+        await enumerating?.catch(() => {});
+        holder.release();
+        probe.release();
+        discord.members = enumerate;
+      }
+      expect(
+        await db.query<{ user_id: string; present: boolean }>(
+          "SELECT user_id, present FROM guild_users WHERE guild_id=$1 ORDER BY user_id",
+          [guildId],
+        ),
+      ).toEqual([
+        { user_id: left, present: false },
+        { user_id: present, present: true },
+      ]);
+    });
+
+    test("a blocked send keeps its batch frozen; the next run resends it first, then waits", async () => {
+      const guildId = reserved(15);
+      const [first, later] = ["93230001", "93230002"];
+      await statusGuild(guildId, null);
+      for (const user of [first, later]) {
+        await statusMember(guildId, user);
+        await reconcileIn(guildId, user);
+      }
+      await grant(guildId, first);
+      await elapse(guildId);
+      sendBlocked = true;
+      try {
+        expect(await runStatus(guildId)).toMatchObject({ status: "blocked" });
+      } finally {
+        sendBlocked = false;
+      }
+      const frozen = await statusOf(guildId, first);
+      const batch = frozen?.posting?.batch ?? "";
+      expect(batch).toMatch(/^[0-9a-f-]{36}$/);
+      expect(frozen?.since).not.toBeNull();
+      const [job] = await statusJobs(guildId);
+      expect(
+        (
+          await db.query<{ status: string; diagnostic: string | null }>(
+            "SELECT status, diagnostic FROM delivery_attempts WHERE job_id=$1 ORDER BY id",
+            [job?.id],
+          )
+        ).map((attempt) => [attempt.status, attempt.diagnostic]),
+      ).toEqual([
+        ["started", null],
+        ["failed", "blocked"],
+      ]);
+      // A newer change arrives, then the permission is fixed: the frozen batch goes first, as it
+      // was frozen, and the newer change waits for its own window.
+      await grant(guildId, later);
+      const waited = await runStatus(guildId);
+      expect(waited).toMatchObject({ status: "queued" });
+      expect(waited?.last_error).toStartWith("ordered:");
+      const posts = statusPosts(guildId);
+      expect(posts.map((item) => item.key)).toEqual([`status:${batch}`]);
+      expect(entriesOf(posts[0]).map((entry) => entry.user)).toEqual([first]);
+      expect(await statusOf(guildId, first)).toMatchObject({ since: null, posting: null });
+      expect(await waiting(guildId)).toEqual([later]);
+    });
+
+    test("a lost lease after the send still marks the batch, so the next run sends nothing", async () => {
+      const [guildId, user] = [reserved(16), "93240001"];
+      await statusGuild(guildId, null);
+      await statusMember(guildId, user);
+      await reconcileIn(guildId, user);
+      await grant(guildId, user);
+      await elapse(guildId);
+      const [queued] = await statusJobs(guildId);
+      const job = await leased(queued?.id ?? "");
+      const lost = async () => {
+        throw new Failure("lease_lost", "Test lease lost after the send.");
+      };
+      await expect(dispatcher(service, sync, access)(job, lost)).rejects.toMatchObject({
+        code: "lease_lost",
+      });
+      expect(statusPosts(guildId)).toHaveLength(1);
+      const marked = await statusOf(guildId, user);
+      expect(marked).toMatchObject({ since: null, posting: null });
+      expect(marked?.state?.announced.guest).toBe(true);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { skipped: "nothing to post" },
+      });
+      expect(statusPosts(guildId)).toHaveLength(1);
+    });
+
+    test("a worker whose lease lapsed freezes nothing", async () => {
+      const [guildId, user] = [reserved(17), "93250001"];
+      await statusGuild(guildId, null);
+      await statusMember(guildId, user);
+      await reconcileIn(guildId, user);
+      await grant(guildId, user);
+      await elapse(guildId);
+      const [queued] = await statusJobs(guildId);
+      const job = await leased(queued?.id ?? "");
+      await db.query("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=$1", [job.id]);
+      await expect(dispatcher(service, sync, access)(job, async () => {})).rejects.toMatchObject({
+        code: "lease_lost",
+      });
+      const kept = await statusOf(guildId, user);
+      expect(kept?.posting).toBeNull();
+      expect(kept?.since).not.toBeNull();
+      expect(statusPosts(guildId)).toEqual([]);
+    });
+
+    test("with no channel, waiting and frozen changes are dropped, even with Discord changes off", async () => {
+      const guildId = reserved(18);
+      const [frozenUser, waitingUser] = ["93260001", "93260002"];
+      await statusGuild(guildId, null);
+      for (const user of [frozenUser, waitingUser]) {
+        await statusMember(guildId, user);
+        await reconcileIn(guildId, user);
+      }
+      await grant(guildId, frozenUser);
+      await elapse(guildId);
+      sendBlocked = true;
+      try {
+        expect(await runStatus(guildId)).toMatchObject({ status: "blocked" });
+      } finally {
+        sendBlocked = false;
+      }
+      expect((await statusOf(guildId, frozenUser))?.posting).not.toBeNull();
+      await grant(guildId, waitingUser);
+      expect(await waiting(guildId)).toEqual([frozenUser, waitingUser]);
+      await service.configure(officerOf(guildId), "officer_notifications_channel_id", null);
+      const paused = new Service(db, discord, lodestone, { ...config, ENABLE_EFFECTS: false });
+      expect(await runStatus(guildId, paused)).toMatchObject({
+        status: "succeeded",
+        result: { skipped: "officer notifications unconfigured" },
+      });
+      for (const user of [frozenUser, waitingUser]) {
+        const dropped = await statusOf(guildId, user);
+        expect(dropped).toMatchObject({ since: null, posting: null });
+        // What waited is now the announced state: nothing is saved for later.
+        expect(dropped?.state).toMatchObject({
+          announced: { guest: true },
+          current: { guest: true },
+          reasons: {},
+          departed: [],
+        });
+      }
+      expect(statusPosts(guildId)).toEqual([]);
+    });
+
+    test("a change during a run gets its own run after the window, with a fresh attempt budget", async () => {
+      const guildId = reserved(19);
+      const [first, second] = ["93280001", "93280002"];
+      await statusGuild(guildId, null);
+      for (const user of [first, second]) {
+        await statusMember(guildId, user);
+        await reconcileIn(guildId, user);
+      }
+      await grant(guildId, first);
+      await elapse(guildId);
+      const send = discord.send;
+      // A second change lands while the first post is being sent.
+      discord.send = async (...args) => {
+        discord.send = send;
+        await grant(guildId, second);
+        return send(...args);
+      };
+      let requeued: Awaited<ReturnType<typeof runStatus>>;
+      try {
+        requeued = await runStatus(guildId);
+      } finally {
+        discord.send = send;
+      }
+      // Requeued for the newer generation with a full budget, not one attempt spent.
+      expect(requeued).toMatchObject({ status: "queued", attempts: 0 });
+      expect(await waiting(guildId)).toEqual([second]);
+      // That run waits out the new change's window, which refunds its attempt.
+      expect(await runStatus(guildId)).toMatchObject({ status: "queued", attempts: 0 });
+      await elapse(guildId);
+      expect(await runStatus(guildId)).toMatchObject({ status: "succeeded", attempts: 1 });
+      expect(
+        statusPosts(guildId).map((item) => entriesOf(item).map((entry) => entry.user)),
+      ).toEqual([[first], [second]]);
+    });
+
+    test("the queue gives a run requeued for newer input a fresh attempt budget", async () => {
+      const key = "status-test:attempts";
+      const id = await enqueue(db.pool, "probe", key, {});
+      const row = async () =>
+        (
+          await db.query<{ status: string; attempts: number; generation: number }>(
+            "SELECT status, attempts, generation FROM jobs WHERE id=$1",
+            [id],
+          )
+        )[0];
+      // New input arrives while the run works: the finished run is requeued, budget reset.
+      await new Queue(
+        db,
+        async (job) => {
+          await enqueue(db.pool, job.kind, key, {});
+          return {};
+        },
+        () => {},
+      ).perform(await leased(id));
+      expect(await row()).toEqual({ status: "queued", attempts: 0, generation: 2 });
+      // A run with no newer input completes and keeps its count.
+      await new Queue(
+        db,
+        async () => ({}),
+        () => {},
+      ).perform(await leased(id));
+      expect(await row()).toEqual({ status: "succeeded", attempts: 1, generation: 2 });
+      await db.query("DELETE FROM jobs WHERE id=$1", [id]);
+    });
+
+    test("with Discord changes paused the post parks, no timer adds rows, and resuming posts it", async () => {
+      const [guildId, user] = [reserved(20), "93270001"];
+      await statusGuild(guildId, null);
+      await statusMember(guildId, user);
+      await reconcileIn(guildId, user);
+      await grant(guildId, user);
+      await elapse(guildId);
+      await db.query("UPDATE guilds SET effects_enabled=false WHERE id=$1", [guildId]);
+      expect(await runStatus(guildId)).toMatchObject({ status: "disabled" });
+      const rows = (await statusJobs(guildId)).length;
+      // The scheduler has no status sweep: its ticks add no rows while the post is parked.
+      for (let tick = 0; tick < 3; tick++) await sync.schedule();
+      expect(await statusJobs(guildId)).toHaveLength(rows);
+      await db.query("UPDATE guilds SET effects_enabled=true WHERE id=$1", [guildId]);
+      await db.transaction((client) => requeueParked(client, [guildId], ["disabled"]));
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { status: "delivered", posts: 1 },
+      });
+      expect(statusPosts(guildId).map(shown)).toEqual([
+        [{ name: "No access → Guest · guest grant", value: mention(user) }],
+      ]);
+    }, 30_000);
   });
 });

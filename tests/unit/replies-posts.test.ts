@@ -4,9 +4,11 @@
  * operation, use U+2212 and grouped gil, show the full escaped note and are byte-identical for the
  * same entry; the review message has one embed, disabled controls once decided and escaped answers;
  * the decision DM speaks to the applicant, with or without the server name; the update post
- * (2.25.0) lists at most ten releases without cutting anything and is byte-identical per view; and
- * the gateway sends each through Discord's REST API with content '', allowed_mentions {parse: []}
- * and the unchanged nonce keys, while officer notices stay plain text.
+ * (2.25.0) lists at most ten releases without cutting anything and is byte-identical per view; the
+ * officer status post (2.27.0) groups members by change and reason, names everyone a batch holds
+ * within its budget and guards the one case that can't fit; and the gateway sends each through
+ * Discord's REST API with content '', allowed_mentions {parse: []} and the unchanged nonce keys,
+ * while officer notices stay plain text.
  */
 import { createHash } from "node:crypto";
 import { describe, expect, spyOn, test } from "bun:test";
@@ -26,6 +28,12 @@ import {
   guestReviewPost,
 } from "../../src/discord/presenters/guests.js";
 import { LEDGER_POST_KINDS, ledgerPost } from "../../src/discord/presenters/ledger.js";
+import {
+  STATUS_POST_KINDS,
+  statusFits,
+  statusLayout,
+  statusPost,
+} from "../../src/discord/presenters/officer.js";
 import { DISCORD_LIMITS, HOUSE_LIMITS } from "../../src/discord/presenters/style.js";
 import { Failure, MAX_GIL } from "../../src/domain/values.js";
 import {
@@ -46,6 +54,9 @@ import {
   DEPOSIT_POST,
   OPENING_POST,
   POST_CASES,
+  STATUS_POST,
+  STATUS_USERS,
+  statusEntry,
   WITHDRAW_POST,
 } from "../fixtures/replies/posts.js";
 import { GUEST_ID, GUILD_ID, OFFICER_ID } from "../fixtures/results.js";
@@ -70,7 +81,12 @@ const controlsOf = (presented: Parameters<typeof buttonsOf>[0]) =>
 
 test("the catalog covers every post and DM kind", () => {
   expect(Object.keys(POST_CASES).sort()).toEqual(
-    [...LEDGER_POST_KINDS, ...GUEST_POST_KINDS, ...CHANGELOG_POST_KINDS].sort(),
+    [
+      ...LEDGER_POST_KINDS,
+      ...GUEST_POST_KINDS,
+      ...CHANGELOG_POST_KINDS,
+      ...STATUS_POST_KINDS,
+    ].sort(),
   );
 });
 
@@ -456,6 +472,201 @@ describe("the decision DM", () => {
   });
 });
 
+describe("the officer status post (2.27.0)", () => {
+  /** A user ID for member n of a generated batch: 18 digits, like a Discord snowflake. */
+  const user = (n: number) => String(100_000_000_000_000_000n + BigInt(n));
+  /** n members who lost Member, each with one confirmed departure line when `departed`. */
+  const lostMember = (n: number, departed = false) =>
+    Array.from({ length: n }, (_, index) =>
+      statusEntry(
+        user(index),
+        { member: true, guest: false },
+        { member: false, guest: true },
+        {
+          reasons: { member: "not_in_fc", guest: "registered" },
+          departed: departed
+            ? [
+                {
+                  character: String(90_000 + index),
+                  name: `Departed Character ${index}`,
+                  world: "Diabolos",
+                  snapshot: "s1",
+                },
+              ]
+            : [],
+        },
+      ),
+    );
+  /** Every line a rendered post shows, mentions split out of their groups. */
+  const linesOf = (embed: APIEmbed) =>
+    (embed.fields ?? []).flatMap((field) =>
+      field.name.startsWith("Left the FC") ? field.value.split("\n") : field.value.split(", "),
+    );
+
+  test("the plan's example: grouped by change and reason, departures last, mentions only", () => {
+    const mention = (id: string) => `<@${id}>`;
+    expect(embedOf("status.changes")).toEqual({
+      color: 0x5865f2,
+      title: "Member status changes",
+      fields: [
+        {
+          name: "Member → Guest · no linked character is in the FC",
+          value: `${mention(STATUS_USERS.a)}, ${mention(STATUS_USERS.b)}`,
+        },
+        { name: "No access → Guest · guest grant", value: mention(STATUS_USERS.c) },
+        { name: "Officer removed · officer access revoked", value: mention(STATUS_USERS.d) },
+        {
+          name: "Left the FC",
+          value: `Example Alt @ Example World (${mention(STATUS_USERS.a)})\nSecond Alt @ Example World (${mention(STATUS_USERS.e)})`,
+        },
+      ],
+      footer: { text: "5 members" },
+      timestamp: STATUS_POST.frozenAt,
+    });
+    // Byte-identical for the same frozen batch, so a resend under its nonce matches the first.
+    expect(JSON.stringify(statusPost(STATUS_POST).options)).toBe(
+      JSON.stringify(statusPost(STATUS_POST).options),
+    );
+    expect(statusPost(STATUS_POST).options).toMatchObject({
+      content: "",
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  test("groups: access by size then text, Officer and FC Leader added before removed", () => {
+    const view = {
+      frozenAt: STATUS_POST.frozenAt,
+      entries: [
+        statusEntry(user(1), { member: false }, { member: true }, { reasons: { member: "in_fc" } }),
+        statusEntry(
+          user(2),
+          { member: false, guest: false },
+          { member: false, guest: true },
+          { reasons: { guest: "registered" } },
+        ),
+        statusEntry(
+          user(3),
+          { member: false, guest: false },
+          { member: false, guest: true },
+          { reasons: { guest: "former_member" } },
+        ),
+        statusEntry(
+          user(4),
+          { member: false, guest: false },
+          { member: false, guest: true },
+          { reasons: { guest: "registered" } },
+        ),
+        statusEntry(user(5), { leader: true }, { leader: false }, { reasons: { leader: "no_fc" } }),
+        statusEntry(
+          user(6),
+          { leader: false },
+          { leader: true },
+          { reasons: { leader: "fc_leader" } },
+        ),
+        statusEntry(
+          user(7),
+          { officer: true },
+          { officer: false },
+          { reasons: { officer: "officer_rank_unset" } },
+        ),
+        statusEntry(
+          user(8),
+          { officer: false },
+          { officer: true },
+          { reasons: { officer: "officer_rank" } },
+        ),
+        // A Guest → Member change reads the Member flag's reason, not the lost Guest's.
+        statusEntry(
+          user(9),
+          { member: false, guest: true },
+          { member: true, guest: false },
+          { reasons: { member: "in_fc", guest: "is_member" } },
+        ),
+      ],
+    };
+    expect(statusLayout(view).fields.map(({ field }) => field.name)).toEqual([
+      "No access → Guest · registered character",
+      "Guest → Member · a linked character is in the FC",
+      "No access → Guest · former FC member",
+      "No access → Member · a linked character is in the FC",
+      "Officer added · FC officer rank",
+      "Officer removed · the server has no officer rank set",
+      "FC Leader added · FC leader",
+      "FC Leader removed · the server has no linked FC",
+    ]);
+    expect(statusLayout(view).footer).toBe("9 members");
+  });
+
+  test("100 members who lost Member fit one post: three fields of mentions, everyone named", () => {
+    const view = { frozenAt: STATUS_POST.frozenAt, entries: lostMember(100) };
+    expect(statusFits(view)).toBe(true);
+    const embed = expectHouseStyle(statusPost(view), { tone: "info", timestamp: true });
+    expect(namesOf(embed)).toEqual([
+      "Member → Guest · no linked character is in the FC (1/3)",
+      "Member → Guest · no linked character is in the FC (2/3)",
+      "Member → Guest · no linked character is in the FC (3/3)",
+    ]);
+    expect(linesOf(embed)).toEqual(view.entries.map((entry) => `<@${entry.user}>`));
+    expect(embed.footer?.text).toBe("100 members");
+  });
+
+  test("a batch heavy with departures is sized by the budget, and everyone in it is named", () => {
+    const entries = lostMember(80, true);
+    expect(statusFits({ frozenAt: STATUS_POST.frozenAt, entries })).toBe(false);
+    // The freeze adds members while the post still fits; the first that doesn't leads the next.
+    let size = 0;
+    while (
+      size < entries.length &&
+      statusFits({ frozenAt: STATUS_POST.frozenAt, entries: entries.slice(0, size + 1) })
+    )
+      size++;
+    expect(size).toBeGreaterThan(50);
+    expect(size).toBeLessThan(80);
+    const view = { frozenAt: STATUS_POST.frozenAt, entries: entries.slice(0, size) };
+    const embed = expectHouseStyle(statusPost(view), { tone: "info", timestamp: true });
+    expect(namesOf(embed)).not.toContain("Not listed");
+    expect(embedLength(embed)).toBeLessThanOrEqual(5_800);
+    // Each member appears in the access group and on their departure line.
+    for (const entry of view.entries)
+      expect(linesOf(embed).filter((line) => line.includes(`<@${entry.user}>`))).toHaveLength(2);
+    // The rest fit the next post.
+    expect(statusFits({ frozenAt: STATUS_POST.frozenAt, entries: entries.slice(size) })).toBe(true);
+  });
+
+  test("defensive guard: one member over the budget alone gets an exact 'Not listed' count", () => {
+    const departed = Array.from({ length: 120 }, (_, index) => ({
+      character: String(80_000 + index),
+      name: `Departed Character ${index}`,
+      world: "Diabolos",
+      snapshot: "s1",
+    }));
+    const view = {
+      frozenAt: STATUS_POST.frozenAt,
+      entries: [
+        statusEntry(
+          user(1),
+          { member: true, guest: false },
+          { member: false, guest: true },
+          { reasons: { member: "not_in_fc", guest: "registered" }, departed },
+        ),
+      ],
+    };
+    expect(statusFits(view)).toBe(false);
+    const presented = statusPost(view);
+    expect(presented.truncated).toBe(false);
+    const embed = expectHouseStyle(presented, { tone: "info", timestamp: true });
+    const fields = embed.fields ?? [];
+    expect(fields.at(-1)?.name).toBe("Not listed");
+    const shown = fields
+      .filter((field) => field.name.startsWith("Left the FC"))
+      .flatMap((field) => field.value.split("\n"));
+    const hidden = 120 - shown.length;
+    expect(hidden).toBeGreaterThan(0);
+    expect(fields.at(-1)?.value).toBe(`…and ${hidden} more`);
+    expect(fields[0]?.name).toBe("Member → Guest · no linked character is in the FC");
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // The gateway sends each post through Discord's REST API
 
@@ -599,6 +810,24 @@ describe("the gateway renders posts through the presenters", () => {
         components: [],
         allowed_mentions: { parse: [] },
         nonce: nonceOf("changelog:100:2.25.0"),
+        enforce_nonce: true,
+      });
+    });
+  });
+
+  test("a status post is the presenter's embed under the status:<batch> nonce", async () => {
+    await withGateway(async (gateway, posts) => {
+      await gateway.client.guilds.fetch("100");
+      const key = "status:7f4c1e2a-3b5d-4c6e-8f90-a1b2c3d4e5f6";
+      await gateway.send("100", "200", { kind: "status", view: STATUS_POST }, key);
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.body).toEqual({
+        ...(posts[0]?.body as object),
+        content: "",
+        embeds: statusPost(STATUS_POST).options.embeds,
+        components: [],
+        allowed_mentions: { parse: [] },
+        nonce: nonceOf(key),
         enforce_nonce: true,
       });
     });

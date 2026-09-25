@@ -1,6 +1,7 @@
 /** Acquire trustworthy shared observations, then project each guild's independent policy. */
 import { z } from "zod";
 import {
+  accessDecisive,
   authorize,
   departure,
   desiredAccess,
@@ -9,8 +10,9 @@ import {
 } from "../domain/policy.js";
 import { effectsPaused, WAITING_CODES } from "../domain/failures.js";
 import { PROFILE_RETRY_SECONDS } from "../domain/profiles.js";
+import { type Departure, statusObservation } from "../domain/status.js";
 import { Failure, json, nickname, normalized } from "../domain/values.js";
-import { desiredRankRole, rankAccess } from "./rank-policy.js";
+import { desiredRankRole, rankAccess, rankDecisive } from "./rank-policy.js";
 import { ensureUser, orm, type Connection } from "../infrastructure/postgres/database.js";
 import {
   and,
@@ -46,6 +48,12 @@ import type { GuildRecord, MemberView } from "./records.js";
 import type { RefreshResult } from "./results.js";
 import type { Service } from "./service.js";
 import { accessFacts } from "./access-facts.js";
+import {
+  type DepartingOwner,
+  lockDepartingOwners,
+  recordDepartures,
+  recordStatus,
+} from "./status-notices.js";
 
 /** Bound the per-job role-delta history; a long-lived blocked job is re-run indefinitely. */
 const APPLIED_HISTORY = 20;
@@ -240,6 +248,84 @@ export class Synchronization {
           })
           .returning({ id: t.rosterSnapshots.id });
         if (!snapshot) throw new Error("Missing snapshot");
+        // Officer status notices (2.27.0) record confirmed departures in this transaction, which
+        // must lock the departing owners' guild_users rows before any characters row (the order
+        // /unclaim, /assign and the two-404 unlink use). So every link's transition is decided
+        // first, from the membership rows as they stand: nothing below writes membership before
+        // the per-guild loop, so these are the transitions the loop applies. The guilds are
+        // share-locked first, as before, so /config adoption, /setup and activation (which lock
+        // the guild row before theirs) serialize with this on that row.
+        const guilds = await db
+          .select()
+          .from(t.guilds)
+          .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)))
+          .for("share");
+        const present = new Set(roster.members.map((member) => member.id));
+        const plans: {
+          guild: (typeof guilds)[number];
+          links: {
+            link: {
+              id: string;
+              user_id: string;
+              character_id: string;
+              name: string;
+              world: string;
+            };
+            transition: ReturnType<typeof departure>;
+            departed: boolean;
+          }[];
+        }[] = [];
+        for (const guild of guilds) {
+          // Every link references its character (a foreign key), whose last known name and world
+          // a departure line shows.
+          const links = await db
+            .select({
+              id: t.links.id,
+              user_id: t.links.user_id,
+              character_id: t.links.character_id,
+              state: t.membership.state,
+              first_absence_at: t.membership.first_absence_at,
+              name: t.characters.name,
+              world: t.characters.world,
+            })
+            .from(t.links)
+            .innerJoin(t.characters, eq(t.characters.id, t.links.character_id))
+            .leftJoin(
+              t.membership,
+              and(
+                eq(t.membership.guild_id, t.links.guild_id),
+                eq(t.membership.character_id, t.links.character_id),
+                eq(t.membership.fc_id, fcId),
+              ),
+            )
+            .where(and(eq(t.links.guild_id, guild.id), eq(t.links.active, true)));
+          plans.push({
+            guild,
+            links: links.map((link) => {
+              const transition = departure(
+                link.state ?? undefined,
+                present.has(link.character_id),
+                link.first_absence_at,
+                roster.observedAt,
+              );
+              // A confirmed departure (missing, then absent at least a minute later): exactly
+              // the transition the DevBot roster line counts.
+              const departed =
+                transition.state === "absent" &&
+                (link.state === "missing" || link.state === "present");
+              return { link, transition, departed };
+            }),
+          });
+        }
+        const owners = new Map<string, DepartingOwner>();
+        for (const plan of plans)
+          for (const { link, departed } of plan.links)
+            if (departed)
+              owners.set(`${plan.guild.id}:${link.user_id}`, {
+                guild: plan.guild.id,
+                user: link.user_id,
+              });
+        const states = await lockDepartingOwners(client, [...owners.values()]);
         for (const member of roster.members) {
           await this.app.storeCharacter(client, member, false);
           await db.insert(t.rosterMembers).values({
@@ -250,46 +336,21 @@ export class Synchronization {
             is_fc_leader: member.isFcLeader ?? null,
           });
         }
-        const guilds = await db
-          .select()
-          .from(t.guilds)
-          .where(and(eq(t.guilds.fc_id, fcId), eq(t.guilds.active, true)))
-          .for("share");
-        const present = new Set(roster.members.map((member) => member.id));
         let confirmation = false;
-        for (const guild of guilds) {
-          const links = await db
-            .select({
-              id: t.links.id,
-              user_id: t.links.user_id,
-              character_id: t.links.character_id,
-              state: t.membership.state,
-              first_absence_at: t.membership.first_absence_at,
-            })
-            .from(t.links)
-            .leftJoin(
-              t.membership,
-              and(
-                eq(t.membership.guild_id, t.links.guild_id),
-                eq(t.membership.character_id, t.links.character_id),
-                eq(t.membership.fc_id, fcId),
-              ),
-            )
-            .where(and(eq(t.links.guild_id, guild.id), eq(t.links.active, true)));
-          let departures = 0;
-          for (const link of links) {
-            const transition = departure(
-              link.state ?? undefined,
-              present.has(link.character_id),
-              link.first_absence_at,
-              roster.observedAt,
-            );
+        for (const { guild, links } of plans) {
+          const departures: { user: string; departure: Departure }[] = [];
+          for (const { link, transition, departed } of links) {
             if (transition.state === "missing") confirmation = true;
-            if (
-              transition.state === "absent" &&
-              (link.state === "missing" || link.state === "present")
-            )
-              departures++;
+            if (departed)
+              departures.push({
+                user: link.user_id,
+                departure: {
+                  character: link.character_id,
+                  name: link.name,
+                  world: link.world,
+                  snapshot: snapshot.id,
+                },
+              });
             const observation = {
               state: transition.state,
               first_absence_at: transition.firstAbsence,
@@ -329,6 +390,10 @@ export class Synchronization {
                   target: [t.membershipHistory.link_id, t.membershipHistory.fc_id],
                 });
           }
+          // Every confirmed departure of a linked character goes on its owner's row, including
+          // alts whose owner keeps Member and owners no longer in the server, and queues the
+          // guild's status post once (owner decision on #29: "Let #31 handle" departures).
+          await recordDepartures(client, guild.id, departures, states);
           const reconciliation = await enqueue(
             client,
             "reconcile.guild",
@@ -358,7 +423,7 @@ export class Synchronization {
               "officer.notify",
               `officer:${guild.id}`,
               {
-                message: `FC roster accepted: ${roster.members.length} members; ${departures} confirmed character departures. Snapshot ${snapshot.id}.`,
+                message: `FC roster accepted: ${roster.members.length} members; ${departures.length} confirmed character departures. Snapshot ${snapshot.id}.`,
               },
               guild.id,
               null,
@@ -643,6 +708,18 @@ export class Synchronization {
     const members = await this.app.discord.members(guildId);
     await this.app.db.transaction(async (client) => {
       const db = orm(client);
+      // Lock every existing member row of the guild first, in user order compared as plain strings
+      // (2.27.0). The pass locks these rows anyway (ensureUser for present members, then the
+      // closing present=false update for the rest), but in the gateway's enumeration order; taking
+      // them up front in the global (guild_id, user_id) order keeps it from deadlocking with the
+      // roster's departing-owner lock and the status-post freeze. Rows ensureUser inserts for new
+      // members are new keys nobody else holds.
+      await db
+        .select({ user_id: t.guildUsers.user_id })
+        .from(t.guildUsers)
+        .where(eq(t.guildUsers.guild_id, guildId))
+        .orderBy(sql`${t.guildUsers.user_id} COLLATE "C"`)
+        .for("update");
       // Each requesting run tracks all child work, including coalesced role-layout jobs.
       const attach = async (child: string) => {
         await db
@@ -884,6 +961,43 @@ export class Synchronization {
             gt(t.jobs.lease_until, sql`now()`),
           ),
         );
+      // Officer status notices (2.27.0): record this pass's decisive values once its roles were
+      // applied. Nickname errors don't matter here; a blocked role write records nothing, and the
+      // pass after the fix compares against the stored state. Only values that don't depend on
+      // the roles the member already holds are recorded (accessDecisive, rankDecisive).
+      if (!roleError) {
+        const access = accessDecisive(facts);
+        await recordStatus(
+          this.app,
+          guild.id,
+          member.id,
+          member.joinedAt,
+          statusObservation({
+            bound: {
+              member: Boolean(guild.member_role_id),
+              guest: Boolean(guild.guest_role_id),
+              officer: Boolean(guild.officer_role_id),
+              leader: Boolean(guild.leader_role_id),
+            },
+            values: { member: desired.member, guest: desired.guest, officer, leader },
+            decisive: {
+              member: access.member,
+              guest: access.guest,
+              officer: rankDecisive(rank.officer, rank.fresh, rank.manualOfficer),
+              leader: rankDecisive(rank.leader, rank.fresh),
+            },
+            facts: {
+              fcLinked: Boolean(guild.fc_id),
+              officerRankSet: Boolean(guild.officer_rank_key),
+              grant: facts.grant,
+              former: facts.former,
+              guestRevoked: facts.revoked,
+              manualOfficer: rank.manualOfficer,
+              officerRevoked: rank.revoked,
+            },
+          }),
+        );
+      }
       if (desired.member || (desired.guest && facts.verified)) {
         const apps = await db
           .update(t.guestApplications)

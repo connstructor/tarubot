@@ -358,21 +358,23 @@ export function list(items: readonly string[], options: ListOptions = {}): strin
 /**
  * Pack pre-built lines into as few fields as their budget allows, naming them 'Needs attention
  * (1/2)' when a list spans several. A line is never split across fields; one over the budget on
- * its own is cut. Used for officer job lines, whose diagnostics make ten lines exceed one field.
+ * its own is cut. Used for officer job lines, whose diagnostics make ten lines exceed one field,
+ * and for the status post's mention groups, which join with ', ' instead of a newline (2.27.0).
  */
 export function splitFields(
   name: string,
   lines: readonly string[],
   budget: number = DISCORD_LIMITS.fieldValue,
+  separator = "\n",
 ): FieldSpec[] {
   const values: string[] = [];
   let current = "";
   for (const raw of lines) {
     const line = cutMarkdown(raw, budget);
-    if (current && current.length + 1 + line.length > budget) {
+    if (current && current.length + separator.length + line.length > budget) {
       values.push(current);
       current = line;
-    } else current = current ? `${current}\n${line}` : line;
+    } else current = current ? `${current}${separator}${line}` : line;
   }
   if (current) values.push(current);
   return values.map((value, index) => ({
