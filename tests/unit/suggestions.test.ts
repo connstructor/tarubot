@@ -1,5 +1,5 @@
 /**
- * Public suggestions (2.26.0, issue #32): what /suggest publishes. Every cleaning rule, the
+ * Public suggestions (2.28.0, issue #32): what /suggest publishes. Every cleaning rule, the
  * invisible characters normalising removes, the fixed point `clean` reaches on nested markup, a
  * seeded fuzz of the whole pipeline, the exact public example the owner approved, the final
  * check's refusals, who may suggest, where each deployment posts, the settings guard, the
@@ -42,7 +42,7 @@ import { GitHubIssues } from "../../src/infrastructure/github/issues.js";
 import { orm } from "../../src/infrastructure/postgres/database.js";
 
 /** The whole public pipeline for one raw idea, as Suggestions.submit runs it. */
-function pipeline(raw: string, version = "2.26.0") {
+function pipeline(raw: string, version = "2.28.0") {
   const text = clean(normalise(raw));
   const title = suggestionTitle(text);
   const body = suggestionBody(text, version);
@@ -83,7 +83,7 @@ describe("cleaning rules", () => {
       "discord.com/channels/1036062273631952955/1/2",
       "na.finalfantasyxiv.com/lodestone/character/12345678/",
       "hc-ping.com/0123-4567",
-      // A query, a fragment or a port after a domain, without a path (2.26.0 review).
+      // A query, a fragment or a port after a domain, without a path (2.28.0 review).
       "example.com?invite=abc",
       "mysite.io#secret-anchor",
       "discord.gg?code",
@@ -119,7 +119,7 @@ describe("cleaning rules", () => {
       expect(cleaned(phrase)).toBe(phrase);
   });
 
-  test("a link in any script goes like its ASCII equivalent (2.26.0 review)", () => {
+  test("a link in any script goes like its ASCII equivalent (2.28.0 review)", () => {
     for (const link of [
       // Cyrillic, with a path, a subdomain, a port, a query and a fragment.
       "пример.рф/путь",
@@ -268,7 +268,7 @@ describe("cleaning rules", () => {
 });
 
 /**
- * The hostile review of the host rule (2.26.0): each bypass it found, with the cleaned text and the
+ * The hostile review of the host rule (2.28.0): each bypass it found, with the cleaned text and the
  * title, since a title isn't fenced. `gone` expects `see <form> please` to lose the whole form.
  */
 describe("the hostile review's bypasses", () => {
@@ -482,7 +482,7 @@ describe("global IPv6 addresses", () => {
       raw,
       text: expected,
       title: expected,
-      body: suggestionBody(expected, "2.26.0"),
+      body: suggestionBody(expected, "2.28.0"),
     });
     expect(() => assertPublic(text, title, body)).not.toThrow();
   };

@@ -1,0 +1,4 @@
+# pnpm 12 runs no dependency build script unless it is decided here. esbuild's postinstall only
+# checks its native binary, which the optional @esbuild/<platform> package already supplies.
+allowBuilds:
+  esbuild: false

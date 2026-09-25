@@ -33,13 +33,13 @@ const schema = z.object({
     .string()
     .regex(/^[A-Za-z\d-]+\/[A-Za-z\d._-]+$/u, "owner/repository")
     // Reports carry private diagnostics, so pointing them at TaruBot's public repository is a
-    // loud startup failure (2.26.0), never a silent leak.
+    // loud startup failure (2.28.0), never a silent leak.
     .refine(
       (repository) => repository.toLowerCase() !== project.repository.toLowerCase(),
       "must be the private reports repository, not TaruBot's public one",
     )
     .default("deconfined/tarubot-reports"),
-  // Public suggestions (2.26.0): the TaruBot GitHub App that opens /suggest issues in the public
+  // Public suggestions (2.28.0): the TaruBot GitHub App that opens /suggest issues in the public
   // repository. Production only (/suggest); DevBot ignores both and previews into the reports
   // repository. Either one empty switches /suggest off. The client ID isn't secret.
   GITHUB_APP_CLIENT_ID: z.string().default(""),

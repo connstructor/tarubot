@@ -456,7 +456,7 @@ function forbiddenView(s: Situation): FailureView {
         fields: [
           {
             name: "How to qualify",
-            // /suggest (2.26.0) also accepts guests, so its steps lead to either role.
+            // /suggest (2.28.0) also accepts guests, so its steps lead to either role.
             value: (s.scope.root === "suggest"
               ? [
                   "1. Link your character with /claim and /verify, or ask an officer to /assign it.",
@@ -972,7 +972,7 @@ function waitView(s: Situation): FailureView {
       title: "You can send another report later",
       lead: s.message ?? "A report was sent a few minutes ago.",
     };
-  // 2.26.0: /suggest's own limits, and GitHub's rate limit on new issues, read alike.
+  // 2.28.0: /suggest's own limits, and GitHub's rate limit on new issues, read alike.
   if (limit === "suggest")
     return {
       ...base,
@@ -996,7 +996,7 @@ function waitView(s: Situation): FailureView {
 
 /** The Lodestone, Discord's API or GitHub failed or returned something unusable. */
 function upstreamView(s: Situation): FailureView {
-  // 2.26.0: GitHub didn't confirm a /suggest post, which may exist anyway. The attempt counts
+  // 2.28.0: GitHub didn't confirm a /suggest post, which may exist anyway. The attempt counts
   // toward the member's limits, so the card asks them to look before sending it again.
   if (s.detail?.kind === "github")
     return {

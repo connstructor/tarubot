@@ -1,6 +1,6 @@
 /**
  * GitHub response contracts, signature status, request coalescing, and outage isolation; the issue
- * client's refusals; and the GitHub App sign-in behind /suggest (2.26.0), against local fakes.
+ * client's refusals; and the GitHub App sign-in behind /suggest (2.28.0), against local fakes.
  */
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync, verify } from "node:crypto";
@@ -243,7 +243,7 @@ describe("issue reports client (2.18.0)", () => {
   });
 });
 
-describe("issue client settings (2.26.0)", () => {
+describe("issue client settings (2.28.0)", () => {
   /** A client against a local fake that answers every request with `status`. */
   async function refusedWith(status: number, settings?: string) {
     const server = Bun.serve({ port: 0, fetch: () => new Response("", { status }) });
@@ -288,7 +288,7 @@ describe("issue client settings (2.26.0)", () => {
   });
 });
 
-describe("GitHub App sign-in (2.26.0)", () => {
+describe("GitHub App sign-in (2.28.0)", () => {
   // A throwaway key pair made for this run: no PEM is committed (the repository is public, and
   // secret scanning would flag one). GitHub downloads app keys as PKCS#1, so the test uses it too.
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });

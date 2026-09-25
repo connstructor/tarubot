@@ -51,7 +51,7 @@ export const issueReportsKey = new ServiceKey(
   "issue reports",
   (value): value is IssueReports => value instanceof IssueReports,
 );
-/** Public suggestions (2.26.0): /suggest posts through it to the public repository. */
+/** Public suggestions (2.28.0): /suggest posts through it to the public repository. */
 export const suggestionsKey = new ServiceKey(
   "public suggestions",
   (value): value is Suggestions => value instanceof Suggestions,

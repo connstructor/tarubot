@@ -150,8 +150,10 @@ export function channelPermissions(
 }
 
 /**
- * The README's bot permissions for a launch without onboarding. Manage Channels is omitted: it is
- * needed only when lobby onboarding is enabled, which the production launch leaves off.
+ * The bot permissions for a launch without onboarding, as the documentation site lists them
+ * (site/src/content/docs/admin/add-to-server.md, whose invite adds Manage Channels). Manage
+ * Channels is omitted here: it is needed only when lobby onboarding is enabled, which the
+ * production launch leaves off. tests/unit/docs-site.test.ts checks the invite against this.
  */
 export const requiredBotPermissions = {
   ManageRoles: PermissionFlagsBits.ManageRoles,

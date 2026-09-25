@@ -2,7 +2,7 @@
  * The private reports repository's issues (2.18.0): create an issue, comment on one, and read its
  * state. The token is a fine-grained token limited to that repository's issues. Failures map to
  * catalog codes so the job queue treats them correctly: GitHub's rate limits and outages wait or
- * retry, and a refused token is a configuration failure an operator must fix. Since 2.26.0
+ * retry, and a refused token is a configuration failure an operator must fix. Since 2.28.0
  * /suggest also creates issues through it, in the public repository with a GitHub App
  * installation token (src/infrastructure/github/app.ts), naming its own settings when refused.
  */
@@ -22,7 +22,7 @@ export interface IssueRef {
 
 /**
  * How long GitHub asks TaruBot to wait, in seconds, when a refused answer is a rate limit, or null
- * when it isn't one. Shared by the issue client and, since 2.26.0, the GitHub App's sign-in
+ * when it isn't one. Shared by the issue client and, since 2.28.0, the GitHub App's sign-in
  * (src/infrastructure/github/app.ts). It consumes the body: a 403's text is read to classify it,
  * and any other body is released.
  */

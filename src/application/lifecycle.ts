@@ -59,7 +59,7 @@ export interface LifecycleOptions {
   readonly tick: () => Promise<void>;
   /**
    * Work outside the queue that must finish before the lease is handed over, awaited beside the
-   * queue's stop and within the same bound: since 2.26.0, a /suggest post still at GitHub, whose
+   * queue's stop and within the same bound: since 2.28.0, a /suggest post still at GitHub, whose
    * audit row the next writer's limits count. Must never reject.
    */
   readonly drain: () => Promise<void>;

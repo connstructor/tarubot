@@ -2,7 +2,7 @@
  * Writer-lease sequencing without PostgreSQL: a fake pool client stands in for the dedicated lease
  * session, so readiness, startup refusal, log escalation, release, loss (an error event, a silent
  * session, or a missing lock found by the periodic check), a session that goes silent while waiting,
- * the shutdown deadline's exit status, and shutdown's wait for drained work (2.26.0) run in every
+ * the shutdown deadline's exit status, and shutdown's wait for drained work (2.28.0) run in every
  * unit pass.
  * tests/integration/lifecycle.test.ts repeats the contention and release against real advisory locks.
  */
@@ -327,7 +327,7 @@ test("a shutdown that hangs still exits at the deadline, with status 1 after a l
   expect(heldOrder).toEqual(["close"]);
 });
 
-test("shutdown waits for drained work before it releases the lease and closes the pool (2.26.0)", async () => {
+test("shutdown waits for drained work before it releases the lease and closes the pool (2.28.0)", async () => {
   // main.ts drains /suggest here: a post still at GitHub must write its audit row while this
   // process holds the lease and the pool is open, or the next writer's limits would miss it.
   const client = new FakeLeaseClient();

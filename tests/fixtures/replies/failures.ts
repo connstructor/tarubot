@@ -202,7 +202,7 @@ export const FAILURE_CASES = {
     }),
     "/ledger deposit",
   ),
-  // 2.26.0: /suggest accepts guests too, so its "How to qualify" steps lead to either role.
+  // 2.28.0: /suggest accepts guests too, so its "How to qualify" steps lead to either role.
   "forbidden membership · /suggest · member": card(
     "forbidden.membership",
     "member",
@@ -210,7 +210,7 @@ export const FAILURE_CASES = {
     suggestionAccessRefused(),
     "/suggest",
   ),
-  // 2.26.0: a server outside the allowlist is refused even for its managers.
+  // 2.28.0: a server outside the allowlist is refused even for its managers.
   "forbidden foreign server · /suggest · manager": card(
     "forbidden.context",
     "manager",
@@ -745,7 +745,7 @@ export const FAILURE_CASES = {
     ),
     "/issue",
   ),
-  // 2.26.0: /suggest's limits (one an hour and three a day per member, ten a day in total), and
+  // 2.28.0: /suggest's limits (one an hour and three a day per member, ten a day in total), and
   // GitHub's rate limit on new issues, share one card.
   "suggest limit · /suggest · member": card(
     "wait.suggest",
@@ -925,7 +925,7 @@ export const FAILURE_CASES = {
     "/setup",
   ),
 
-  // 2.26.0: GitHub didn't confirm a /suggest post; it may exist, and the try counts.
+  // 2.28.0: GitHub didn't confirm a /suggest post; it may exist, and the try counts.
   "github unconfirmed · /suggest · member": card(
     "upstream.github",
     "member",

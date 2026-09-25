@@ -1,5 +1,5 @@
 /**
- * Public feature suggestions (2.26.0, issue #32; REQUIREMENTS.md "Approved public-suggestion
+ * Public feature suggestions (2.28.0, issue #32; REQUIREMENTS.md "Approved public-suggestion
  * amendments"), pure so every rule can be unit-tested. `/suggest` posts a member's idea as an issue
  * in TaruBot's public repository, so the text is the only thing that goes public, and only after:
  *

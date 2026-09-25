@@ -1,6 +1,6 @@
 /**
  * Utility presenters: /ping and /channel (guests-sync-utility#50–#53), neutral reference replies
- * with no service behind them, /issue's confirmation (2.18.0) and /suggest's (2.26.0). Pure.
+ * with no service behind them, /issue's confirmation (2.18.0) and /suggest's (2.28.0). Pure.
  */
 import { ChannelType } from "discord.js";
 import { code, link, mentionChannel, plain } from "./format.js";
@@ -143,7 +143,7 @@ export function issueReply(submitted: IssueSubmitted): Presented {
 }
 
 /**
- * /suggest (2.26.0): the suggestion is a public issue now. The reply links to it, names the
+ * /suggest (2.28.0): the suggestion is a public issue now. The reply links to it, names the
  * repository (DevBot's previews go to the private reports one), and says exactly what was posted.
  * It never echoes the idea back.
  */

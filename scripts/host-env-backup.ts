@@ -28,7 +28,7 @@ export const REQUIRED_SETTINGS = [
 /** Settings a complete production `.env` also holds; their absence is reported, not refused. */
 export const EXPECTED_SETTINGS = [
   "GITHUB_REPORTS_TOKEN",
-  // The TaruBot GitHub App behind /suggest (2.26.0); the key is a quoted multi-line PEM.
+  // The TaruBot GitHub App behind /suggest (2.28.0); the key is a quoted multi-line PEM.
   "GITHUB_APP_CLIENT_ID",
   "GITHUB_APP_PRIVATE_KEY",
   "HEALTHCHECKS_PING_URL",

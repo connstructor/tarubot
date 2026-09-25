@@ -1,5 +1,5 @@
 /**
- * /suggest (2.26.0, issue #32, owner decisions of 2026-09-25): a member or guest of the Free
+ * /suggest (2.28.0, issue #32, owner decisions of 2026-09-25): a member or guest of the Free
  * Company's server suggests a TaruBot feature. It is posted at once as a public issue in TaruBot's
  * GitHub repository, with only the cleaned idea and TaruBot's version; the reply links to it. The
  * command passes no username or interaction ID: nothing about the member goes public.

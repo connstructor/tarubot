@@ -43,7 +43,7 @@ test("every declared path, with all of its options, fits its own command's shape
     }
   }
   // The registered surface: 46 paths across 21 roots (a root without subcommands is one path);
-  // 2.18.0 added /issue, 2.25.0 /config changelog and 2.26.0 /suggest.
+  // 2.18.0 added /issue, 2.25.0 /config changelog and 2.28.0 /suggest.
   expect(paths).toBe(46);
 });
 

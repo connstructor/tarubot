@@ -21,7 +21,7 @@ import {
 
 const url = process.env.TEST_DATABASE_URL;
 const SCHEMA = "writer_lease";
-/** The runbook gate's probe (docs/OPERATIONS.md): backends holding the writer lease. */
+/** The writer gate's probe (site/src/content/docs/deploy/operations.md): lease-holding backends. */
 const HOLDERS = `SELECT pid FROM pg_locks
   WHERE locktype = 'advisory' AND granted
     AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
@@ -406,7 +406,8 @@ describe.skipIf(!url)("database writer lease", () => {
     for (const id of [newer, post])
       expect(after.get(id)).toMatchObject({ status: "queued", attempts: 0, last_error: null });
     // The rows it replaces close as superseded, never as delivered work; a closed reconcile.user
-    // keeps its `applied` list (OPERATIONS.md), and a row without one gains nothing else.
+    // keeps its `applied` list (site/src/content/docs/deploy/monitoring.md), and a row without
+    // one gains nothing else.
     expect(after.get(older)).toMatchObject({ status: "succeeded", last_error: null });
     expect(after.get(older)?.result).toEqual({ skipped: "superseded", applied });
     expect(after.get(repair)).toMatchObject({ status: "succeeded", last_error: null });

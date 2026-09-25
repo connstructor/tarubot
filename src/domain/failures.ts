@@ -237,7 +237,7 @@ export type FailureDetail =
       readonly kind: "limit";
       /**
        * `issue`: /issue's per-member and per-server limits (2.18.0). `suggest`: /suggest's limits,
-       * and GitHub's own rate limit on new issues while posting one (2.26.0).
+       * and GitHub's own rate limit on new issues while posting one (2.28.0).
        */
       readonly limit: "claims_own" | "claims_all" | "apply" | "issue" | "suggest";
       readonly until?: Date;
@@ -259,7 +259,7 @@ export type FailureDetail =
   /** The command option the input failure concerns, which selects the reply's Example. */
   | { readonly kind: "option"; readonly option: string }
   /**
-   * GitHub didn't confirm a /suggest post (2.26.0): it may or may not exist, so the reply asks the
+   * GitHub didn't confirm a /suggest post (2.28.0): it may or may not exist, so the reply asks the
    * member to check before sending it again, and never blames the Lodestone.
    */
   | { readonly kind: "github" };

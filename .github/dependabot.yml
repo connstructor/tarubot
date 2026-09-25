@@ -11,9 +11,8 @@
 #   advances the bundled fallback, because it also rewrites
 #   src/infrastructure/lodestone/upstream-revisions.json and runs the contract suite. (Nodestone and
 #   its submodule were removed in 2.20.0, and the sidecar in 2.21.0.)
-# - The CI PostgreSQL service image and the digest-pinned doctl image in .github/workflows/ci.yml:
-#   Dependabot reads only `uses:` in workflows. tests/unit/runtime-pins.test.ts keeps the service
-#   image equal to docker-compose.yml.
+# - The CI PostgreSQL service image in .github/workflows/ci.yml: Dependabot reads only `uses:` in
+#   workflows. tests/unit/runtime-pins.test.ts keeps the service image equal to docker-compose.yml.
 version: 2
 
 updates:
@@ -53,6 +52,22 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+
+  # Documentation site (site/package.json and site/pnpm-lock.yaml; pnpm, not Bun). Build-time only:
+  # nothing here reaches the bot image. One grouped pull request a month, completed with a version
+  # commit like every other Dependabot pull request.
+  - package-ecosystem: "npm"
+    directory: "/site"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      # Astro, Starlight and the links validator declare peer ranges on each other; move them together.
+      site:
+        patterns: ["*"]
 
   # Compose images: only postgres has a fixed tag; the GHCR images are parameterized and skipped.
   - package-ecosystem: "docker-compose"

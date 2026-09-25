@@ -84,7 +84,7 @@ const report: Reporter = (error, operation, options = {}) => {
   logReport(error, operation, options);
   if ((options.level ?? "error") === "error") void reports.error(error, operation, options.scope);
 };
-// Public suggestions (2.26.0): production posts as the GitHub App, DevBot previews into the
+// Public suggestions (2.28.0): production posts as the GitHub App, DevBot previews into the
 // reports repository; without their settings /suggest says it is switched off.
 const suggestions = new Suggestions(app, suggestionTarget(config), report);
 const queue = new Queue(db, dispatcher(app, sync, access, reports), (event) => {

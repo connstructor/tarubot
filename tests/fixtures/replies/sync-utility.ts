@@ -429,9 +429,9 @@ export const UTILITY_CASES = {
     timestamp: false,
     render: () => issueReply({ delivery: "saved", ref: "1290000000000000001" }),
   },
-  // 2.26.0: /suggest's confirmation, linking the public issue.
+  // 2.28.0: /suggest's confirmation, linking the public issue.
   "suggest.posted": {
-    spec: "2.26.0 public suggestions",
+    spec: "2.28.0 public suggestions",
     audience: "member",
     tone: "success",
     title: "Suggestion posted",

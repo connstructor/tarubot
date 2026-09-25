@@ -728,7 +728,7 @@ test("/issue passes the member, reporter, Ref and description to the issue repor
   ]);
 });
 
-test("/suggest passes only the member and the idea to the suggestion service (2.26.0)", async () => {
+test("/suggest passes only the member and the idea to the suggestion service (2.28.0)", async () => {
   // Nothing about the member goes public, so the command hands over no username or interaction
   // ID: the service gets the actor (for the checks and the private audit row) and the idea.
   const calls: unknown[][] = [];
@@ -1247,7 +1247,7 @@ test("the path tables return one embed for every registered command path", async
   );
   const paths = await registeredPaths();
   // 41 in 2.14.0, plus /officer reset and /guest reset (owner decision, 2026-09-24), plus /issue
-  // (2.18.0), /config changelog (2.25.0) and /suggest (2.26.0).
+  // (2.18.0), /config changelog (2.25.0) and /suggest (2.28.0).
   expect(paths).toHaveLength(46);
   // /apply opens a form, whose refusal and receipt the router and guest-application tests cover,
   // /version reads GitHub, which version.test stubs, and /issue and /suggest have their own tests

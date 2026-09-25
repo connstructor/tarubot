@@ -774,7 +774,7 @@ describe("every option has an Example (owner decision, 2026-09-24)", () => {
   });
 });
 
-describe("/suggest's cards (2.26.0)", () => {
+describe("/suggest's cards (2.28.0)", () => {
   test("the membership card's steps lead to the Member or the Guest role on /suggest only", () => {
     const suggest = onlyEmbed(FAILURE_CASES["forbidden membership · /suggest · member"].render());
     expect(suggest.title).toBe("FC membership needed");

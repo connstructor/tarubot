@@ -1,5 +1,5 @@
 /**
- * Public feature suggestions (2.26.0, issue #32; REQUIREMENTS.md "Approved public-suggestion
+ * Public feature suggestions (2.28.0, issue #32; REQUIREMENTS.md "Approved public-suggestion
  * amendments (2026-09-25)"): `/suggest idea:…` opens an issue in TaruBot's public repository at
  * once, as the TaruBot GitHub App, and replies with its link. The owner moderates afterwards.
  *

@@ -75,7 +75,7 @@ test("the production file carries every setting the registry deployment passes",
   expect(missing).toEqual([]);
 });
 
-test("the GitHub App settings reach production only (2.26.0)", async () => {
+test("the GitHub App settings reach production only (2.28.0)", async () => {
   // /suggest posts publicly as the TaruBot GitHub App in production; DevBot previews into the
   // private reports repository and never holds the app's key.
   const production = composeFile.parse(YAML.parse(await read("docker-compose.production.yml")));

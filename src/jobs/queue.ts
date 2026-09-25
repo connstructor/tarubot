@@ -213,7 +213,8 @@ async function supersedeAndRequeue(
       lease_until: null,
       last_error: null,
       // Keep reconcile.user's append-only `applied` evidence, as queue completion does: it is the
-      // only record of role changes Discord actually received (OPERATIONS.md).
+      // only record of role changes Discord actually received
+      // (site/src/content/docs/deploy/monitoring.md).
       result: sql`jsonb_build_object('skipped','superseded') || jsonb_strip_nulls(jsonb_build_object('applied',${t.jobs.result}->'applied'))`,
     })
     .where(

@@ -7023,7 +7023,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await pinBoundary(fcId);
     // The running row is left to finish and counts as posted, so one recovery line is queued.
     // (If this send then fails and is retried, the degraded line can post after the recovery
-    // line: an accepted edge case, docs/OPERATIONS.md "Officer notices".)
+    // line: an accepted edge case, site/src/content/docs/deploy/monitoring.md "Officer notices".)
     expect((await notices(degraded))[1]).toMatchObject({
       id: sending.id,
       status: "running",
@@ -7102,7 +7102,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     ).toEqual([]);
   });
 
-  // Public suggestions (2.26.0, issue #32) -----------------------------------------------------
+  // Public suggestions (2.28.0, issue #32) -----------------------------------------------------
 
   /** Three guilds for /suggest: the allowlisted FC server, one outside the allowlist, and an
    * allowlisted server with no configuration. Role IDs are the canary server's bound roles. The
@@ -7188,7 +7188,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
   /** A long enough idea, distinct per call so failures point at the right submission. */
   const idea = (label: string) => `Suggestion ${label} for the TaruBot maintainers`;
 
-  test("/suggest setup: the allowlisted FC server, a foreign one, and an unconfigured one (2.26.0)", async () => {
+  test("/suggest setup: the allowlisted FC server, a foreign one, and an unconfigured one (2.28.0)", async () => {
     await db.query(
       "INSERT INTO free_companies (id, name, world) VALUES ($1, 'Canary FC', 'Diabolos')",
       [canaryFc],
@@ -7207,7 +7207,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await clearSuggestions();
   });
 
-  test("/suggest posts only the cleaned idea and records who sent it (2.26.0 canary)", async () => {
+  test("/suggest posts only the cleaned idea and records who sent it (2.28.0 canary)", async () => {
     const { suggestions, target } = suggestionHarness();
     const member = suggester("300000000000000001", [CANARY_MEMBER_ROLE]);
     const posted = await suggestions.submit(
@@ -7266,7 +7266,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await clearSuggestions();
   });
 
-  test("/suggest refuses before any GitHub call: foreign server, off switch, setup, no role (2.26.0)", async () => {
+  test("/suggest refuses before any GitHub call: foreign server, off switch, setup, no role (2.28.0)", async () => {
     const { suggestions, target, reports } = suggestionHarness();
     // Outside the allowlist, even a configured server's manager is refused, with no scope.
     const manager = suggester("300000000000000002", ["76101"], {
@@ -7325,7 +7325,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await clearSuggestions();
   });
 
-  test("/suggest limits: one an hour, three a day per member, ten a day in total (2.26.0)", async () => {
+  test("/suggest limits: one an hour, three a day per member, ten a day in total (2.28.0)", async () => {
     const { suggestions, target } = suggestionHarness();
     const member = suggester("300000000000000011", [CANARY_MEMBER_ROLE]);
     await suggestions.submit(member, idea("first"));
@@ -7382,7 +7382,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     await clearSuggestions();
   });
 
-  test("/suggest counts every attempt GitHub didn't confirm, and nothing it refused (2.26.0)", async () => {
+  test("/suggest counts every attempt GitHub didn't confirm, and nothing it refused (2.28.0)", async () => {
     const actions = async () => (await suggestionRows()).map((row) => row.action);
     let userSequence = 20;
     const next = () => suggester(`3000000000000000${userSequence++}`, [CANARY_MEMBER_ROLE]);
@@ -7462,7 +7462,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
     }
   });
 
-  test("/suggest on DevBot previews into the private reports repository (2.26.0)", async () => {
+  test("/suggest on DevBot previews into the private reports repository (2.28.0)", async () => {
     const { suggestions } = suggestionHarness(new FakeTarget("deconfined/tarubot-reports"));
     const posted = await suggestions.submit(
       suggester("300000000000000040", [CANARY_GUEST_ROLE]),

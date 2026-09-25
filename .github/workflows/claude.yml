@@ -20,7 +20,7 @@ jobs:
     name: Claude assistant
     # Start only for @claude mentions by trusted accounts; the action separately rejects actors
     # without write access. Review events on fork pull requests receive no secrets or OIDC token.
-    # An issue opened by /suggest (2.26.0) carries the marker 'Suggested in Discord with TaruBot'
+    # An issue opened by /suggest (2.28.0) carries the marker 'Suggested in Discord with TaruBot'
     # and never starts the agent, even if the text cleaning regressed or the posting identity
     # changes. A trusted @claude comment on one still does, and hands it the member's text.
     if: |

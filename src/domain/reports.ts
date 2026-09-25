@@ -32,7 +32,7 @@ export type ReportSource = "user" | "error" | "job" | "trouble";
  * Patterns for credentials that must never reach a report, whatever text carried them: Discord bot
  * tokens, GitHub tokens, Authorization values, passwords in connection URLs, PEM blocks, and
  * healthchecks.io ping URLs (anyone holding one can ping the check and hide an outage). Exported
- * since 2.26.0: public suggestions (src/domain/suggestions.ts) apply the same shapes, but never
+ * since 2.28.0: public suggestions (src/domain/suggestions.ts) apply the same shapes, but never
  * the deployment's exact secret values, so a member can't use /suggest to test a guess.
  */
 export const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
@@ -63,7 +63,7 @@ export function redact(text: string, secrets: readonly string[] = []): string {
 
 /**
  * Whole seconds from now until `seconds` after `from`, at least one: a limit's Failure.retryAfter.
- * Shared by /issue's and /suggest's limits (moved here from issue-reports.ts in 2.26.0).
+ * Shared by /issue's and /suggest's limits (moved here from issue-reports.ts in 2.28.0).
  */
 export function secondsUntil(from: Date, seconds: number): number {
   return Math.max(1, Math.ceil((from.getTime() + seconds * 1000 - Date.now()) / 1000));

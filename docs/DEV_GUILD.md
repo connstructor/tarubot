@@ -20,6 +20,20 @@ The Compose service is named `tarubot`; its actual Discord identity comes from t
 
 These commands use the published GHCR image `ghcr.io/deconfined/tarubot` (until 2.20.0 also `ghcr.io/deconfined/tarubot-nodestone`, the parser sidecar; since 2.21.0 the parser runs in the bot, and `--remove-orphans` clears the old container). The GitHub account was named `connstructor` until 2026-09-24, and image paths under that name no longer resolve. Before testing unmerged source changes, append `-f docker-compose.build.yml` and use `up -d --build --wait`; that override selects local image tags and mounts the editable startup plan. See [CI_CD.md](CI_CD.md).
 
+## Backup and restore rehearsal on DevBot
+
+The generic procedures are on the documentation site ([`deploy/operations.md`](../site/src/content/docs/deploy/operations.md#backup)); DevBot differs in these ways (moved here from the former operations guide in 2.27.0):
+
+- **Compose files and database.** Add `-f docker-compose.devbot.yml` to every command, and use DevBot's database `tarubot_dev` where the site says `tarubot`. Keep dumps in `.cache/backups/`, named `tarubot_dev-before-X.Y.Z-<sha>.dump`.
+- **The deployment guard.** Under DevBot's profile, `DATABASE_URL` must name `tarubot_dev`, and a restore target must end in `_restore_test` (for example `tarubot_dev_restore_test`). The one exception is `migrate.js --restore-rehearsal`, which may name the restore copy as `DATABASE_URL`, and with that flag it must end in `_restore_test`. Other local installations use the unmanaged profile and any names.
+- **Restore check before a migration.** `check-restore` requires both databases to report this build's `SCHEMA_VERSION`. A pre-migration rehearsal therefore runs from the currently deployed build, or from the newer build with `--schema-version` naming the migration both databases still report, for example `bun dist/scripts/check-restore.js --schema-version 005_launch_access_policy.sql` before applying `006_guest_application_switch.sql` (2.15.0).
+- **Migration rehearsal.** Run the new release's migrate inside its image, deriving the URL in the container so no credential is printed. It must print `Schema ready.`; then migrate `tarubot_dev` itself with a plain `bun dist/scripts/migrate.js`. The production application never uses the flag; its migrations are rehearsed in `tarubot_rehearsal` ([MIGRATION.md](MIGRATION.md) E2).
+
+  ```sh
+  docker compose -f docker-compose.yml -f docker-compose.devbot.yml run --rm --no-deps -T tarubot \
+    sh -c 'DATABASE_URL="${DATABASE_URL%/*}/tarubot_dev_restore_test" exec bun dist/scripts/migrate.js --restore-rehearsal'
+  ```
+
 ## Completed on 2026-09-22
 
 - Authenticated identity matched the configured DevBot application.
@@ -104,7 +118,7 @@ Adding `--channel 1040379861153357995` to the smoke probe explicitly enables the
 - With the writer stopped, `tarubot_dev` was backed up to `.cache/backups/tarubot_dev-before-2.10.1-0744cfb.dump`. A disposable restore matched every existing row, sequence, trigger, and constraint. Migration 003 was rehearsed on that restore before application to DevBot; all prior application rows were preserved.
 - Two active ownership links, guild revision 9, and the uninitialized ledger account survived rollout. Database/Discord readiness passed with zero pending/blocked work. All 19 root commands / 40 paths matched their deployed definitions, including the new setup options.
 - The 2.10.1 startup plan was read back publicly in `#chat`: [message 1552126390214860923](https://discord.com/channels/1040379370159743139/1040379370931507252/1552126390214860923).
-- The subsequent permission check confirmed **Administrator disabled** and exactly the README's eight explicit bot-role permissions. All four role bindings passed hierarchy checks; complete enumeration returned seven humans and DevBot.
+- The subsequent permission check confirmed **Administrator disabled** and exactly the eight explicit bot-role permissions the README then listed (now on the site's [`admin/add-to-server.md`](../site/src/content/docs/admin/add-to-server.md)). All four role bindings passed hierarchy checks; complete enumeration returned seven humans and DevBot.
 - Discord identifies `1040379572358746144` (`moderator-only`) as `public_updates_channel_id`, under the permission-synced `1040381910863593492` (`Admin`) category. The owner requested these community resources remain outside onboarding.
 - Created the separate private **officer-chat**, `1552149138148433930`, with staff and bot access. DevBot successfully read it and exercised both permission-edit and channel-edit APIs under its limited role. Reserved community metadata was verified intact.
 - A read-only probe of the compiled 2.10.2 fix passed setup preflight for ten managed channels, excluding the community-updates channel and Admin category. This was a one-shot validation; the running application remains on the published 2.10.1 image until the fix is merged/published/deployed.
@@ -428,19 +442,23 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 - **Not recorded:** the owner's changelog checks from 2.25.0's session plan (the success and warning receipts, the `/config validate` Changelog lines, the no-change card, and a forced post on DevBot with `changelog_version` lowered below 2.25.0, then a restart that posts nothing).
 - **Rollback** across migration 009 is a restore or a fix release: an older image refuses to start on schema 009.
 
-### 2.26.0 rollout plan (`/suggest`; not yet run)
+### 2.27.0 — documentation only
 
-Planned only: 2.26.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 merged in) is not merged or deployed. 2.24.3 and 2.25.0, which come before it in the agreed release order, are deployed, so DevBot and production run 2.25.0 on schema 009; 2.26.0 adds no migration. Each step below needs the owner's go-ahead.
+2.27.0 adds the documentation site (`site/`, GitHub Pages) and changes no running code, so DevBot was not redeployed for it. It merged as [PR #37](https://github.com/deconfined/tarubot/pull/37) (`a199fab`) on 2026-09-25, before #36, and the Pages workflow (run 36199615008) published https://deconfined.github.io/tarubot/. Its startup plan asked the owner to review the published site; 2.28.0's plan (`test-plans/current.json`) carries that review forward with the site's `/suggest` pages. The DevBot-only backup and restore-rehearsal notes moved here from the former operations guide ([above](#backup-and-restore-rehearsal-on-devbot)).
+
+### 2.28.0 rollout plan (`/suggest`; not yet run)
+
+Planned only: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 and 2.27.0 merged in; numbered 2.26.0 until the documentation site merged first) is not merged or deployed. 2.24.3 and 2.25.0, which come before it in the release order, are deployed, so DevBot and production run 2.25.0 on schema 009, and 2.27.0 changed no running code; 2.28.0 adds no migration. Each step below needs the owner's go-ahead.
 
 - **Registration.** Both DevBot and production need the commands registered after the deploy: 21 roots / 46 paths (2.25.0's 20 roots / 45 paths plus `/suggest`).
-- **Update post.** 2.26.0 has a member note. A server with a changelog channel gets one post, "TaruBot updated to v2.26.0", with that note when it starts on 2.26.0; production had no changelog channel at the 2.25.0 rollout, so it posts nothing unless one is set by then.
+- **Update post.** 2.28.0 has a member note. A server with a changelog channel gets one post, "TaruBot updated to v2.28.0", with that note when it starts on 2.28.0; production had no changelog channel at the 2.25.0 rollout, so it posts nothing unless one is set by then.
 - **DevBot** (restart, no migration): stop the writer, take the usual `pg_dump` and restore check at the current head (`009_changelog_channel.sql`), `up -d --wait --remove-orphans tarubot`, `register.js --guild` (21 roots / 46 paths), `commands.js list` (test guild 21), then readiness, logs and the plan in #chat. DevBot needs no new setting: with `GITHUB_REPORTS_TOKEN` in its `.env`, `/suggest` previews into the private `deconfined/tarubot-reports`.
 - **DevBot checks:**
   - a member's `/suggest` opens a preview issue in `deconfined/tarubot-reports`; check its title, fixed first line, fenced text, footer and the labels `enhancement` and `from-discord` (created there on first use), and that the reply names `deconfined/tarubot-reports#N`;
   - a second try within the hour gets "You can suggest again later";
   - an idea of fewer than 10 visible characters gets "Check your input" with the Example;
   - an account without the Member or Guest role gets "FC membership needed" with the steps to either role (PigeonMuffin, with his roles removed for the test, or a fresh account).
-- **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.26.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [OPERATIONS.md](OPERATIONS.md#public-suggestions)), then `register.js --global` from the operator clone (21 roots / 46 paths) and `commands.js list` (21 global).
+- **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.28.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [HOSTING.md](HOSTING.md#public-suggestions-the-github-app)), then `register.js --global` from the operator clone (21 roots / 46 paths) and `commands.js list` (21 global).
 - **Owner test:** one `/suggest` in Woven Souls. Check that the author is the app's bot account, both labels are applied, `＠` replaces `@`, no IDs appear, and no Claude run starts in Actions. Then close or delete the test issue and record the result here and in VERIFICATION.md.
 
 ### Remaining unverified-visitor form checks (on hold until after launch)

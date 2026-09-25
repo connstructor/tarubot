@@ -1,5 +1,5 @@
 /**
- * The TaruBot GitHub App's sign-in (2.26.0, issue #32): /suggest opens public issues as the app's
+ * The TaruBot GitHub App's sign-in (2.28.0, issue #32): /suggest opens public issues as the app's
  * bot account, never as the owner's. The app (App ID 5076273) has Issues write and Metadata read
  * only, no webhook, and is installed on this repository alone.
  *

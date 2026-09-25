@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", "Approved changelog amendments (2026-09-25)", and "Approved public-suggestion amendments (2026-09-25)".
+AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migrations. This file adds what a Claude session needs to work here. For current state, start with docs/SESSION_HANDOFF.md. The backlog is in docs/OPEN_ITEMS.md, and the owner's policy decisions are in REQUIREMENTS.md, including its "Approved launch amendments (2026-09-23)", "Approved reply-session amendments (2026-09-24)", "Approved hosting amendment (2026-09-24)" (with its 2026-09-25 follow-up), "Approved Lodestone amendments (2026-09-24)", "Approved issue-reporting amendments (2026-09-24)", "Approved officer-notice amendments (2026-09-25)", "Approved changelog amendments (2026-09-25)", "Approved documentation-site amendments (2026-09-25)", and "Approved public-suggestion amendments (2026-09-25)".
 
 ## Project map
 
@@ -19,13 +19,13 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `activation.ts` and `grandfathering.ts`: imported-guild activation and first-activation grandfathering.
   - `heartbeat.ts`: the healthchecks.io dead-man's switch (2.22.0), pinged every five minutes while ready (`HEALTHCHECKS_PING_URL`; empty is off).
   - `issue-reports.ts` and `recent-logs.ts`: issue reports to the private GitHub repository (`/issue`, unexpected errors, failed jobs, repeated trouble). Pure helpers such as redaction and fingerprints live in `src/domain/reports.ts`, and the client in `src/infrastructure/github/issues.ts`.
-  - `suggestions.ts`: `/suggest` (2.26.0), public feature suggestions posted at once to `deconfined/tarubot` as the TaruBot GitHub App (`src/infrastructure/github/app.ts` signs the JWT and mints an installation token per post), with limits counted from the audit table. The pure cleaning, public format and final check live in `src/domain/suggestions.ts`.
+  - `suggestions.ts`: `/suggest` (2.28.0), public feature suggestions posted at once to `deconfined/tarubot` as the TaruBot GitHub App (`src/infrastructure/github/app.ts` signs the JWT and mints an installation token per post), with limits counted from the audit table. The pure cleaning, public format and final check live in `src/domain/suggestions.ts`.
 - `src/domain/`: pure logic.
   - `policy.ts` computes desired access (the multi-character union, ROLE-07).
   - `grandfathering.ts` holds the plan and checksum, and `role-layout.ts` the layout planner.
   - `values.ts` holds `Failure`, `json`, and ID parsing.
   - `changelog.ts` decides update posts (2.25.0): the release range and what one `changelog.post` job does. `release-notes.ts` is the member-note map it reads.
-- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard; since 2.26.0 its production guild list also gates `/suggest` at runtime.
+- `src/config/`: `env.ts` validates runtime configuration. `deployment.ts` is the maintenance tools' deployment-identity guard; since 2.28.0 its production guild list also gates `/suggest` at runtime.
 - `src/discord/`: the gateway adapter, option builders, and replies. `inspection.ts` holds pure helpers over raw REST payloads.
 - `src/jobs/`: `queue.ts` (leases, generation fences, `jobOutcome` log levels) and `dispatch.ts` (job kinds, and the authoritative role-layout gate).
 - `src/infrastructure/postgres/`: `schema.ts` holds the Drizzle mappings. `database.ts` handles migrations, the startup schema check (`SCHEMA_VERSION`), and `orm(client)`.
@@ -36,6 +36,8 @@ AGENTS.md holds the repository rules: branching, SemVer, signing, Drizzle, migra
   - `runner.ts` fetches under the network policy (region, `gate.ts` spacing and 429 cooldown, body bound, private-profile detection), then parses in a fresh worker (`worker.ts`), terminated at the deadline.
   - `parser.ts` is TaruBot's own parser: it applies `lodestone-css-selectors` definitions with linkedom and matched Nodestone's output on live pages. `pages.ts` says which page, files and keys each operation reads.
   - Selectors follow upstream HEAD live, in memory: `selectors.ts` downloads and validates them, and `upstreams.ts` checks HEAD. `bundled.ts` is the set shipped with the release (`bun run selectors:update` refreshes it).
+- `site/`: the public documentation site (Astro Starlight, published to GitHub Pages at https://deconfined.github.io/tarubot/ by `.github/workflows/pages.yml`). It is a standalone **pnpm** package on Node, the one exception to Bun. Pages are hand-written Markdown in `site/src/content/docs/` (`use/`, `admin/`, `deploy/`, `architecture/`, `reference/`, `project/`), with placeholders only. They hold the former docs/ setup, operations and roadmap guides and the README's usage sections. `tests/unit/docs-site.test.ts` checks the command reference, settings, reply codes, invite permissions and repository links against the code, and guards public content.
+- `docs/`: contributor detail (MODULES, PERSISTENCE, LODESTONE, CONFIGURATION, CI_CD, REPLIES, TEST_PLANS) and maintainer records (SESSION_HANDOFF, OPEN_ITEMS, HOSTING, MIGRATION, DEV_GUILD, VERIFICATION, APP_PLATFORM). Not published.
 - `migrations/NNN_*.sql`: the schema authority. Never edit an applied migration. `SCHEMA_VERSION` must name the newest file (currently `009_changelog_channel.sql`; 2.24.x required `008_issue_reports.sql`).
 
 ## Commands
@@ -47,6 +49,7 @@ bun run test:unit && bun run test:contract          # fast, no database
 bun run test:docker                                  # full suite: disposable PostgreSQL + supplied tarubot_backup.sql
 bun run test:fixture && LEGACY_FIXTURE_PATH=.cache/ci/legacy.sql bun run test:docker   # synthetic CI input
 CI_BASE_SHA=$(git rev-parse origin/main) bun run ci:version                           # the gate CI runs last
+(cd site && pnpm install --frozen-lockfile && pnpm run build)                       # the site, with its link validator
 ```
 
 Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests need PostgreSQL, so run them through `test:docker`.
@@ -60,6 +63,8 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
    - the current-version sentences in docs/CONFIGURATION.md and docs/PERSISTENCE.md.
 
    Record the evidence in docs/VERIFICATION.md, and state changes in docs/OPEN_ITEMS.md and docs/DEV_GUILD.md.
+
+   Update the site page the change affects (`site/src/content/docs/`) in the same change set: a new or changed command, option, setting, reply code or behavior.
 4. In `test-plans/current.json`, each actor's list must fit in one 1,024-character embed field (`tests/unit/test-session.test.ts`).
 5. Run the checks above, then commit with the configured SSH signing key (`~/.ssh/id_git`, `gpg.format=ssh`; see docs/SESSION_HANDOFF.md). If signing fails, ask the owner; never create an unsigned commit. Push or open PRs only when the owner asks.
 6. Merging to `main` requires a PR, a strict up-to-date `CI result`, signed commits, and the CodeQL gate (no new high-severity security alerts or error-level results). Only merge and squash are allowed. Actions must be pinned to full commit SHAs.
@@ -69,7 +74,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - Always pass both Compose files: `docker compose -f docker-compose.yml -f docker-compose.devbot.yml …`. That targets the `tarubot_dev` database and test guild `1040379370159743139`. Pin releases with `TARUBOT_IMAGE_TAG=X.Y.Z`.
 - Docker on this Linux machine needs the `docker` group. When the session predates the group change, run Compose through `sg docker -c '…'`; don't change group membership yourself.
 - The tool guard's DevBot profile requires local tools to name `…/tarubot_dev`, on loopback or `postgres`, with an empty CA. The one exception is `migrate.js --restore-rehearsal`, which requires a `*_restore_test` copy instead. If the owner's `.env` still says `…/tarubot`, local tools are refused. Changing it is the owner's action; never edit `.env` yourself.
-- Updating DevBot (see docs/OPERATIONS.md and docs/DEV_GUILD.md):
+- Updating DevBot (see docs/DEV_GUILD.md and the site's `site/src/content/docs/deploy/operations.md`):
   1. Stop `tarubot`.
   2. `pg_dump` to `.cache/backups/tarubot_dev-before-X.Y.Z-<sha>.dump`.
   3. Restore it into `tarubot_dev_restore_test` and run `dist/scripts/check-restore.js`. Use the currently deployed build, or the new build with `--schema-version <current head>.sql`, because both databases are still on the old schema.
@@ -94,7 +99,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - guest applications and onboarding are off, and `/setup` is not run in production. The import keeps the legacy review channel with the guest-application switch off; `activate.js` changes the switch only with `--guest-applications open|closed`, and reopening after launch is `/config guest_applications enabled:true`;
   - officers come from the in-game rank, with the legacy role bound `adopt_holders:false`. At W15 the order is `/config officer_rank`, then `/officer grant` for each approved exception (recorded while no role is bound), then the binding, whose repair pass would otherwise strip exceptions;
   - the order is acquire twice → preview → activate → register → full deploy;
-  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11.
+  - the cutover used release 2.16.0 (2.14.0 added the reply embeds; 2.15.0 the reply-session fixes and features, with migration 006; 2.16.0 the deployment safeguards: the migration guard, the schema re-check after the writer lease, and the stale card for undeclared command shapes). After launch: 2.16.1 moved the docs and tooling to the Linode host, 2.17.0 hardened Lodestone handling (migration 007), 2.18.0 added the issue reporter, 2.19.0 live selectors, 2.20.0 TaruBot's own parser, 2.21.0 moved the parser into the bot (no sidecar), and 2.22.0 adds the healthchecks.io heartbeat; then OPS-10/OPS-11. Since then: 2.24.3 officer Lodestone notices, 2.25.0 update posts (migration 009), 2.27.0 the documentation site (docs only; 2.26.0 was skipped because it merged first), and 2.28.0 `/suggest`; #31 follows as 2.29.0 (migration 010), and the SSH deploy workflow takes the next free minor after it.
 - Nothing here authorizes provider actions. Cluster, app, trusted-source, token, and registration changes each need the owner's explicit go-ahead.
 
 ## Gotchas
@@ -102,11 +107,12 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
 - The shell is zsh:
   - A variable holding a command doesn't word-split; wrap the command in a function instead.
   - `$var:l…` and `$var:s…` are parsed as modifiers, so write `${var}:latest`.
+- pnpm refuses to run in the repository root (`ERR_PNPM_OTHER_PM_EXPECTED`, because the root `package.json` pins Bun). Use pnpm only in `site/`, and add no root scripts for the site: a `bun run` child would load the root `.env` into Astro's environment.
 - Bun auto-loads `.env` for every `bun` command run in this directory.
   - A `bun run` child reloads it even when the parent used `--env-file`.
   - Shell exports override an env file.
   - The tool guard refuses production and rehearsal runs that could merge these values.
-- One bot process writes to a database. It holds the writer lease (PostgreSQL advisory lock `714882494`) from before login until shutdown, and checks the lease session every 30 seconds, exiting with status 1 if it errors, goes silent or no longer holds the lock (also when shutdown then hangs, through the 27-second deadline). Every lease statement, including each wait attempt, has a 10-second client-side deadline; a waiting process whose session goes silent exits with status 1 too. A second instance logs `Waiting for the database writer lease…`, stays unready (readiness 503) and does nothing until the lease frees, then checks the schema again before logging in. Since 2.16.0 `migrate.js` takes the same lease (transaction-scoped) whenever a migration is pending, waits up to `MIGRATE_WRITER_WAIT_SECONDS` (90) for a stopping bot and then refuses, so stop the bot before migrating; with nothing pending it ignores the lease. Before migrate, import, activate, or restore, still check `pg_locks` for that key (docs/OPERATIONS.md).
+- One bot process writes to a database. It holds the writer lease (PostgreSQL advisory lock `714882494`) from before login until shutdown, and checks the lease session every 30 seconds, exiting with status 1 if it errors, goes silent or no longer holds the lock (also when shutdown then hangs, through the 27-second deadline). Every lease statement, including each wait attempt, has a 10-second client-side deadline; a waiting process whose session goes silent exits with status 1 too. A second instance logs `Waiting for the database writer lease…`, stays unready (readiness 503) and does nothing until the lease frees, then checks the schema again before logging in. Since 2.16.0 `migrate.js` takes the same lease (transaction-scoped) whenever a migration is pending, waits up to `MIGRATE_WRITER_WAIT_SECONDS` (90) for a stopping bot and then refuses, so stop the bot before migrating; with nothing pending it ignores the lease. Before migrate, import, activate, or restore, still check `pg_locks` for that key (the writer gate in `site/src/content/docs/deploy/operations.md`).
 - Queue waits (`busy`, `ordered`, `cooldown`, `superseded`, and since 2.17.0 the Lodestone's `rate_limited`) are expected and log at debug. `lease_lost` logs at warn, and only terminal failures log at error. Throttling shows instead as one bot log line per Lodestone 429 ("The Lodestone throttled TaruBot") and in `/health/ready` (`lodestone.cooldownSeconds`).
 - Profile refreshes (2.17.0):
   - The scheduler uses `scheduleJob`, which never touches an active job; `enqueue` pulls one forward. It stamps `characters.profile_retry_at` an hour ahead for each character it queues.
@@ -119,7 +125,7 @@ Run a single file with `bun test tests/unit/<name>.test.ts`. Integration tests n
   - The composition root wraps the reporter: every error-level report also calls `IssueReports.error`, and every job that ends failed at error level calls `jobFailed`. Both never reject; `issue.report` failures never report themselves.
   - Reports are saved in `issue_reports` first and delivered by `issue.report` jobs. Repeats of a fingerprint count occurrences, and context is re-collected at most once a minute. Delivery opens the issue, comments on repeats at most hourly, and opens a new issue after a close. Daily caps (10 issues, 50 comments) apply to automatic reports only.
   - The lifecycle's `tick` option runs the trouble checks every five minutes. `GITHUB_REPORTS_TOKEN` empty means saved, not sent. DevBot's `.env` and the production host's both hold it (rotated on 2026-09-25).
-- Public suggestions (2.26.0):
+- Public suggestions (2.28.0):
   - Text reaches the public repository only through `normalise`, `clean` (the shared `PUBLIC_PATTERNS`, repeated until nothing changes) and `assertPublic`, never through `IssueReports`. A change to the rules changes both the cleaner and the check.
   - `/suggest` needs the bound Member or Guest role in an allowlisted server (production's `deployments.production.guilds`, or DevBot's test guild). Officer access alone doesn't qualify.
   - `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` are production-only: they go in `docker-compose.production.yml` and the host's `.env`, never in `docker-compose.yml` or DevBot's `.env`. DevBot previews into the reports repository with `GITHUB_REPORTS_TOKEN`. Either app setting empty switches `/suggest` off.
