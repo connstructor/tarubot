@@ -119,13 +119,13 @@ The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MI
 
 ## Automated deploys (2.30.0)
 
-Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy; a chat go-ahead doesn't replace it, and Claude sessions never approve, reject or bypass a deployment or hold the deploy key. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
+Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy. What agents may and may not do around it is REQUIREMENTS.md's "Agent rule" (verbatim in AGENTS.md): among other things, they never approve, reject or bypass a deployment and never hold the deploy key. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
 
 ### A deploy
 
 1. Merge the release as today. Trying it on DevBot stays manual (GitHub can't reach the dev VM).
 2. When "Publish containers" finishes, GitHub asks you to review "Deploy production". A merge that changes only documentation, tests, CI or the version asks nothing; a quiet Pushover message says so.
-3. Open the run and read its summary: the version, commit and image digest, the migration files, the host-side changes (files under `ops/`, the production Compose file, `production.env.example`), warnings for the Tuesday maintenance window and the daily backup, and the changelog.
+3. Open the run and read its summary: the version, commit and image digest, the migration files, the host-side changes in this merge (files under `ops/`, the production Compose file, `production.env.example`, which run on the host as a root-equivalent docker-group user), warnings for the Tuesday maintenance window and the daily backup, and the changelog. The migrations and host-side lists cover this merge only. If production is older than the previous release, the releases in between come too: the summary links the history of the host-side files up to the target for that case.
 4. **Review deployments** → tick `production` → **Approve and deploy**, or **Reject**. Approval comments are public, like the summary.
 5. One Pushover message reports the outcome.
 
@@ -135,15 +135,17 @@ Several requests may wait at once. Approve the newest; an older one approved lat
 
 ### What the host does
 
-The deploy key's line in `/home/tarubot/.ssh/authorized_keys` forces every connection to `ops/deploy.sh` (`restrict,command=`): no shell, no file transfer, no forwarding. The script accepts exactly `deploy <version> <commit> <digest> <run>` or `rollback <version> <commit> <digest> <run> <from>` and starts a detached worker for that run, so a dropped connection reconnects to the same run. The worker:
+The deploy key's line in the `tarubot` user's `~/.ssh/authorized_keys` forces every connection to `ops/deploy.sh` (`restrict,command=`): no shell, no file transfer, no forwarding. The script accepts exactly `deploy <version> <commit> <digest> <run>` or `rollback <version> <commit> <digest> <run> <from>` and starts a detached worker for that run, so a dropped connection reconnects to the same run. At most four workers run at once; beyond that a new run is refused `too-many-runs` before it gets a run directory. The worker:
 
-1. **Checks the approval** with GitHub's public API: the run is `deploy.yml` on `main`, in progress, first attempt, titled with this target, and approved by @deconfined for `production`. A copied key alone deploys nothing.
-2. **Checks that no manual work is in progress** (nothing changes yet): the host lock (another deploy); the clone on `main` with no tracked change; `.env` a regular file, mode 600, with one plain `TARUBOT_IMAGE_TAG` line, no `TARUBOT_IMAGE`, and `LOG_LEVEL` unset or at most `info` (the container logs are the writer-lease evidence); Docker answering and 2 GB free; exactly one `tarubot` container, running or restarting, whose release is the pinned one; no `backup` container running (it waits up to 10 minutes); and the target commit on `main`, carrying the version, at or above 2.30.0.
+1. **Checks the approval** with GitHub's public API: the run is `deploy.yml` on `main`, in progress, first attempt, titled with this target, with its Deploy job running, and approved by @deconfined (by login and account id) for `production`. A copied key alone deploys nothing. A run refused here (`not-approved`, `approval-unverified`, `missing-tool`, or `worker-not-started`) isn't final: nothing happened in it, so the next request for that run id, from the workflow or anyone else, starts it over. A request sent before your approval therefore can't block the approved run.
+2. **Checks that no manual work is in progress** (nothing changes yet): the host lock (another deploy; it waits up to 5 minutes); the clone on `main` with no tracked change; `.env` a regular file, mode 600, with one plain `TARUBOT_IMAGE_TAG` line, no `TARUBOT_IMAGE`, and `LOG_LEVEL` unset or at most `info` (the container logs are the writer-lease evidence); Docker answering and 2 GB free; exactly one `tarubot` container, running or restarting, whose release is the pinned one; no `backup` container running (it waits up to 5 minutes); and the target commit on `main`, carrying the version, at or above 2.30.0.
 3. **Chooses the path in Git**, from the live release's commit to the target's: an older target is `superseded`; the live one is `already-live`; a newer one with no migration files added is a **restart**; one with only added migration files takes the **migration** path; an edited or removed applied migration is refused.
-4. **Stages the target without pinning it:** pulls it, requires the pulled image to be the digest the plan showed (with the version and commit labels), moves the clone to the target commit with `git reset --keep`, and checks `docker compose config --quiet` against the host's `.env`.
+4. **Stages the target without pinning it:** pulls it, requires the pulled image to be the digest the plan showed (with the version and commit labels), moves the clone to the target commit with `git reset --keep`, and checks `docker compose config --quiet` against the host's `.env`. Then it asks GitHub again whether the run and its Deploy job are still in progress: a cancel during the waits, the fetch or the pull ends it here, `not-approved`, with the clone put back.
 5. **Restart:** `up -d --wait --remove-orphans` with the target tag (Compose stops the old bot first, freeing the lease). The new container must be the approved image and still healthy 60 seconds later. Then it pins `.env`, runs `register.js --global` and `commands.js list` in the container, and reports `deployed`.
 6. **Migration:** stops the bot, runs `ops/backup.sh` (an encrypted dump to `daily/`), runs `migrate.js` in the new image (one transaction; the lease time is the restore point), pins `.env` at once, then `up -d --wait --remove-orphans`, the same checks and the commands. In the cluster's Tuesday 19:00-23:00 UTC maintenance window it warns (`warning db-maintenance-window`) and goes ahead (the owner's decision).
-7. **Recovers only what is provably safe:** if the new release never took the writer lease (its logs reach "Modules loaded" and show no "Database writer lease acquired", also after it is stopped), or the migration didn't commit, the previous release comes back with the clone and `.env` it had. Otherwise the new release stays, pinned, and the result asks for you.
+7. **Recovers only what is provably safe:** if the new release never got a container, or its one container never took the writer lease (its logs reach "Modules loaded" and show no "Database writer lease acquired", also after it is stopped), or the migration didn't commit, the previous release comes back with the clone and `.env` it had, and with its own Compose file's services (`--remove-orphans`). If Compose shows anything else after a failed start (`ps` or `inspect` failing, two containers, another image), nothing is restored or pinned. Otherwise the new release stays, pinned, and the result asks for you.
+
+Every Docker call is bounded (60 seconds for `docker` itself, and a limit per Compose step), so a hung daemon ends in a result rather than a worker that holds the locks forever.
 
 The deploy never prunes images, so the previous release stays available. Past manual deploys took a few seconds for a restart and about 21-31 seconds for a migration, plus about 6 seconds for the backup: well inside the heartbeat's 15 minutes.
 
@@ -159,39 +161,46 @@ The deploy never prunes images, so the previous release stays available. Past ma
 | `needs-you` | The host is in a state you have to look at (below). | See the reason. |
 
 **`needs-you` reasons:**
-- `new-release-took-lease`, `lease-evidence-incomplete`, `unstable`, `image-mismatch`: the new release stays running (or restarting) and pinned. Read its logs. To go back, run the workflow with `version=<previous> rollback=true from=<new>`; on a restart path no migration lies between them.
+- `new-release-took-lease`, `lease-evidence-incomplete`, `unstable`, `image-mismatch`: the new release stays running (or restarting) and pinned. Read its logs. The way back depends on the path, as the message says:
+  - after a restart (`path=plain`), run the workflow with `version=<previous> rollback=true from=<new>`: no migration lies between them;
+  - after a rollback (`path=rollback`), the release you left is newer: run the workflow with `version=<that release>`, an ordinary deploy (a rollback to it is refused as `rollback-not-older`);
+  - after a migration (`path=migration`, only `unstable` or `image-mismatch`), the migration committed, so the host refuses a rollback: a fix release, or a point-in-time fork by hand ("Backups and recovery"), with the restore point and backup object the message names.
+
+  `lease-evidence-incomplete` with `.env` still pinning the previous release means Compose showed no single container of either release after the failed start (a failing `docker compose ps`, two containers, or one it couldn't inspect), so the host guessed nothing. Check `docker compose -f docker-compose.production.yml ps -a` and the logs, then pin `.env` to what runs; until they match, automated runs refuse `manual-change-in-progress`.
 - `commands-failed`: the release is live. Run the workflow with the same version to retry.
 - `new-release-failed`: the migration committed, and the new release doesn't come up; `.env` pins it and Docker keeps restarting it. The ways forward are a fix release, which the workflow deploys normally, or a point-in-time fork by hand ("Backups and recovery"). The message names the restore point and the backup object.
-- `migration-may-have-committed`: the migration failed and the previous release didn't come back; an old image refuses a newer schema before it takes the lease, so it can't write. Read `migrate.js`'s output in `worker.log`: if nothing was applied, `up -d --wait` with the old pin; if it committed, continue with the manual procedure from step 5 with the new release.
+- `migration-may-have-committed`: the migration failed and the previous release didn't come back; an old image refuses a newer schema before it takes the lease, so it can't write. The clone is back at the old release's commit and `.env` still pins the old release. Read `migrate.js`'s output in `worker.log`:
+  - if nothing was applied: `up -d --wait` with the old pin;
+  - if it committed: move to the new release first, as manual step 1 would (its image is already pulled): `git reset --keep <new release's commit>` and pin `.env` to the new version. Then manual step 5 (`up -d --wait --remove-orphans`), readiness, and the command registration (run the workflow with the new version, which ends `already-live`).
 - `previous-failed`: the previous release didn't come back after a failure that changed nothing on the database. Check `docker compose ps` and the logs, then `up -d --wait`.
 - `live-unhealthy`: `already-live` found the live container unhealthy; nothing restarted.
 - `pin-failed`: `.env` couldn't be pinned; pin it by hand to the release that runs.
 - `worker-died`: see [When the worker dies](#when-the-worker-dies).
-- `unexpected-error`: a command failed where the script didn't expect it; read `worker.log`.
+- `unexpected-error`: a command failed where the script didn't expect it, after something had changed; read `worker.log`.
 
-**Refusal reasons:** `not-approved` (includes a re-run), `approval-unverified` (GitHub's API didn't answer; anonymous calls are limited to 60 an hour per address), `busy` (another deploy, or a backup running over 10 minutes), `clone-not-clean`, `env-file`, `log-level`, `host`, `bot-not-running`, `manual-change-in-progress` (the pin isn't the running release), `live-unknown`, `fetch-failed`, `not-on-main`, `version-mismatch`, `below-floor`, `commit-mismatch`, `not-descendant`, `applied-migration-changed`, `live-changed` (a rollback's `from` isn't live), `rollback-not-older`, `rollback-across-migration`, `pull-failed`, `digest-mismatch` (the tag moved after the plan), `label-mismatch`, `clone-reset`, `compose-config` (the host's `.env` lacks a setting the new Compose file requires), `missing-tool` (`jq` or `curl`), and `worker-not-started`.
+**Refusal reasons:** `not-approved` (includes a re-run, and a run cancelled or a Deploy job ended before the first change), `approval-unverified` (GitHub's API didn't answer; anonymous calls are limited to 60 an hour per address, and a run makes five), `busy` (another deploy over 5 minutes, or a backup running over 5 minutes), `too-many-runs` (four workers already running: look for stray requests in `entry.log`), `clone-not-clean`, `env-file`, `log-level`, `host`, `bot-not-running`, `manual-change-in-progress` (the pin isn't the running release), `live-unknown`, `fetch-failed`, `not-on-main`, `version-mismatch`, `below-floor`, `commit-mismatch`, `not-descendant`, `applied-migration-changed`, `live-changed` (a rollback's `from` isn't live), `rollback-not-older`, `rollback-across-migration`, `pull-failed`, `digest-mismatch` (the tag moved after the plan), `label-mismatch`, `clone-reset`, `compose-config` (the host's `.env` lacks a setting the new Compose file requires), `missing-tool` (`jq` or `curl`), `worker-not-started`, and `unexpected-error` when nothing had changed yet (after a change it is `needs-you`). `not-approved`, `approval-unverified`, `missing-tool` and `worker-not-started` start over on the next request for the same run.
 
-**When no result arrives** the workflow reports: `host-key` (the host key changed: check the host before updating `DEPLOY_KNOWN_HOSTS`), `key-rejected`, `known-hosts` or `no-key` (the production environment's settings), `unreachable` (nothing started), `bad-request` (the host refused the command format), or `outcome-unknown` (the connection was lost after the host started; the host carries on, and its result is in the run directory).
+**When no result arrives** the workflow reports: `host-key` (the host key changed: check the host before updating `DEPLOY_KNOWN_HOSTS`), `key-rejected`, `known-hosts` or `no-key` (the production environment's settings), `unreachable` (every attempt for 80 minutes failed before sshd answered, so nothing started), `bad-request` (the host refused the command format), or `outcome-unknown` (the host may have been reached, or the run outlasted the reconnect window). With `outcome-unknown`, the host's run directory is authoritative: the worker carries on alone, and `runs/<run id>/public.log` ends with its result.
 
 ### Logs on the host
 
 Everything lives under `~/.local/state/tarubot-deploy/`, which the script creates (mode 700):
 - `runs/<run id>/`: `public.log` (the lines GitHub showed), `result`, `step` (the last step reached), `request`, `lock`, and `worker.log`, every tool's output (Git, Compose, `backup.sh`, `migrate.js`, `register.js`, `commands.js`). `worker.log` is private: the command read-back names guilds.
-- `entry.log`: refused requests (sanitized to one line) and entry errors, kept to its last megabyte.
+- `entry.log`: each run's start, runs that started over, refused requests (sanitized to one line) and entry errors, kept to its last megabyte.
 - `lock`: the host lock that runs one deploy at a time.
 
-Finished runs are pruned after 90 days. `cat ~/.local/state/tarubot-deploy/runs/<run id>/public.log` shows a run's result on the host.
+Finished runs are pruned after 90 days, and runs refused before the approval was confirmed after 10 minutes. `cat ~/.local/state/tarubot-deploy/runs/<run id>/public.log` shows a run's result on the host.
 
 ### When the worker dies
 
-A host reboot, the OOM killer or a kill ends the worker without a result. The next connection for that run (the workflow reconnects for up to 40 minutes) reports `needs-you` `worker-died` with the last step. Finish by hand:
+A host reboot, the OOM killer or a kill ends the worker without a result. The next connection for that run (the workflow reconnects for up to 80 minutes) reports `needs-you` `worker-died` with the last step. Finish by hand:
 
 | Last step | State | By hand |
 | --- | --- | --- |
 | `preflight`, `pull` | Nothing changed (the clone may sit at the target commit). | Nothing; deploy again. |
 | `up` (restart) | The new release may run while the pin is still the old one; later runs refuse `manual-change-in-progress`. | Check the logs, then pin `.env` to what runs, or put the old release back with the manual rollback. |
 | `stop`, `backup` | The bot is stopped on the old schema; later runs refuse `bot-not-running`. | `git reset --keep <old release's commit>`, then `up -d --wait`. |
-| `migrate` | The bot is stopped; the schema is unknown. | Read `migrate.js`'s output in `worker.log`, then the manual procedure from step 4. |
+| `migrate` | The bot is stopped; the schema is unknown. The clone is at the new release's commit, but `.env` still pins the old release. | Read `migrate.js`'s output in `worker.log`. First pin `.env` to the new release (manual step 1; the clone is already there and the image pulled). Then continue from manual step 4 if nothing committed, or from step 5 if it did. |
 | `migrated`, `up` | `.env` pins the new release on the new schema. | `up -d --wait --remove-orphans`. |
 | `commands` | The new release is live. | Run the workflow with its version. |
 
@@ -200,12 +209,12 @@ A host reboot, the OOM killer or a kill ends the worker without a result. The ne
 - **Pause:** `gh variable delete DEPLOY_ENABLED`. Nothing new plans, and a request already waiting ends `refused` `paused` if you approve it. `gh variable set DEPLOY_ENABLED --body true` resumes.
 - **Stop:** `gh workflow disable deploy.yml`.
 - **Kill:** delete the deploy key's line from `authorized_keys`, or the `DEPLOY_SSH_KEY` secret.
-- **Cancelling a run in GitHub doesn't stop a host run that already started.** It finishes on its own, and its result stays in its run directory.
+- **Cancelling a run in GitHub stops a host run only before its first change,** when the host checks the run again (`refused` `not-approved`, nothing changed). After that it finishes on its own, and its result stays in its run directory.
 - **Don't approve while you work by hand.** Automated runs refuse while the bot is stopped or the pin differs from the running release, but not every manual step shows.
 
 ### Setting it up (owner)
 
-Each step is the owner's, with his go-ahead; Claude prepares the commands only.
+Each step is the owner's, with his go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 5, 6, 12 and 13).
 
 1. **Before the 2.30.0 pull request merges,** create the environments in Settings → Environments:
    - `production`: required reviewer `deconfined` only; "Prevent self-review" **off**; "Allow administrators to bypass configured protection rules" **off**; deployment branches "Selected branches and tags" with the branch rule `main` only; no wait timer.
@@ -221,27 +230,42 @@ Each step is the owner's, with his go-ahead; Claude prepares the commands only.
      && gh secret set DEPLOY_SSH_KEY --env production < "$d/k" && cat "$d/k.pub"
    ```
 
-5. **Over your own SSH session,** append the restricted line to `/home/tarubot/.ssh/authorized_keys` (your own key stays):
+5. **Over your own SSH session,** append the restricted line to the `tarubot` user's `~/.ssh/authorized_keys` (`~tarubot/.ssh/authorized_keys`; your own key stays), and keep that file at mode 600. The forced command is the absolute path of `~/tarubot/ops/deploy.sh` in that user's home: `getent passwd tarubot | cut -d: -f6` prints the home, which is `/opt/tarubot` on the current host and `/home/tarubot` on a host rebuilt from the runbook below. On the current host:
 
    ```text
-   restrict,command="/home/tarubot/tarubot/ops/deploy.sh" ssh-ed25519 AAAA… tarubot-deploy-github
+   restrict,command="/opt/tarubot/tarubot/ops/deploy.sh" ssh-ed25519 AAAA… tarubot-deploy-github
    ```
 
    `restrict` turns off forwarding (so no database tunnel), PTYs and `~/.ssh/rc`; `command=` also captures `exec`, `sftp` and `scp`. sshd runs the forced command through `tarubot`'s shell, which reads `~/.bashrc` for SSH sessions: keep Ubuntu's default, which returns at once when non-interactive, and put nothing that prints or changes the environment ahead of that return. There is no `from=`: GitHub's runner addresses can't be listed.
 
-6. **Probe the restriction:** `ssh -i "$d/k" -o IdentitiesOnly=yes tarubot@<production host>`, first with no command, then with `id`, then `sftp -i "$d/k" tarubot@<production host>`. Each must end with the usage line or exit status 64, never a shell. Then `shred -u "$d/k"; rm -rf "$d"`: a lost key is replaced, not restored.
-7. **Pin the host and its key** from your SSHFP-verified session: `ssh -o VerifyHostKeyDNS=yes tarubot@<production host> cat /etc/ssh/ssh_host_ed25519_key.pub`, then:
+6. **Probe the restriction** with the new key alone. `IdentityAgent=none` keeps your own key, if your agent holds it, out of the probes; otherwise a probe could log in with it and look like a failed restriction:
 
    ```sh
-   gh variable set DEPLOY_HOST --env production --body "<production host>"
-   gh variable set DEPLOY_KNOWN_HOSTS --env production --body "<production host> ssh-ed25519 AAAA…"
+   o=(-o IdentitiesOnly=yes -o IdentityAgent=none -i "$d/k")
+   h=tarubot@<production host>
+   ssh "${o[@]}" "$h"; echo "exit $?"      # "PTY allocation request failed", the usage line, exit 64
+   ssh "${o[@]}" "$h" id; echo "exit $?"   # the usage line, exit 64
+   sftp "${o[@]}" "$h"                     # "Received message too long 1970495847", no listing
+   ssh "${o[@]}" -W localhost:22 "$h"      # "administratively prohibited"
+   ssh "${o[@]}" -N -L "$d/d.sock:/var/run/docker.sock" "$h" & p=$!; sleep 3
+   curl --unix-socket "$d/d.sock" http://x/_ping; kill "$p"   # curl fails; ssh says "administratively prohibited"
    ```
 
-   `DEPLOY_KNOWN_HOSTS` is exactly one line, starting with exactly the `DEPLOY_HOST` name. The workflow never trusts DNS for the key.
+   None may give a shell, a file listing or an answer from Docker. The sftp client reads the usage line as a packet length, hence its message, and the host's `~/.local/state/tarubot-deploy/entry.log` records each refused request. The forwarding probes matter because the key is root-equivalent through the Docker socket, and only `restrict` blocks forwarding it. Then `shred -u "$d/k"; rm -rf "$d"`: a lost key is replaced, not restored. If step 4's private key is already gone, generate a new one (steps 4 to 6 again).
+7. **Pin the host and its key** from your SSHFP-verified session. The key file ends with a comment (such as `root@…`), which the workflow refuses, so keep the first two fields:
+
+   ```sh
+   h=<production host>
+   kh="$h $(ssh -o VerifyHostKeyDNS=yes "tarubot@$h" "cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub")"
+   gh variable set DEPLOY_HOST --env production --body "$h"
+   gh variable set DEPLOY_KNOWN_HOSTS --env production --body "$kh"
+   ```
+
+   `DEPLOY_KNOWN_HOSTS` is exactly one line: the `DEPLOY_HOST` name, `ssh-ed25519` and the key, with no comment. The workflow never trusts DNS for the key. Both are variables, so every deploy run's public log shows them (GitHub masks only secrets); the name isn't secret ([CI_CD.md](CI_CD.md#deploy-production)). The agent's read-only token can't read back the values set on 2026-09-26: if the first run stops with `known-hosts`, look for a trailing comment.
 8. **Pushover:** create an application "TaruBot deploys", then `gh secret set PUSHOVER_TOKEN --env notify` and `gh secret set PUSHOVER_USER --env notify`.
 9. **Check the secrets:** `gh secret list` shows only `CLAUDE_CODE_OAUTH_TOKEN` at repository level; `gh secret list --env production` shows `DEPLOY_SSH_KEY`; `gh secret list --env notify` shows both Pushover secrets.
-10. **Firewall:** attach the Cloud Firewall with TCP 22 from all sources, plus ICMP.
-11. **Optional:** Claude Code deny rules on the dev VM, and later a narrower GitHub token ([CI_CD.md](CI_CD.md#agent-access-to-deployments)).
+10. **Firewall:** attach the Cloud Firewall with TCP 22 from all sources, plus ICMP (done 2026-09-26).
+11. **Agent guards:** Claude Code deny rules on the dev VM, a read-only GitHub token and pushes over SSH (done 2026-09-26; [CI_CD.md](CI_CD.md#agent-access-to-deployments), which also lists the owner's open decisions).
 12. `gh variable set DEPLOY_ENABLED --body true`.
 13. **First run:** run the workflow with `version=2.30.0` and approve it. Expect `already-live`, no restart, commands registered with a clean read-back, and one Pushover message. Optionally run it once more and reject it, to see the "not approved" message.
 14. **The next real release:** read the plan, approve, and record the run in VERIFICATION.md. Read the first migration release's result closely: downtime, backup object and restore point.
@@ -383,6 +407,5 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
 
 ## DigitalOcean leftovers
 
-- **App Platform app `tarubot`:** idle in the worker-free maintenance phase, to be deleted. The repository's spec and tooling were retired in 2.21.0.
-- **Cluster `tarubot-pg`:** kept a few days as a fallback, then deleted together with its trusted-source rule.
-- **The tool guard** still accepts DigitalOcean's direct port 25060 until that cluster is gone.
+- **App Platform app `tarubot` and cluster `tarubot-pg`:** deleted by the owner (recorded 2026-09-26). The repository's spec and tooling were retired in 2.21.0.
+- **The tool guard** still accepts DigitalOcean's direct port 25060 and the `doadmin` login; a later release can drop both ([OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover)).

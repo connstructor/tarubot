@@ -1141,3 +1141,20 @@ describe("the runtime-change rule", () => {
       expect({ path, runtime: runtime(path) }).toEqual({ path, runtime: expected });
   });
 });
+
+describe("the agent rule", () => {
+  test("AGENTS.md carries REQUIREMENTS.md's canonical wording verbatim, and the others point to it", () => {
+    // The rule is the blockquote in "Approved SSH-deploy amendments (2026-09-26)".
+    const rule = /\n> (A chat go-ahead doesn't replace[^\n]+)\n/u.exec(
+      read("REQUIREMENTS.md"),
+    )?.[1];
+    expect(rule).toContain("never approve, reject or bypass a deployment");
+    expect(rule).toContain("never create, read or hold the deploy key");
+    expect(rule).toContain(
+      "never enable, disable, cancel or re-run the Deploy production workflow",
+    );
+    expect(read("AGENTS.md")).toContain(rule ?? "no rule");
+    for (const file of ["CLAUDE.md", "docs/CI_CD.md", "docs/HOSTING.md"])
+      expect({ file, points: /agent rule/iu.test(read(file)) }).toEqual({ file, points: true });
+  });
+});

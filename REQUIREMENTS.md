@@ -283,12 +283,16 @@ Issue #41 asked for production deploys from GitHub Actions over SSH, the last pa
 - restoring the previous release automatically when the new one provably never took the writer lease, or the migration did not commit;
 - `register.js --global` with a read-back (`commands.js list`) on every run that starts or verifies a release, rather than only when commands changed.
 
-The host acts only after confirming with GitHub's API that this exact run, titled with this target, was approved by the owner for `production`. In such a run:
+The host acts only after confirming with GitHub's API that this exact run, titled with this target, is in progress with its Deploy job running and was approved by the owner (by login and account id) for `production`; it checks the run again just before its first change. In such a run:
 - `migrate.js`'s own writer-lease wait stands in for the operator's lease check (MIG-13);
 - the host's fresh encrypted dump, with point-in-time recovery and the restore point, stands in for the independent operator dump (decision 3; the manual procedure keeps it);
 - the tools run inside the deployed container with the Compose-supplied production environment (OPS-14).
 
-A chat go-ahead doesn't replace the approval. Claude sessions never approve, reject or bypass a deployment, never create or hold the deploy key, never change the environments, their secrets or their variables, and start the workflow only when the owner asks in that session. Provider, token, key, firewall and account changes stay separate owner steps.
+**Agent rule (decisions 1 and 10).** This is the canonical wording; AGENTS.md carries it verbatim, and CLAUDE.md, [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) and [docs/HOSTING.md](docs/HOSTING.md#automated-deploys-2300) point here:
+
+> A chat go-ahead doesn't replace the owner's approval of the `production` environment in GitHub, and a deploy by hand still needs the owner's explicit go-ahead. Agents, Claude sessions included, never approve, reject or bypass a deployment; never create, read or hold the deploy key; never change the `production` or `notify` environments, their secrets or their variables, or `DEPLOY_ENABLED`; never enable, disable, cancel or re-run the Deploy production workflow; and dispatch it only when the owner asks in that session. Provider, token, key, firewall and account changes stay separate owner steps.
+
+The owner's answer to question 1 covers the approval and the rule that Claude sessions never approve. The other clauses (never reject or bypass; the deploy key; the environments, secrets, variables and `DEPLOY_ENABLED`; enabling, disabling, cancelling and re-running; dispatching only when asked) are the agent's proposal in the 2.30.0 pull request, for the owner to confirm before it merges.
 
 **Quiet releases (decision 5).** A merge that changes only documentation, tests, CI or the version asks for no approval; a quiet Pushover message says so. If an earlier release wasn't deployed, the owner runs the workflow with the newest version.
 
@@ -298,7 +302,12 @@ A chat go-ahead doesn't replace the approval. Claude sessions never approve, rej
 
 **Maintenance window (decision 9).** A migration deploy during the cluster's Tuesday 19:00-23:00 UTC maintenance gets a warning, in the plan and from the host when it runs, never a refusal.
 
-**Agent guard (decision 10).** Claude Code deny rules on the dev VM now, and later a narrower fine-grained GitHub token for the agent, whose permissions [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) itemizes: it can push branches, open pull requests and read CI, but not approve deployments, change environments, secrets or variables, or dispatch workflows. The written rule above stays the real control.
+**Agent guard (decision 10).** Done on 2026-09-26, following the agent's [token comment](https://github.com/deconfined/tarubot/issues/41#issuecomment-5843540619) (its option A, which the owner chose):
+- Claude Code deny rules in the dev VM's user settings refuse any shell command that mentions the pending-deployments endpoint or the GraphQL approve and reject mutations.
+- The dev VM's `gh` uses a fine-grained, read-only token on `deconfined/tarubot` (the permissions in that comment). It can't push, merge, comment, approve, dispatch or change settings. The classic all-scopes token is revoked.
+- Pushes go over SSH with the owner's account key on the dev VM, and pull-request and issue writes go through the `tarubot-agent` GitHub App (Issues and Pull requests write only).
+
+That SSH key pushes as the owner, so it can push any branch other than `main`, including one whose workflow asks for write permissions on its own `GITHUB_TOKEN` (the repository default is read, and a same-repository workflow may raise it). Such a workflow can dispatch, cancel and re-run runs, including Deploy production on `main`; push release and `sha-` tags to the bot's GHCR image; read repository secrets such as `CLAUDE_CODE_OAUTH_TOKEN`; and merge a pull request whose required checks pass. It can't reach the `production` or `notify` environments, which accept only `main`. So the owner's approval and the written rule are what stop a deploy. The plan resolves the image digest from the tags, and the host checks only that digest and the image's labels, so an approval of a normal-looking plan could deploy an image pushed from a branch. The 2.30.0 design declined signed build-provenance attestation because only the owner could publish images; that no longer holds while an agent-held key can push branch workflows. **Open decisions for the owner** ([docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments)): sign build provenance in `publish.yml` and have the plan verify it with `gh attestation verify` (signer workflow `publish.yml` on `refs/heads/main`); and whether the agent should push with its own credential that can't change `.github/workflows/`, so that the owner pushes workflow edits.
 
 ## 1. Purpose and interpretation
 
