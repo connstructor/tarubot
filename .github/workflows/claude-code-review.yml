@@ -21,7 +21,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.event.sender.type == 'User'
     runs-on: ubuntu-24.04
-    # A large change set (#31's status posts, 2.29.0, about 4,000 lines) ran past 30 minutes and was
+    # A large change set (2.27.0's status posts, about 4,000 lines) ran past 30 minutes and was
     # cancelled unfinished (run 36194928467), so allow longer.
     timeout-minutes: 90
     concurrency:
