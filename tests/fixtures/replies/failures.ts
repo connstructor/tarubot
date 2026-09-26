@@ -120,14 +120,14 @@ export const FAILURE_CASES = {
     "input",
     "officer",
     { tone: "warning", title: "Check your input" },
-    thrown(() => userId("Pazzberry")),
+    thrown(() => userId("Wrenfield")),
     "/assign",
   ),
   "input · invalid ID · any": card(
     "input",
     "any",
     { tone: "warning", title: "Check your input" },
-    thrown(() => id("@Pazzberry", "member")),
+    thrown(() => id("@Wrenfield", "member")),
     "/characters",
   ),
 

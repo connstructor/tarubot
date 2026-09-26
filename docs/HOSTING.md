@@ -2,7 +2,7 @@
 
 Production TaruBot has run on a **Linode Docker host with Linode managed PostgreSQL** since 2026-09-24.
 
-The cutover first went live on DigitalOcean App Platform, then moved the same evening, with about 90 seconds of downtime, because **the Lodestone refuses DigitalOcean's addresses**: HTTP 403 at the edge, within milliseconds. From App Platform, Nodestone could not refresh profiles, verify claims or read the roster. Linode's addresses get HTTP 200. [MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover) has the record. [APP_PLATFORM.md](APP_PLATFORM.md) records the App Platform setup, retired in 2.21.0.
+The cutover first went live on DigitalOcean App Platform, then moved the same evening, with about 90 seconds of downtime, because **the Lodestone refuses DigitalOcean's addresses**: HTTP 403 at the edge, within milliseconds. From App Platform, Nodestone could not refresh profiles, verify claims or read the roster. Linode's addresses get HTTP 200. [MIGRATION.md](MIGRATION.md#record-of-the-2026-09-24-cutover) has the record. [APP_PLATFORM.md](APP_PLATFORM.md) records the App Platform setup, retired in 2.21.0; the owner has since deleted the app and its cluster (recorded 2026-09-26).
 
 ## Layout
 
@@ -90,7 +90,7 @@ Releases are published by the repository's `Publish containers` workflow. Try ea
 **A release without a migration:**
 
 ```sh
-cd ~/tarubot && git pull --ff-only
+cd ~/tarubot && umask 077 && git pull --ff-only
 sed -i 's/^TARUBOT_IMAGE_TAG=.*/TARUBOT_IMAGE_TAG=X.Y.Z/' .env
 docker compose -f docker-compose.production.yml pull
 docker compose -f docker-compose.production.yml up -d --wait --remove-orphans
@@ -103,7 +103,7 @@ docker compose -f docker-compose.production.yml up -d --wait --remove-orphans
 1. On the host, fetch and pin the release first. Nothing restarts until step 5.
 
    ```sh
-   cd ~/tarubot && git pull --ff-only
+   cd ~/tarubot && umask 077 && git pull --ff-only
    sed -i 's/^TARUBOT_IMAGE_TAG=.*/TARUBOT_IMAGE_TAG=X.Y.Z/' .env
    docker compose -f docker-compose.production.yml pull
    ```
@@ -119,7 +119,7 @@ The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MI
 
 ## Automated deploys (2.30.0)
 
-Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy. What agents may and may not do around it is REQUIREMENTS.md's "Agent rule" (verbatim in AGENTS.md): Claude sessions never approve a deployment (confirmed); the other clauses, among them never rejecting or bypassing one and never holding the deploy key, are proposed in PR #44, pending @deconfined's confirmation, and followed in the meantime. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
+Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy. What agents may and may not do around it is REQUIREMENTS.md's "Agent rule" (verbatim in AGENTS.md), which @deconfined confirmed in full on 2026-09-26 ([#41](https://github.com/deconfined/tarubot/issues/41#issuecomment-5846407419)): among its clauses, Claude sessions never approve, reject or bypass a deployment and never hold the deploy key. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
 
 ### A deploy
 
@@ -148,6 +148,8 @@ The deploy key's line in the `tarubot` user's `~/.ssh/authorized_keys` forces ev
 Every Docker call is bounded (60 seconds for `docker` itself, and a limit per Compose step), so a hung daemon ends in a result rather than a worker that holds the locks forever.
 
 The deploy never prunes images, so the previous release stays available. Past manual deploys took a few seconds for a restart and about 21-31 seconds for a migration, plus about 6 seconds for the backup: well inside the heartbeat's 15 minutes.
+
+**File modes.** `ops/deploy.sh` has run under `umask 077` since 2.30.0 (the first statement of `main`, which the worker also starts through), so everything a deploy writes, including the files git rewrites in the clone, is private to `tarubot` (600, or 700 for directories and scripts); 2.30.1's tests pin this. A `git pull` by hand follows the session's umask instead: the current host's `tarubot` user has umask 0002, so 2.30.0's hand deploy left `ops/deploy.sh` at mode 775 until a deploy rewrites it. Fix files already there once, as `tarubot`: `chmod -R go-w ~/tarubot` (an owner step, or one with the owner's go-ahead), and run `umask 077` before any later pull by hand.
 
 ### Outcomes
 
@@ -206,7 +208,7 @@ A host reboot, the OOM killer or a kill ends the worker without a result. The ne
 
 ### Pause, stop and kill
 
-- **Pause:** `gh variable delete DEPLOY_ENABLED`. Nothing new plans, and a request already waiting ends `refused` `paused` if you approve it. `gh variable set DEPLOY_ENABLED --body true` resumes.
+- **Pause:** delete the repository variable `DEPLOY_ENABLED` (Settings → Secrets and variables → Actions → Variables → Repository variables, or `gh variable delete DEPLOY_ENABLED`). Nothing new plans, and a request already waiting ends `refused` `paused` if you approve it. Setting it back to `true` (`gh variable set DEPLOY_ENABLED --body true`) resumes. This holds only while the `production` environment has no `DEPLOY_ENABLED` of its own: inside the deploy job such a copy overrides the repository variable, so a waiting request would still go ahead ([setup](#setting-it-up-owner) step 12).
 - **Stop:** `gh workflow disable deploy.yml`.
 - **Kill:** delete the deploy key's line from `authorized_keys`, or the `DEPLOY_SSH_KEY` secret.
 - **Cancelling a run in GitHub stops a host run only before its first change,** when the host checks the run again (`refused` `not-approved`, nothing changed). After that it finishes on its own, and its result stays in its run directory.
@@ -214,7 +216,7 @@ A host reboot, the OOM killer or a kill ends the worker without a result. The ne
 
 ### Setting it up (owner)
 
-Each step is the owner's, with the owner's go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 5 (the line names `/opt/tarubot/tarubot/ops/deploy.sh`, and `authorized_keys` is mode 600), 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 6, 12 and 13). Since step 11 the dev VM's `gh` token is read-only, so the `gh secret set` and `gh variable set` commands below need a token with write access; the same settings can be made in the web UI (Settings → Environments → the environment, or Settings → Secrets and variables → Actions for `DEPLOY_ENABLED`).
+Each step is the owner's, with the owner's go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1 to 13 are done. Steps 1, 4, 5 (the line names `/opt/tarubot/tarubot/ops/deploy.sh`, and `authorized_keys` is mode 600) and 7 to 11 came before the 2.30.0 merge; after it, the hand deploy (step 2), the prerequisites (step 3), the key probe (step 6), `DEPLOY_ENABLED` (step 12, on the second try) and the first run (step 13). Since step 11 the dev VM's `gh` token is read-only, so the `gh secret set` and `gh variable set` commands below need a token with write access; the same settings can be made in the web UI (Settings → Environments → the environment, or Settings → Secrets and variables → Actions → Variables → Repository variables for `DEPLOY_ENABLED`).
 
 1. **Before the 2.30.0 pull request merges,** create the environments in Settings → Environments:
    - `production`: required reviewer `deconfined` only; "Prevent self-review" **off**; "Allow administrators to bypass configured protection rules" **off**; deployment branches "Selected branches and tags" with the branch rule `main` only; no wait timer.
@@ -246,12 +248,13 @@ Each step is the owner's, with the owner's go-ahead; Claude prepares the command
    ssh "${o[@]}" "$h"; echo "exit $?"      # "PTY allocation request failed", the usage line, exit 64
    ssh "${o[@]}" "$h" id; echo "exit $?"   # the usage line, exit 64
    sftp "${o[@]}" "$h"                     # "Received message too long 1970495847", no listing
-   ssh "${o[@]}" -W localhost:22 "$h"      # "administratively prohibited"
+   ssh "${o[@]}" -W localhost:22 "$h"      # "administratively prohibited", "stdio forwarding failed"
    ssh "${o[@]}" -N -L "$d/d.sock:/var/run/docker.sock" "$h" & p=$!; sleep 3
-   curl --unix-socket "$d/d.sock" http://x/_ping; kill "$p"   # curl fails; ssh says "administratively prohibited"
+   curl --unix-socket "$d/d.sock" http://x/_ping; kill "$p"
+   # ssh: "channel N: open failed: connect failed: open failed"; curl: a connection reset or an empty reply, never "OK"
    ```
 
-   None may give a shell, a file listing or an answer from Docker. The sftp client reads the usage line as a packet length, hence its message, and the host's `~/.local/state/tarubot-deploy/entry.log` records each refused request. The forwarding probes matter because the key is root-equivalent through the Docker socket, and only `restrict` blocks forwarding it. Then `shred -u "$d/k"; rm -rf "$d"`: a lost key is replaced, not restored. If step 4's private key is already gone, generate a new one (steps 4 to 6 again).
+   None may give a shell, a file listing or an answer from Docker. The sftp client reads the usage line as a packet length, hence its message, and the host's `~/.local/state/tarubot-deploy/entry.log` records each refused request. The forwarding probes matter because the key is root-equivalent through the Docker socket, and only `restrict` blocks forwarding it. The two forwards fail with different messages: OpenSSH reports a refused Unix-socket forward with the generic "connect failed" code, and only TCP forwards, such as `-W`, say "administratively prohibited". Optionally, as a control, repeat the socket forward with your own unrestricted key: `rm -f "$d/d.sock"`, then the `-L` and `curl` lines again, the `ssh` without `"${o[@]}"`. curl then prints Docker's `OK`, which shows that the deploy key's `restrict` is what refused the first one. The probe of 2026-09-26 gave these results, and its control answered `OK`. Then `shred -u "$d/k"; rm -rf "$d"`: a lost key is replaced, not restored. If step 4's private key is already gone, generate a new one (steps 4 to 6 again).
 7. **Pin the host and its key** from your SSHFP-verified session. The key file ends with a comment (such as `root@…`), which the workflow refuses, so keep the first two fields:
 
    ```sh
@@ -266,7 +269,7 @@ Each step is the owner's, with the owner's go-ahead; Claude prepares the command
 9. **Check the secrets:** `gh secret list` shows only `CLAUDE_CODE_OAUTH_TOKEN` at repository level; `gh secret list --env production` shows `DEPLOY_SSH_KEY`; `gh secret list --env notify` shows both Pushover secrets.
 10. **Firewall:** attach the Cloud Firewall with TCP 22 from all sources, plus ICMP (done 2026-09-26).
 11. **Agent guards:** Claude Code deny rules on the dev VM, a read-only GitHub token and pushes over SSH (done 2026-09-26; [CI_CD.md](CI_CD.md#agent-access-to-deployments), which also lists the owner's open decisions).
-12. `gh variable set DEPLOY_ENABLED --body true`.
+12. **Turn deploys on:** give the **repository** variable `DEPLOY_ENABLED` the value `true`, exactly and lowercase: Settings → Secrets and variables → Actions → Variables → **Repository variables** → New repository variable, or `gh variable set DEPLOY_ENABLED --body true` (no `--env`). Not under Settings → Environments → `production`: the plan job has no environment and can't see a copy there, so every run is skipped; and inside the deploy job, which runs in `production`, such a copy overrides the repository variable, so pausing by deleting the repository variable would not stop a request already waiting. The first attempt on 2026-09-26 hit the first half (run 36242804814 skipped); @deconfined moved the variable to the repository, and run 36242986952 followed. If a copy exists in `production`, delete it there.
 13. **First run:** run the workflow with `version=2.30.0` and approve it. Expect `already-live`, no restart, commands registered with a clean read-back, and one Pushover message. Optionally run it once more and reject it, to see the "not approved" message.
 14. **The next real release:** read the plan, approve, and record the run in VERIFICATION.md. Read the first migration release's result closely: downtime, backup object and restore point.
 
@@ -390,7 +393,7 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
    Before closing the root session, confirm that `ssh tarubot@NEW_IP true` works from the operator machine. The deploy key isn't copied: generate a new one and add its restricted line as in [Automated deploys](#setting-it-up-owner) steps 4 to 6 once the bot runs (step 9).
 4. **Point DNS at the new host.** Update the production host name's A and AAAA records to the new addresses. Replace its SSHFP records with the output of `ssh-keygen -r <production host>` (as root on the new host). On the operator machine, run `ssh-keygen -R <production host>`. Use the IP address until DNS has updated. The new host has a new host key, so automated deploys fail closed (`host-key`) until you update the production environment's `DEPLOY_KNOWN_HOSTS` (and `DEPLOY_HOST`, if the name changes), as in [Automated deploys](#setting-it-up-owner) step 7.
 5. **Let the new host reach the database.** In Linode Cloud Manager → Databases → `tarubot-pgsql` → Access Controls, add the new host's IPv4 address. Remove the old host's address in step 11.
-6. **Clone the repository** as `tarubot`: `ssh tarubot@NEW_IP 'git clone https://github.com/deconfined/tarubot.git ~/tarubot'`.
+6. **Clone the repository** as `tarubot`: `ssh tarubot@NEW_IP 'umask 077 && git clone https://github.com/deconfined/tarubot.git ~/tarubot'`.
 7. **Restore the settings** from the operator machine, then pin the current release:
 
    ```sh
@@ -404,8 +407,3 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
 9. **Check it** with the everyday checks above. Readiness must be all true, and the logs must show "Database writer lease acquired" and "TaruBot ready". Resume the healthchecks.io check; it should turn green within five minutes. Commands are registered globally and survive a rebuild, so there is nothing to register.
 10. **Restore the backup schedule:** add the database's new access-list entry first (step 5), then follow "Setting it up" under Daily dumps. The first run should turn the "TaruBot backups" check green.
 11. **Retire the old host.** Delete the old Linode and remove its database access entry. Update the Layout table above, and take a fresh settings copy (`bun run host:env-backup -- --host tarubot@<production host>`).
-
-## DigitalOcean leftovers
-
-- **App Platform app `tarubot` and cluster `tarubot-pg`:** deleted by the owner (recorded 2026-09-26). The repository's spec and tooling were retired in 2.21.0.
-- **The tool guard** still accepts DigitalOcean's direct port 25060 and the `doadmin` login; a later release can drop both ([OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover)).

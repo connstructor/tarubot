@@ -28,6 +28,7 @@ export default defineConfig({
           label: "Project",
           items: [
             { label: "Roadmap", slug: "project/roadmap" },
+            { label: "Thank you", slug: "project/credits" },
             {
               label: "Changelog",
               link: "https://github.com/deconfined/tarubot/blob/main/CHANGELOG.md",

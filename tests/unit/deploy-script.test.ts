@@ -3,7 +3,8 @@
  * REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)").
  *
  * - Static checks pin the shell properties the key's safety rests on: strict mode, a fixed PATH and
- *   locale, no eval or tracing, stdout only through `say`, and a clean environment for the worker.
+ *   locale, main's umask first, no eval or tracing, stdout only through `say`, and a clean
+ *   environment for the worker.
  * - The parser table runs the real script with hostile SSH_ORIGINAL_COMMAND values: each prints
  *   the usage line and exits 64 before any run directory, lock, git or Docker call.
  * - The log-contract tests pin the two bot log messages the recovery rule reads, in the bot's own
@@ -11,7 +12,8 @@
  * - The scenarios run the real worker against a throwaway git repository (a bare "origin" with
  *   one commit per release) and simulated `docker`, `curl`, `df` and `mktemp` commands on PATH
  *   (tests/fixtures/deploy-stubs), asserting the order of the calls that change something, the
- *   `.env` pin, the clone's commit and the result line: restart, migration, failed migration,
+ *   `.env` pin, the clone's commit and the result line: restart, migration, the modes of what git
+ *   writes into the clone under main's umask, failed migration,
  *   failed health before and after the writer lease, what Compose shows after a failed start,
  *   rollback, superseded, the maintenance-window warning, already-live, the approval checked
  *   twice, host-lock contention, and every refusal before anything changes.
@@ -58,6 +60,20 @@ const endToEnd = ["jq", "curl", "setsid", "flock"].every(
   (tool) => Bun.which(tool, { PATH: "/usr/local/bin:/usr/bin:/bin" }) !== null,
 );
 const RUN_ID = "36300000042";
+/** A function body's lines without blank lines and comments, trimmed. */
+const statements = (body: string) =>
+  body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+/**
+ * The umask main sets first: the static test pins its place and value, and a worker scenario runs
+ * under it to show what git then writes into the clone.
+ */
+const MAIN_UMASK =
+  /^main\(\) \{\n(?:\s*#[^\n]*\n)*\s*umask ([0-7]{3,4})$/mu.exec(
+    readFileSync(SCRIPT, "utf8"),
+  )?.[1] ?? "none";
 const USAGE =
   "usage: deploy <version> <commit> <digest> <run> | rollback <version> <commit> <digest> <run> <from>";
 
@@ -172,7 +188,10 @@ describe("the script's shape", () => {
     expect(text).toContain("\nset -Eeuo pipefail\n");
     expect(text).toContain("readonly SAFE_PATH=/usr/local/bin:/usr/bin:/bin\n");
     const main = body("main");
-    expect(main).toContain("umask 077");
+    // The mask is main's first statement, before the state directory, the entry log or a run
+    // directory exists, and before git writes into the clone (the worker starts through main).
+    expect(statements(main)[0]).toBe(`umask ${MAIN_UMASK}`);
+    expect(MAIN_UMASK).toBe("077");
     expect(main).toContain("export LC_ALL=C PATH=$SAFE_PATH");
     expect(main).toContain('exec 2>>"$STATE/entry.log"');
     // The worker points its stderr at its own log.
@@ -520,6 +539,12 @@ interface Scenario {
   readonly holdHostLock?: boolean;
   readonly now?: string;
   readonly dirty?: boolean;
+  /**
+   * The worker runs under this umask, as main sets it for the real worker. The clone's files then
+   * start group-writable (664, scripts 775), as a hand `git pull` under the host user's 0002
+   * leaves them.
+   */
+  readonly umask?: string;
 }
 
 /** The fields of a result line. */
@@ -532,6 +557,9 @@ function scenario(s: Scenario) {
   const live = releases.get(s.live);
   if (!live) throw new Error(`no release ${s.live}`);
   git(repo, "reset", "--quiet", "--hard", live.commit);
+  // Set, not added: files 664 and scripts and directories 775 whatever the test runner's own umask
+  // gave the clone (under 077, `g+w` alone left 620).
+  if (s.umask) run(["chmod", "-R", "u=rwX,g=rwX,o=rX", repo], { PATH: "/usr/bin:/bin" });
   if (s.dirty) writeFileSync(join(repo, "docker-compose.production.yml"), "services: {x: 1}\n");
   const envPath = s.envSymlink ? join(box.dir, "real.env") : join(repo, ".env");
   writeFileSync(
@@ -621,8 +649,12 @@ function scenario(s: Scenario) {
         ),
   );
   const holder = s.holdHostLock ? holdLock(join(box.state, "lock")) : undefined;
+  // run-worker.sh calls the worker directly, not through main, so a scenario's umask is set here.
+  const driver = join(STUBS, "run-worker.sh");
   const outcome = run(
-    ["bash", join(STUBS, "run-worker.sh")],
+    s.umask
+      ? ["bash", "-c", 'umask "$1" && exec bash "$2"', "with-umask", s.umask, driver]
+      : ["bash", driver],
     environment(box, { DEPLOY_ROOT: repo, REQUEST: request, SIM_NOW: s.now ?? "4 12" }),
   );
   holder?.kill();
@@ -654,6 +686,11 @@ function scenario(s: Scenario) {
     head: git(repo, "rev-parse", "HEAD"),
     branch: git(repo, "symbolic-ref", "--short", "HEAD"),
     worker: readFileSync(join(runDir, "worker.log"), "utf8"),
+    /** The octal mode of a file in the clone after the run, as stat prints it. */
+    modeOf: (path: string) =>
+      Bun.spawnSync(["stat", "-c", "%a", join(repo, path)])
+        .stdout.toString()
+        .trim(),
   };
 }
 
@@ -756,6 +793,23 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
       ]);
       expect(s.pin).toBe("2.31.0");
       expect(s.head).toBe(commitOf("2.31.0"));
+    },
+    slow,
+  );
+
+  test(
+    "under main's umask, what git writes into the clone is private, whatever the session's mask",
+    () => {
+      // 2.30.0 went out by hand under the host user's umask 0002, which left ops/deploy.sh
+      // group-writable. The migration release changes package.json and adds a migration file.
+      const s = scenario({ live: "2.30.1", request: "deploy 2.31.0", umask: MAIN_UMASK });
+      expect(s.result.outcome).toBe("deployed");
+      expect(s.head).toBe(commitOf("2.31.0"));
+      for (const path of ["package.json", "migrations/002_more.sql"])
+        expect({ path, mode: s.modeOf(path) }).toEqual({ path, mode: "600" });
+      // A file the deploy doesn't write keeps the mode it had: only git's own writes follow it.
+      expect(s.modeOf("docker-compose.production.yml")).toBe("664");
+      expect(s.envMode).toBe("600");
     },
     slow,
   );
@@ -1692,16 +1746,34 @@ describe("the entry", () => {
       // The worker runs on the fixed PATH, where no stub is, but its curl reads HOME's .curlrc: a
       // closed local proxy makes GitHub's API unreachable without leaving this machine.
       writeFileSync(join(box.home, ".curlrc"), 'proxy = "http://127.0.0.1:9"\n');
+      // Each call starts from a session umask of 0002, the host user's.
       const direct = (env: Record<string, string>, ...args: string[]) =>
-        run(["bash", join(ops, "deploy.sh"), ...args], {
-          HOME: box.home,
-          PATH: "/usr/bin:/bin",
-          ...env,
-        });
+        run(
+          [
+            "bash",
+            "-c",
+            'umask 0002 && exec bash "$@"',
+            "session",
+            join(ops, "deploy.sh"),
+            ...args,
+          ],
+          { HOME: box.home, PATH: "/usr/bin:/bin", ...env },
+        );
       const first = direct({ SSH_ORIGINAL_COMMAND: request });
       expect(first.code).toBe(1);
       expect(first.stdout).toBe(`step preflight\n${refused("approval-unverified")}\n`);
       const dir = join(box.state, "runs", RUN_ID);
+      // main's umask covers the entry and the detached worker: the state stays private.
+      const mode = (path: string) =>
+        Bun.spawnSync(["stat", "-c", "%a", path]).stdout.toString().trim();
+      expect({
+        state: mode(box.state),
+        run: mode(dir),
+        entryLog: mode(join(box.state, "entry.log")),
+        files: ["request", "lock", "public.log", "worker.log", "step", "result"].map((file) =>
+          mode(join(dir, file)),
+        ),
+      }).toEqual({ state: "700", run: "700", entryLog: "600", files: Array(6).fill("600") });
       expect(readFileSync(join(dir, "worker.log"), "utf8")).toContain("step preflight");
       expect(readFileSync(join(box.state, "entry.log"), "utf8")).toContain(
         `run ${RUN_ID}: deploy 2.30.1 started`,

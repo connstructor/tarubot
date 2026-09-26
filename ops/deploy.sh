@@ -907,6 +907,10 @@ restore_previous() {
 }
 
 main() {
+  # First, before anything is created: the state and logs stay private, and so does everything
+  # git writes into the clone during a deploy, this script included when a release changes it.
+  # The umask of sshd's session (the host user's is 0002) would leave those files group-writable.
+  # The worker also starts through main, so it gets the same mask.
   umask 077
   export LC_ALL=C PATH=$SAFE_PATH
   SELF=$(readlink -f "$0")

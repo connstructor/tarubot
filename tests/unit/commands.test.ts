@@ -299,10 +299,10 @@ function inputFailure(run: () => unknown): Failure {
 }
 
 test("option parsers refuse typed names, role mentions and malformed UUIDs as input failures", () => {
-  // DevBot 2.12.3: /assign member:Pazzberry reached BigInt() and replied "Operation failed".
+  // DevBot 2.12.3: /assign member:<typed name> reached BigInt() and replied "Operation failed".
   for (const valid of ["123456789012345678", "<@123456789012345678>", "<@!123456789012345678>"])
     expect(userId(valid)).toBe("123456789012345678");
-  for (const typed of ["Pazzberry", "@Pazzberry", "12 34", "<@&123456789012345678>", ""])
+  for (const typed of ["Wrenfield", "@Wrenfield", "12 34", "<@&123456789012345678>", ""])
     expect(inputFailure(() => userId(typed, "member"))).toMatchObject({
       code: "input",
       message: "Pick a member from the suggestions, or paste a Discord user ID or @mention.",
@@ -386,10 +386,10 @@ test("commands reject malformed IDs with an option detail before any service cal
     [
       guestCommand,
       "guest",
-      sub("grant", [text("member", "Pazzberry"), text("reason", "r")]),
+      sub("grant", [text("member", "Wrenfield"), text("reason", "r")]),
       "member",
     ],
-    [guestCommand, "guest", sub("status", [text("member", "@Pazzberry")]), "member"],
+    [guestCommand, "guest", sub("status", [text("member", "@Wrenfield")]), "member"],
     [
       ledgerCommand,
       "ledger",
@@ -403,7 +403,7 @@ test("commands reject malformed IDs with an option detail before any service cal
     [
       assignCommand,
       "assign",
-      [text("member", "Pazzberry"), text("reason", "Vouched"), text("character", "12345678")],
+      [text("member", "Wrenfield"), text("reason", "Vouched"), text("character", "12345678")],
       "member",
     ],
   ];

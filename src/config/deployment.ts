@@ -235,15 +235,15 @@ export function restoreCertificate(env: Environment): string | undefined {
 }
 
 /**
- * Managed clusters' direct (session) ports. Their connection pools (27521, 25061) run in transaction
- * mode, which breaks session advisory locks and the writer lease. Production has used Linode managed
- * PostgreSQL (27520) since 2026-09-24, when the Lodestone was found to refuse DigitalOcean; 25060
- * keeps the former DigitalOcean cluster usable as a fallback or restore source until it is deleted.
+ * Managed clusters' direct (session) ports. Production has used Linode managed PostgreSQL since
+ * 2026-09-24, and its direct port is 27520. The cluster's connection pool (27521) runs in
+ * transaction mode, which breaks session advisory locks and the writer lease, so it is refused like
+ * any other port. 2.30.1 dropped the deleted DigitalOcean cluster's port.
  */
-export const MANAGED_DIRECT_PORTS: readonly number[] = [27520, 25060];
+export const MANAGED_DIRECT_PORTS: readonly number[] = [27520];
 
-/** The providers' administrator logins (Linode, DigitalOcean); tools connect as the application user. */
-export const MANAGED_ADMIN_USERS: readonly string[] = ["akmadmin", "doadmin"];
+/** The provider's administrator login (Linode); tools connect as the application user. */
+export const MANAGED_ADMIN_USERS: readonly string[] = ["akmadmin"];
 
 /** A --env-file (or --no-env-file) flag means Bun did not auto-load the working directory's files. */
 const envFileFlag = (argument: string): boolean =>
@@ -374,7 +374,7 @@ function checkDatabase(
     if (!present(ca)) throw refuse(`${caSetting} must hold the managed cluster's CA certificate.`);
     if (!MANAGED_DIRECT_PORTS.includes(target.port))
       throw refuse(
-        `${where} must use a managed cluster's direct port (${MANAGED_DIRECT_PORTS.join(" or ")}), not a pool.`,
+        `${where} must use the managed cluster's direct port ${MANAGED_DIRECT_PORTS.join(" or ")} (never its 27521 pool or any other port).`,
       );
     if (!target.user || MANAGED_ADMIN_USERS.includes(target.user))
       throw refuse(

@@ -1,6 +1,6 @@
 ---
 title: Roadmap
-description: TaruBot's planned major versions, from the current bot to a web dashboard, ModMail and richer Lodestone profiles.
+description: TaruBot's planned major versions, from the current bot to web pages for officers and members, ModMail and richer Lodestone profiles.
 ---
 
 TaruBot's major versions are planned outcomes. Dates, detailed feature lists and implementation technology are decided when each milestone is planned.
@@ -8,16 +8,18 @@ TaruBot's major versions are planned outcomes. Dates, detailed feature lists and
 | Version | Milestone | Intended outcome |
 | --- | --- | --- |
 | **v2: Released; being stabilized** | Production-ready bot | Character verification, roster-based access, guest applications, nicknames and the gil ledger, running in production and supportable. |
-| **v3: Planned** | Rank-aware web dashboard | People can view bot status and information appropriate to their rank in the Free Company. This phase focuses on viewing information. |
-| **v4: Planned** | Interactive dashboard | Add dashboard actions and take over functionality such as reaction-role workflows. |
+| **v3: Planned** | Stabilization and web baseline | Finish stabilizing v2, and add the web front end's baseline: a dashboard where officers and administrators sign in with Discord and see the bot's status, configuration and task queues. This phase is view only. |
+| **v4: Planned** | Member web app | Members and guests sign in to their own pages, and can make the first changes on the web. The first planned feature is raid and activity scheduling with party composition and reminders, which came from a member's suggestion ([#45](https://github.com/deconfined/tarubot/issues/45)). |
 | **v5: Planned** | ModMail | Bring ModMail functionality into TaruBot. |
 | **v6: Planned** | Expanded Lodestone profiles | Add richer Lodestone profile features, comparable to Kupo Bot or Ser Aymeric. |
 
-**Sequence:** stable bot → visibility → self-service → private support → expanded character features.
+Officer actions on the web and reaction-role workflows come later; their version isn't decided yet.
+
+**Sequence:** stable bot with an officer view → member self-service → private support → expanded character features.
 
 ## Continuity across versions
 
 - v2 already uses the Lodestone for ownership verification and for FC roster and rank evidence. v6 expands the profile-facing features.
-- The dashboard should reuse the established verified identity, FC membership and rank evidence, and authorization rules, so Discord and the web agree about access. A displayed rank or role is not a substitute for the authorization checks.
-- As dashboard actions arrive, they keep the bot's transactional decisions, audit history, and durable delivery and recovery.
-- Authentication, rank-to-information rules, dashboard actions, ModMail behavior and profile features are defined when their milestones are planned.
+- The web front end, from v3's officer dashboard to v4's member pages, should reuse the established verified identity, FC membership and rank evidence, and authorization rules, so Discord and the web agree about access. A displayed rank or role is not a substitute for the authorization checks.
+- As web actions arrive, starting with v4's member changes, they keep the bot's transactional decisions, audit history, and durable delivery and recovery.
+- What each page shows to whom, web actions, scheduling details, ModMail behavior and profile features are defined when their milestones are planned.

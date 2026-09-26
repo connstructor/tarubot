@@ -631,7 +631,7 @@ describe("details", () => {
   });
 
   test("typed names, @names, spaced IDs and mentions are 'Check your input' (DevBot 2.12.3)", () => {
-    for (const typed of ["Pazzberry", "@Pazzberry", "12 34", "<@&123456789012345678>"]) {
+    for (const typed of ["Wrenfield", "@Wrenfield", "12 34", "<@&123456789012345678>"]) {
       for (const action of [() => userId(typed), () => id(typed, "member")]) {
         let error: unknown;
         try {

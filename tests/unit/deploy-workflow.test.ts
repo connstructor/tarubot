@@ -1211,16 +1211,17 @@ describe("the runtime-change rule", () => {
 });
 
 describe("the agent rule", () => {
-  test("AGENTS.md carries REQUIREMENTS.md's wording verbatim, its confirmed and proposed parts marked", () => {
-    // The rule is the blockquote in "Approved SSH-deploy amendments (2026-09-26)": the part the
-    // owner's answer to question 1 confirmed, then the clauses still awaiting confirmation.
+  test("AGENTS.md carries REQUIREMENTS.md's wording verbatim, every part confirmed", () => {
+    // The rule is the blockquote in "Approved SSH-deploy amendments (2026-09-26)": the owner's
+    // answer to question 1, then the clauses PR #44 proposed, which @deconfined confirmed on
+    // 2026-09-26 in a comment on #41.
     const requirements = read("REQUIREMENTS.md");
     const confirmed =
       /\n> (Confirmed \(question 1\): [^\n]+)\n/u.exec(requirements)?.[1] ?? "no confirmed part";
-    const proposed =
-      /\n> (Proposed in PR #44, pending @deconfined's confirmation; [^\n]+)\n/u.exec(
+    const clauses =
+      /\n> (Confirmed by @deconfined on 2026-09-26 \(\[#41\]\(https:\/\/github\.com\/deconfined\/tarubot\/issues\/41#issuecomment-5846407419\)\): [^\n]+)\n/u.exec(
         requirements,
-      )?.[1] ?? "no proposed part";
+      )?.[1] ?? "no confirmed clauses";
     for (const clause of [
       "the owner's approval of the `production` environment in GitHub is the go-ahead",
       "a chat go-ahead doesn't replace it",
@@ -1232,8 +1233,7 @@ describe("the agent rule", () => {
         clause,
         confirmed: true,
       });
-    // No clause was dropped: the rest are the agent's proposal, followed in the meantime.
-    expect(proposed).toContain("follow them in the meantime (they only restrict agents)");
+    // No clause was dropped when the proposal became the owner's decision.
     for (const clause of [
       "never approve, reject or bypass a deployment",
       "never create, read or hold the deploy key",
@@ -1241,26 +1241,100 @@ describe("the agent rule", () => {
       "never enable, disable, cancel or re-run the Deploy production workflow",
       "dispatch it only when the owner asks in that session",
     ])
-      expect({
-        clause,
-        proposed: proposed.includes(clause),
-        confirmed: confirmed.includes(clause),
-      }).toEqual({
-        clause,
-        proposed: true,
-        confirmed: false,
-      });
+      expect({ clause, confirmed: clauses.includes(clause) }).toEqual({ clause, confirmed: true });
     const agents = read("AGENTS.md");
     expect(agents).toContain(`- ${confirmed}\n`);
-    expect(agents).toContain(`- ${proposed}\n`);
-    // The files that point to it say the same: only part of it is confirmed.
-    for (const file of ["CLAUDE.md", "docs/CI_CD.md", "docs/HOSTING.md"]) {
-      const text = read(file);
-      expect({
-        file,
-        points: /agent rule/iu.test(text),
-        pending: text.includes("PR #44") && text.includes("pending @deconfined's confirmation"),
-      }).toEqual({ file, points: true, pending: true });
+    expect(agents).toContain(`- ${clauses}\n`);
+    // Nothing still calls any part of it pending: not the rule itself, and not the text in the
+    // files that point to it, each of which says it was confirmed.
+    expect({ confirmed: PENDING.test(confirmed), clauses: PENDING.test(clauses) }).toEqual({
+      confirmed: false,
+      clauses: false,
+    });
+    for (const file of [
+      "REQUIREMENTS.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "docs/CI_CD.md",
+      "docs/HOSTING.md",
+    ]) {
+      const units = agentRuleUnits(read(file));
+      expect({ file, points: units.length > 0 }).toEqual({ file, points: true });
+      for (const unit of units) {
+        // The unit's first words name it in a failure.
+        const at = unit.slice(0, 80);
+        expect({
+          file,
+          at,
+          pending: PENDING.test(unit),
+          confirmed: CONFIRMATION.test(unit),
+        }).toEqual({ file, at, pending: false, confirmed: true });
+      }
     }
   });
+
+  test("the unit reader keeps each mention to its own paragraph, list item or table row", () => {
+    const text = [
+      "# The agent rule",
+      "",
+      "A paragraph that names the agent rule,",
+      "over two lines:",
+      "",
+      "- A deny rule for the pending-deployments endpoint.",
+      "- The agent rule, with its parts:",
+      "  - Confirmed on 2026-09-26.",
+      "- Another item.",
+      "",
+      "| Rule | State |",
+      "| agent rule | confirmed |",
+      "| other | pending |",
+    ].join("\n");
+    expect(agentRuleUnits(text)).toEqual([
+      "# The agent rule",
+      "A paragraph that names the agent rule,\nover two lines:",
+      "- The agent rule, with its parts:\n  - Confirmed on 2026-09-26.",
+      "| agent rule | confirmed |",
+    ]);
+  });
 });
+
+/**
+ * Words that call the agent rule unconfirmed. `\b` keeps `pending_deployments`, the REST endpoint
+ * CLAUDE.md names beside the rule, from counting.
+ */
+const PENDING = /\bpending\b|\bin the meantime\b/iu;
+/**
+ * The owner's confirmation: the link to the #41 comment, or "confirmed" and 2026-09-26 in one
+ * sentence. The date alone is not enough, because it is also in the amendment's heading, "Approved
+ * SSH-deploy amendments (2026-09-26)", which every pointer names.
+ */
+const CONFIRMATION = /issuecomment-5846407419|confirmed[^.]*2026-09-26/iu;
+
+/**
+ * The Markdown units of a file that mention the agent rule (any case). A unit is a paragraph, a
+ * top-level list item with its indented continuation lines and nested items, a table row, or a
+ * heading. A blank line, a heading, a table row or a new top-level list item ends the unit before
+ * it, so text beside the rule, such as CI_CD.md's deny rules for the pending-deployments endpoint,
+ * is never tested with it.
+ */
+function agentRuleUnits(text: string): string[] {
+  const units: string[][] = [];
+  let current: string[] | null = null;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") {
+      current = null;
+      continue;
+    }
+    const indented = /^\s/u.test(line);
+    const single = !indented && (line.startsWith("|") || line.startsWith("#"));
+    const item = !indented && /^(?:[-*+]|\d+\.)\s/u.test(line);
+    if (current === null || single || item) {
+      current = [];
+      units.push(current);
+    }
+    current.push(line);
+    // A table row or a heading is a unit of its own line.
+    if (single) current = null;
+  }
+  return units.map((unit) => unit.join("\n")).filter((unit) => /agent rule/iu.test(unit));
+}

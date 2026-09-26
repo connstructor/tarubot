@@ -35,9 +35,11 @@ const DEV_GUILD = deployments.devbot.guilds[0];
 const PASSWORD = "sentinel-password-5b0f";
 const TOKEN = "sentinel-token-9c1e";
 const CA = "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----";
-const MANAGED = "db-postgresql-nyc3-00000-do-user-0-0.k.db.ondigitalocean.com";
-const FORK = "db-postgresql-nyc3-11111-do-user-0-0.k.db.ondigitalocean.com";
-const managedUrl = (name: string, host = MANAGED, user = "tarubot", port = 25060) =>
+/** Placeholder managed-cluster hosts (reserved .example names): the primary and a PITR fork. */
+const MANAGED = "primary.managed-db.example";
+const FORK = "fork.managed-db.example";
+/** A managed-cluster URL, by default as production uses it: the direct port 27520 as tarubot. */
+const managedUrl = (name: string, host = MANAGED, user = "tarubot", port = 27520) =>
   `postgresql://${user}:${PASSWORD}@${host}:${port}/${name}?sslmode=require`;
 const localUrl = (name: string, host = "localhost") =>
   `postgresql://tarubot:${PASSWORD}@${host}:5432/${name}`;
@@ -285,21 +287,27 @@ describe("databases", () => {
         direct,
       ).name,
     ).toBe("production");
+    // Every other port gets the same refusal, which names the one direct port and never assumes
+    // the URL named a pool.
+    const directPort =
+      "must use the managed cluster's direct port 27520 (never its 27521 pool or any other port).";
     for (const [url, fragment] of [
-      [managedUrl("tarubot", MANAGED, "tarubot", 25061), "direct port (27520 or 25060)"],
-      [`postgresql://tarubot:${PASSWORD}@${MANAGED}/tarubot`, "direct port (27520 or 25060)"],
-      [managedUrl("tarubot", MANAGED, "doadmin"), "not an administrator"],
-      // Linode's administrator login and its connection-pool port are refused the same way.
+      // The 27521 connection pool can't hold the writer lease; a URL without a port means 5432.
+      [managedUrl("tarubot", MANAGED, "tarubot", 27521), directPort],
+      [`postgresql://tarubot:${PASSWORD}@${MANAGED}/tarubot`, directPort],
       [managedUrl("tarubot", MANAGED, "akmadmin"), "not an administrator"],
-      [managedUrl("tarubot", MANAGED, "tarubot", 27521), "direct port (27520 or 25060)"],
       [managedUrl("tarubot", MANAGED, "someone"), "tarubot user"],
-      [`postgresql://${MANAGED}:25060/tarubot`, "not an administrator"],
+      [`postgresql://${MANAGED}:27520/tarubot`, "not an administrator"],
+      // 2.30.1 dropped the deleted DigitalOcean cluster: its direct port 25060 and pool 25061 are
+      // now refused like any other port.
+      [managedUrl("tarubot", MANAGED, "tarubot", 25060), directPort],
+      [managedUrl("tarubot", MANAGED, "tarubot", 25061), directPort],
     ] as const)
       refused(
         () => assertToolScope(productionEnv({ DATABASE_URL: url }), scope.migrate, direct),
         fragment,
       );
-    // A rehearsal on the managed cluster: any application user, never doadmin, direct port.
+    // A rehearsal on the managed cluster: any application user, never akmadmin, direct port.
     expect(
       assertToolScope(
         rehearsalEnv({
@@ -314,7 +322,7 @@ describe("databases", () => {
       () =>
         assertToolScope(
           rehearsalEnv({
-            DATABASE_URL: managedUrl("tarubot_rehearsal", MANAGED, "doadmin"),
+            DATABASE_URL: managedUrl("tarubot_rehearsal", MANAGED, "akmadmin"),
             DATABASE_CA_CERT: CA,
           }),
           scope.migrate,
@@ -450,7 +458,7 @@ describe("databases", () => {
       [managedUrl("tarubot"), "different database"],
       [managedUrl("tarubot_restore_test"), "tarubot_restore on the primary's host"],
       [managedUrl("tarubot_restore", FORK), "tarubot on a PITR fork"],
-      [managedUrl("tarubot", FORK, "doadmin"), "not an administrator"],
+      [managedUrl("tarubot", FORK, "akmadmin"), "not an administrator"],
       [localUrl("tarubot_restore"), "is local"],
     ] as const)
       refused(() => assertToolScope(production(restore), scope.restore, direct), fragment);
@@ -503,7 +511,7 @@ describe("databases", () => {
   test("database identities never carry the password and refuse redirecting parameters", () => {
     expect(databaseIdentity(managedUrl("tarubot"))).toEqual({
       host: MANAGED,
-      port: 25060,
+      port: 27520,
       name: "tarubot",
       user: "tarubot",
     });
@@ -514,11 +522,11 @@ describe("databases", () => {
     expect(databaseIdentity("postgres://u@[::1]:5433/db").host).toBe("::1");
     for (const url of [
       `postgresql://tarubot:${PASSWORD}@[broken/tarubot`,
-      `mysql://tarubot:${PASSWORD}@${MANAGED}:25060/tarubot`,
-      `postgresql://tarubot:${PASSWORD}@${MANAGED}:25060/`,
-      `postgresql://tarubot:${PASSWORD}@${MANAGED}:25060/tarubot?host=localhost`,
-      `postgresql://tarubot:${PASSWORD}@${MANAGED}:25060/tarubot?port=5432`,
-      `postgresql://tarubot:${PASSWORD}@${MANAGED}:25060/tarubot?user=doadmin`,
+      `mysql://tarubot:${PASSWORD}@${MANAGED}:27520/tarubot`,
+      `postgresql://tarubot:${PASSWORD}@${MANAGED}:27520/`,
+      `postgresql://tarubot:${PASSWORD}@${MANAGED}:27520/tarubot?host=localhost`,
+      `postgresql://tarubot:${PASSWORD}@${MANAGED}:27520/tarubot?port=5432`,
+      `postgresql://tarubot:${PASSWORD}@${MANAGED}:27520/tarubot?user=akmadmin`,
     ])
       refused(() => databaseIdentity(url), "DATABASE_URL");
     for (const host of ["localhost", "127.0.0.1", "127.8.9.10", "::1", "postgres", "db.localhost"])
