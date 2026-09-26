@@ -13,17 +13,22 @@ jobs:
   review:
     name: Claude review
     # Drafts wait for ready_for_review. Fork pull requests receive no secrets or OIDC token. Runs
-    # started by bots are skipped, except those of TaruBot's own GitHub App (tarubot-agent[bot]),
-    # which opens and updates the agent's pull requests: its events start a review exactly as a
-    # person's do, so its pull requests need no close and reopen. The action admits that one bot
-    # through allowed_bots below, which must name the same account; it rejects every other bot actor.
-    # Dependabot runs receive no Actions secrets anyway. A maintainer's push to a Dependabot branch is
-    # a User event, so the job runs, but the plugin's first step usually declines automated pull
-    # requests such as Dependabot's.
+    # started by bots are skipped, with one exception: the agent's GitHub App, tarubot-agent[bot]
+    # (not the TaruBot app that opens /suggest issues), which opens the agent's pull requests. Its
+    # opened, reopened and ready_for_review events start a review, so its pull requests need no
+    # close and reopen. Its pushes (synchronize) stay skipped: pushes to the agent's branches
+    # normally come from the maintainer's account, a User event that is reviewed as usual, and if
+    # the agent ever commits through the app, each push would otherwise start a long review and
+    # cancel the one running. The action admits that one bot through allowed_bots below, which must
+    # name the same account; it rejects every other bot actor. Dependabot runs receive no Actions
+    # secrets anyway. A maintainer's push to a Dependabot branch is a User event, so the job runs,
+    # but the plugin's first step usually declines automated pull requests such as Dependabot's.
     if: |
       github.event.pull_request.draft == false
       && github.event.pull_request.head.repo.full_name == github.repository
-      && (github.event.sender.type == 'User' || github.event.sender.login == 'tarubot-agent[bot]')
+      && (github.event.sender.type == 'User'
+          || (github.event.sender.login == 'tarubot-agent[bot]'
+              && contains(fromJSON('["opened", "reopened", "ready_for_review"]'), github.event.action)))
     runs-on: ubuntu-24.04
     # A large change set (2.27.0's status posts, about 4,000 lines) ran past 30 minutes and was
     # cancelled unfinished (run 36194928467), so allow longer.
@@ -60,7 +65,7 @@ jobs:
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # TaruBot's own GitHub App, the one bot the job condition admits; keep the two in step, or
+          # The agent's GitHub App, the one bot the job condition admits; keep the two in step, or
           # its runs fail with "Workflow initiated by non-human actor". The action checks no
           # repository permission for a [bot] actor, so this list is its only bot gate: name the
           # account alone, never '*'.

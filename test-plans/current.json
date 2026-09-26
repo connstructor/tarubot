@@ -1,6 +1,6 @@
 {
   "title": "Session: 2.29.1 Claude review for the agent's pull requests",
-  "objective": "2.29.1 lets pull requests that TaruBot's own GitHub App (tarubot-agent) opens or updates start the advisory Claude review, as a person's do; every other bot stays skipped. It also records the 2.28.0 and 2.29.0 rollouts. The bot is unchanged: no migration, no command change, and nothing to deploy.",
+  "objective": "2.29.1 lets pull requests that the agent's GitHub App, tarubot-agent[bot], opens, reopens or marks ready start the advisory Claude review; its pushes and every other bot stay skipped. It also records the 2.28.0 and 2.29.0 rollouts. The bot is unchanged: no migration, no command change, and nothing to deploy.",
   "user": [
     "On the next pull request the agent opens after the merge, don't close and reopen it: the Claude review should start and post by itself.",
     "If that run fails instead (for example 'App token exchange failed'), say so; a close and reopen still starts a review.",
