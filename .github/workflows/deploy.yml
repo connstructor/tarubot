@@ -219,17 +219,30 @@ jobs:
             fi
           fi
           summary "If production is older than the previous release, earlier migrations are included too; the host decides from what is live." ""
-          if (( ${#host_files[@]} )); then
-            summary "**Host-side changes** (they run on the host as a docker-group user):"
+          # Host-side files run on the host as a docker-group user, which is root-equivalent there.
+          # An automatic run can only list this merge's changes, and a dispatch none: the host
+          # deploys from whatever is live, so both point at the files' history up to C.
+          history="[\`ops/\`](https://github.com/$R/commits/$C/ops), [\`docker-compose.production.yml\`](https://github.com/$R/commits/$C/docker-compose.production.yml) and [\`production.env.example\`](https://github.com/$R/commits/$C/production.env.example)"
+          label=
+          if [[ $ACTION == rollback ]]; then
+            label="**Host-side differences between $V and $FROM**"
+          elif [[ $EVENT == workflow_run ]]; then
+            label="**Host-side changes in this merge**"
+          fi
+          if [[ -n $label ]] && (( ${#host_files[@]} )); then
+            summary "$label (they run on the host as a docker-group user, which is root-equivalent there):"
             for f in "${host_files[@]}"; do summary "- \`$f\`"; done
             if printf '%s\n' "${host_files[@]}" | grep -qE '^(docker-compose\.production\.yml|production\.env\.example)$'; then
               summary "" "The Compose file or the settings template changed: **check the host's .env first.**"
             fi
             summary ""
-          elif [[ $EVENT == workflow_dispatch && $ACTION == deploy ]]; then
-            summary "**Host-side changes:** compare \`ops/\`, \`docker-compose.production.yml\` and \`production.env.example\` with the live release before approving." ""
-          else
-            summary "**Host-side changes:** none" ""
+          elif [[ -n $label ]]; then
+            summary "$label: no file under \`ops/\`, \`docker-compose.production.yml\` or \`production.env.example\` changed." ""
+          fi
+          if [[ $EVENT == workflow_run ]]; then
+            summary "If production is older than the previous release, the host-side changes of the releases in between run too: check the history of $history up to this commit." ""
+          elif [[ $ACTION == deploy ]]; then
+            summary "**Host-side changes:** the host deploys from the live release to this commit. Before approving, check the history of $history up to this commit since the live release." ""
           fi
           day=$(date -u +%u) hm=$(date -u +%H%M)
           if [[ $day == 2 ]] && (( 10#$hm >= 1800 && 10#$hm < 2300 )); then
@@ -237,14 +250,14 @@ jobs:
             summary "> [!WARNING]" "> The database cluster's weekly maintenance runs Tuesdays 19:00-23:00 UTC. A migration deploy in that window may meet a cluster restart; the host warns again if it runs one then." ""
           fi
           if (( 10#$hm >= 415 && 10#$hm < 445 )); then
-            echo "::warning::The daily backup runs around now; the host waits up to 10 minutes for it."
-            summary "> [!WARNING]" "> The daily backup runs around now. The host waits up to 10 minutes for it, and a migration that meets it rolls back safely." ""
+            echo "::warning::The daily backup runs around now; the host waits up to 5 minutes for it."
+            summary "> [!WARNING]" "> The daily backup runs around now. The host waits up to 5 minutes for it, and a migration that meets it rolls back safely." ""
           fi
           summary "**Tried on DevBot?** Check before approving." ""
           if [[ $ACTION == rollback ]]; then
             summary "**Approving** rolls production back from $FROM to $V (\`${C:0:12}\`, \`$D\`), on the same schema: the host restarts onto $V, puts $FROM back automatically if $V never took the writer lease, then registers $V's commands globally and reads them back. Work only $FROM understands then fails as \`invalid_job\`: check \`/sync status\` and requeue it with \`retry.js\`." ""
           else
-            summary "**Approving** runs Deploy $V (\`${C:0:12}\`, \`$D\`) on production. The host restarts onto $V; or, if $V carries migration files the live release lacks, it stops the bot, takes an encrypted \`ops/backup.sh\` dump, runs \`migrate.js\` in $V's image and starts $V. It puts the previous release back automatically if $V never took the writer lease or the migration did not commit. It registers $V's commands globally and reads them back. Host-side files listed above run on the host as a docker-group user. Approval comments are public." ""
+            summary "**Approving** runs Deploy $V (\`${C:0:12}\`, \`$D\`) on production. The host restarts onto $V; or, if $V carries migration files the live release lacks, it stops the bot, takes an encrypted \`ops/backup.sh\` dump, runs \`migrate.js\` in $V's image and starts $V. It puts the previous release back automatically if $V never took the writer lease or the migration did not commit. It registers $V's commands globally and reads them back. It puts this commit's host-side files in place, where they run as a docker-group user (root-equivalent): the Compose file at once, \`ops/backup.sh\` for a migration's dump, and \`ops/deploy.sh\` from the next deploy on, including changes from releases production hasn't had yet. Approval comments are public." ""
           fi
           notes=$(raw CHANGELOG.md "$C" | awk -v v="$V" 'index($0, "## " v " ") == 1 { on = 1 } on && /^## / && index($0, "## " v " ") != 1 { exit } on { print }' || true)
           if [[ -n $notes ]]; then
@@ -260,7 +273,9 @@ jobs:
     needs: plan
     if: github.run_attempt == '1' && needs.plan.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Longer than the reconnect deadline below, which covers the host's longest run (its waits and
+    # timeouts add up to about 68 minutes).
+    timeout-minutes: 90
     # @deconfined approves here; DEPLOY_SSH_KEY, DEPLOY_HOST and DEPLOY_KNOWN_HOSTS exist only then.
     environment: production
     permissions: {}
@@ -336,10 +351,13 @@ jobs:
           [[ $CMD =~ $DEPLOY_FORM || $CMD =~ $ROLLBACK_FORM ]] || stop bad-request "The plan's fields don't fit the command contract."
 
           # One connection; only connection failures are retried, with the same command, which
-          # attaches to the same run on the host. ssh's own messages stay in a private file.
+          # attaches to the same run on the host, for up to 80 minutes. ssh's own messages stay in
+          # a private file. `reached` stays false only while every attempt failed before sshd
+          # answered, which is the only case where nothing can have started on the host.
+          NO_CONNECTION='connect to host .* port [0-9]+: |Could not resolve hostname|Connection timed out during banner exchange|kex_exchange_identification'
           : > "$dir/lines"
-          reason='' rc=0
-          deadline=$((SECONDS + 2400))
+          reason='' rc=0 reached=false
+          deadline=$((SECONDS + 4800))
           while :; do
             set +e
             ssh -F /dev/null -T -4 -i "$dir/key" -o IdentitiesOnly=yes -o IdentityAgent=none \
@@ -358,6 +376,7 @@ jobs:
               done
             rc=${PIPESTATUS[0]}
             set -e
+            if [[ -s $dir/lines ]] || ! grep -qE "$NO_CONNECTION" "$dir/err"; then reached=true; fi
             if grep -qE "$RESULT_FORM" "$dir/lines"; then break; fi
             if grep -qE 'Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED' "$dir/err"; then reason=host-key; break; fi
             if grep -qF 'Permission denied (publickey' "$dir/err"; then reason=key-rejected; break; fi
@@ -365,16 +384,14 @@ jobs:
             sleep 20
           done
 
-          connected=false
-          if [[ -s $dir/lines ]]; then connected=true; fi
-          out connected "$connected"
+          out connected "$reached"
           warnings=$(grep -E "$WARNING_LINE" "$dir/lines" | sed 's/^warning //' | sort -u | tr '\n' ' ' || true)
           out warnings "${warnings% }"
           result=$(grep -E "$RESULT_FORM" "$dir/lines" | tail -n 1 || true)
           if [[ -z $result ]]; then
             if [[ -z $reason ]]; then
               if (( rc == 64 )); then reason=bad-request
-              elif [[ $connected == true ]]; then reason=outcome-unknown
+              elif [[ $reached == true ]]; then reason=outcome-unknown
               else reason=unreachable
               fi
             fi
@@ -471,8 +488,16 @@ jobs:
                   msg="NEEDS YOU: $V $reason"
                   if [[ $RESTORE_POINT != - && -n $RESTORE_POINT ]]; then msg+="; restore point $point"; fi
                   if [[ $BACKUP != - && -n $BACKUP ]]; then msg+="; backup $backup"; fi
+                  # The way back depends on the path: a restart can roll back, a rollback goes
+                  # forward again with an ordinary deploy, and a committed migration can't be undone.
                   case $reason in
-                    new-release-took-lease | lease-evidence-incomplete | unstable) msg+=". To go back, run Deploy production with version=$prev rollback=true from=$V." ;;
+                    new-release-took-lease | lease-evidence-incomplete | unstable | image-mismatch)
+                      case $DEPLOY_PATH in
+                        plain) msg+=". To go back, run Deploy production with version=$prev rollback=true from=$V." ;;
+                        rollback) msg+=". To return to $prev, run Deploy production with version=$prev." ;;
+                        migration) msg+=". The migration committed: the way back is a fix release or a point-in-time fork (HOSTING.md)." ;;
+                      esac
+                      ;;
                   esac
                 fi
                 ;;

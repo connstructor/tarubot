@@ -8,9 +8,10 @@
  * - The command contract and the result line are the same patterns as ops/deploy.sh's.
  * - The repository names no host: the workflow and ops/deploy.sh carry no host name beyond
  *   GitHub's, the registry's and Pushover's.
- * - Behavior: the plan, SSH and notify scripts run here with simulated gh, docker, ssh and curl
- *   (tests/fixtures/deploy-workflow) to check the runtime-change rule, the gates, the SSH retry
- *   rules and the messages.
+ * - Behavior: the plan, SSH and notify scripts run here with simulated gh, docker, ssh, curl and
+ *   date (tests/fixtures/deploy-workflow) to check the runtime-change rule, the gates, dispatches
+ *   and rollbacks, the host-side summary, the clock warnings, the SSH retry rules and the
+ *   messages.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import {
@@ -208,6 +209,14 @@ describe("the workflow's shape", () => {
     expect(ssh).toContain("KNOWN_HOST='^([^ ]+) ssh-ed25519 [A-Za-z0-9+/]+={0,2}$'");
     expect(ssh).toContain('"tarubot@$DEPLOY_HOST" "$CMD"');
   });
+
+  test("gives the host's longest run time to report before the job times out", () => {
+    const ssh = runOf("deploy", "ssh");
+    const seconds = Number(/deadline=\$\(\(SECONDS \+ (\d+)\)\)/u.exec(ssh)?.[1]);
+    // ops/deploy.sh's waits and timeouts add up to about 68 minutes in the worst case.
+    expect(seconds).toBe(4800);
+    expect(deploy.jobs.deploy["timeout-minutes"] * 60).toBeGreaterThan(seconds + 300);
+  });
 });
 
 describe("the contract with ops/deploy.sh", () => {
@@ -259,12 +268,14 @@ describe("the contract with ops/deploy.sh", () => {
 describe("no host in the repository", () => {
   /**
    * Every host name ending in a common top-level domain, whatever surrounds it (not .sh, which
-   * would take the scripts' own file names).
+   * would take the scripts' own file names). As in docs-site.test.ts, the pattern ends in an
+   * alternative with `$`, which keeps CodeQL's missing-anchor query from reading it as a URL
+   * check; the lookahead lets a period or hyphen follow the name.
    */
   const hostNames = (source: string) =>
     [
       ...source.matchAll(
-        /((?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|cloud|co|me|xyz|site|tech))(?:$|[^a-z0-9-])/gimu,
+        /((?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|cloud|co|me|xyz|site|tech|info|us|uk|de|eu|ca|host))(?:$|(?=[^a-z0-9]))/gimu,
       ),
     ].map((m) => (m[1] ?? "").toLowerCase());
   const allowed = new Set(["github.com", "api.github.com", "ghcr.io", "api.pushover.net"]);
@@ -290,6 +301,8 @@ describe("no host in the repository", () => {
     const samples = [
       "ssh to deploy.example.com.",
       "deploy.example.net ssh-ed25519 AAAA",
+      "deploy.example.net-old",
+      "deploy.example.net. IN SSHFP 4 2 0",
       "`tarubot@bot.example.org`",
       "https://host.example.io/health",
       "HOST.EXAMPLE.COM",
@@ -365,13 +378,17 @@ function box() {
   return { dir, bin };
 }
 
-/** Run one workflow script with the given environment; returns status, stdout and outputs. */
+/**
+ * Run one workflow script with the given environment; returns status, stdout and outputs. A
+ * prelude runs first in the same shell (the SSH tests use it to move the clock on).
+ */
 function runScript(
   source: string,
   where: { dir: string; bin: string },
   env: Record<string, string>,
+  prelude = "",
 ) {
-  const result = Bun.spawnSync(["bash", "-c", source], {
+  const result = Bun.spawnSync(["bash", "-c", `${prelude}${source}`], {
     env: {
       PATH: `${where.bin}:/usr/bin:/bin`,
       HOME: where.dir,
@@ -414,11 +431,17 @@ describe("the SSH step", () => {
     FROM: "-",
   };
 
+  /**
+   * Each retry pause (the sleep stub records it) moves bash's clock on by 1,000 seconds, so the
+   * 80-minute reconnect deadline passes after a few attempts.
+   */
+  const clock = 'sleep() { command sleep "$@"; SECONDS=$((SECONDS + 1000)); }\n';
+
   /** Run the step with ssh behaviors, one per connection attempt. */
   function ssh(behaviors: string[], env: Record<string, string> = {}) {
     const where = box();
     writeFileSync(join(where.dir, "plan"), `${behaviors.join("\n")}\n`);
-    const result = runScript(runOf("deploy", "ssh"), where, { ...base, ...env });
+    const result = runScript(runOf("deploy", "ssh"), where, { ...base, ...env }, clock);
     const calls = existsSync(join(where.dir, "ssh-calls"))
       ? readFileSync(join(where.dir, "ssh-calls"), "utf8")
       : "";
@@ -499,9 +522,19 @@ describe("the SSH step", () => {
       reason: "outcome-unknown",
       connected: "true",
     });
+    // A drop with nothing on stderr may have come after the host started: not "unreachable".
     expect(ssh(["drop", "quiet"]).outputs).toMatchObject({
-      reason: "unreachable",
-      connected: "false",
+      reason: "outcome-unknown",
+      connected: "true",
+    });
+    // Only attempts that all failed before sshd answered, until the deadline, are unreachable.
+    const never = ssh(["noconnect"]);
+    expect(never.outputs).toMatchObject({ reason: "unreachable", connected: "false" });
+    expect(never.attempts).toBe(6);
+    // A connection that reached the host once stays "outcome unknown", whatever follows.
+    expect(ssh(["partial", "noconnect"]).outputs).toMatchObject({
+      reason: "outcome-unknown",
+      connected: "true",
     });
   });
 
@@ -665,6 +698,37 @@ describe("the notify step", () => {
     }
   });
 
+  test("the way back after a needs-you depends on the path", () => {
+    const plain = notify({ OUTCOME: "needs-you", REASON: "unstable", DEPLOY_PATH: "plain" });
+    expect(plain.message).toBe(
+      "NEEDS YOU: 2.30.1 unstable. To go back, run Deploy production with version=2.30.0 rollback=true from=2.30.1.",
+    );
+    // After a rollback the newer release is an ordinary deploy away; a rollback of it is refused.
+    const rollback = notify({
+      OUTCOME: "needs-you",
+      REASON: "image-mismatch",
+      DEPLOY_PATH: "rollback",
+      PLAN_ACTION: "rollback",
+      PLAN_VERSION: "2.30.0",
+      PREVIOUS: "2.30.1",
+    });
+    expect(rollback.message).toBe(
+      "NEEDS YOU: 2.30.0 image-mismatch. To return to 2.30.1, run Deploy production with version=2.30.1.",
+    );
+    // After a committed migration the host refuses a rollback: a fix release or a fork.
+    const migration = notify({
+      OUTCOME: "needs-you",
+      REASON: "unstable",
+      DEPLOY_PATH: "migration",
+      BACKUP: "daily/tarubot-20260929T193000Z.dump.age",
+      RESTORE_POINT: "2026-09-29T19:30:05.123456Z",
+    });
+    expect(migration.message).toBe(
+      "NEEDS YOU: 2.30.1 unstable; restore point 2026-09-29T19:30:05.123456Z; backup daily/tarubot-20260929T193000Z.dump.age. The migration committed: the way back is a fix release or a point-in-time fork (HOSTING.md).",
+    );
+    expect(migration.message).not.toContain("rollback=true");
+  });
+
   test("a rollback's message says what to requeue", () => {
     const n = notify({
       OUTCOME: "deployed",
@@ -732,9 +796,22 @@ describe.skipIf(!hasJq)("the plan step", () => {
     previous_filename?: string;
   }
 
-  /** Run the plan for an automatic run of release 2.30.1 whose merge changed `files`. */
-  function plan(files: File[], overrides: { production?: unknown; shaDigest?: string } = {}) {
+  /** What a test may change in the simulated repository and registry. */
+  interface Overrides {
+    readonly production?: unknown;
+    readonly shaDigest?: string;
+    /** The clock, "<day of week> <HHMM>" in UTC; Thursday noon by default. */
+    readonly now?: string;
+    /** package.json's version at the release commit. */
+    readonly packageVersion?: string;
+    /** The revision label on the 2.30.1 image. */
+    readonly revision?: string;
+  }
+
+  /** The simulated repository and registry for release 2.30.1 at commit C. */
+  function repository(overrides: Overrides) {
     const where = box();
+    writeFileSync(join(where.dir, "now"), `${overrides.now ?? "4 1200"}\n`);
     api(where.dir, `${R}/environments/production`, overrides.production ?? production);
     api(where.dir, `${R}/environments/notify`, {
       ...production,
@@ -743,8 +820,9 @@ describe.skipIf(!hasJq)("the plan step", () => {
     });
     api(where.dir, `${R}/environments/production/deployment-branch-policies`, mainOnly);
     api(where.dir, `${R}/environments/notify/deployment-branch-policies`, mainOnly);
-    api(where.dir, `${R}/contents/package.json?ref=${C}`, { version: "2.30.1" });
-    api(where.dir, `${R}/contents/package.json?ref=${P}`, { version: "2.30.0" });
+    api(where.dir, `${R}/contents/package.json?ref=${C}`, {
+      version: overrides.packageVersion ?? "2.30.1",
+    });
     api(
       where.dir,
       `${R}/contents/CHANGELOG.md?ref=${C}`,
@@ -755,11 +833,18 @@ describe.skipIf(!hasJq)("the plan step", () => {
       { name: "010_status_notices.sql" },
     ]);
     api(where.dir, `${R}/compare/${C}...main`, { status: "identical" });
+    mkdirSync(join(where.dir, "images"));
+    writeFileSync(join(where.dir, "images", "2.30.1"), `${D} ${overrides.revision ?? C}\n`);
+    writeFileSync(join(where.dir, "images", `sha-${C}`), `${overrides.shaDigest ?? D} ${C}\n`);
+    return where;
+  }
+
+  /** Run the plan for an automatic run of release 2.30.1 whose merge changed `files`. */
+  function plan(files: File[], overrides: Overrides = {}) {
+    const where = repository(overrides);
+    api(where.dir, `${R}/contents/package.json?ref=${P}`, { version: "2.30.0" });
     api(where.dir, `${R}/commits/${C}`, { parents: [{ sha: P }] });
     api(where.dir, `${R}/compare/${P}...${C}`, { files });
-    mkdirSync(join(where.dir, "images"));
-    writeFileSync(join(where.dir, "images", "2.30.1"), `${D} ${C}\n`);
-    writeFileSync(join(where.dir, "images", `sha-${C}`), `${overrides.shaDigest ?? D} ${C}\n`);
     return runScript(runOf("plan", "plan"), where, {
       GH_TOKEN: "unused",
       EVENT: "workflow_run",
@@ -767,6 +852,28 @@ describe.skipIf(!hasJq)("the plan step", () => {
       INPUT_VERSION: "",
       INPUT_ROLLBACK: "",
       INPUT_FROM: "",
+    });
+  }
+
+  /** The newer release 2.30.2 at commit C2, which a rollback to 2.30.1 leaves. */
+  const C2 = sha("newer");
+  const D2 = `sha256:${"ef".repeat(32)}`;
+
+  /** Run the plan for a dispatch; `between` is what changed from 2.30.1 to 2.30.2. */
+  function dispatch(
+    inputs: { version: string; rollback?: boolean; from?: string },
+    overrides: Overrides & { between?: File[] } = {},
+  ) {
+    const where = repository(overrides);
+    writeFileSync(join(where.dir, "images", "2.30.2"), `${D2} ${C2}\n`);
+    api(where.dir, `${R}/compare/${C}...${C2}`, { files: overrides.between ?? [] });
+    return runScript(runOf("plan", "plan"), where, {
+      GH_TOKEN: "unused",
+      EVENT: "workflow_dispatch",
+      HEAD_SHA: "",
+      INPUT_VERSION: inputs.version,
+      INPUT_ROLLBACK: inputs.rollback ? "true" : "false",
+      INPUT_FROM: inputs.from ?? "",
     });
   }
   const version = {
@@ -827,12 +934,136 @@ describe.skipIf(!hasJq)("the plan step", () => {
     ]);
     expect(p.outputs.deploy).toBe("true");
     expect(p.summary).toContain("**Migration files added in this merge:** migrations/011_more.sql");
+    expect(p.summary).toContain(
+      "**Host-side changes in this merge** (they run on the host as a docker-group user, which is root-equivalent there):",
+    );
     expect(p.summary).toContain("- `ops/deploy.sh`");
     expect(p.summary).toContain("check the host's .env first");
+    // Production may be older than the previous release: the history links cover the rest.
+    expect(p.summary).toContain("the host-side changes of the releases in between run too");
+    expect(p.summary).toContain(
+      `[\`ops/\`](https://github.com/deconfined/tarubot/commits/${C}/ops)`,
+    );
     expect(p.summary).toContain("**Approving** runs Deploy 2.30.1");
     expect(p.summary).toContain("## 2.30.1 — A fix");
     expect(p.summary).not.toContain("## 2.30.0 — Older");
     expect(p.summary).toContain("| Newest migration at this commit | `010_status_notices.sql` |");
+  });
+
+  test("a merge without host-side changes says so for this merge only, never a bare none", () => {
+    const p = plan([{ filename: "src/main.ts", status: "modified" }]);
+    expect(p.summary).toContain(
+      "**Host-side changes in this merge**: no file under `ops/`, `docker-compose.production.yml` or `production.env.example` changed.",
+    );
+    expect(p.summary).toContain("the host-side changes of the releases in between run too");
+    expect(p.summary).not.toMatch(/\*\*Host-side changes:\*\* none/u);
+  });
+
+  test("a dispatch takes the commit from the image's revision label and checks package.json", () => {
+    const p = dispatch({ version: "2.30.1" });
+    expect(p.code).toBe(0);
+    expect(p.outputs).toMatchObject({
+      deploy: "true",
+      action: "deploy",
+      version: "2.30.1",
+      commit: C,
+      digest: D,
+      from: "-",
+      reason: "-",
+    });
+    expect(p.summary).toContain("## Deploy 2.30.1");
+    expect(p.summary).toContain("**Host-side changes:** the host deploys from the live release");
+    for (const [what, inputs, overrides, reason] of [
+      ["a version that isn't X.Y.Z", { version: "2.30" }, {}, "version"],
+      ["an unpublished version", { version: "2.30.9" }, {}, "image"],
+      ["an image with no revision label", { version: "2.30.1" }, { revision: "none" }, "image"],
+      [
+        "package.json at the commit naming another version",
+        { version: "2.30.1" },
+        { packageVersion: "2.30.0" },
+        "version-mismatch",
+      ],
+      ["'from' without a rollback", { version: "2.30.1", from: "2.30.2" }, {}, "from"],
+    ] as const) {
+      const failed = dispatch(inputs, overrides);
+      expect({ what, code: failed.code, reason: failed.outputs.reason }).toEqual({
+        what,
+        code: 1,
+        reason,
+      });
+    }
+  });
+
+  test("a rollback names the live version and goes only to an older release on the same schema", () => {
+    const ok = dispatch(
+      { version: "2.30.1", rollback: true, from: "2.30.2" },
+      {
+        between: [
+          { filename: "ops/deploy.sh", status: "modified" },
+          { filename: "src/main.ts", status: "modified" },
+        ],
+      },
+    );
+    expect(ok.code).toBe(0);
+    expect(ok.outputs).toMatchObject({
+      deploy: "true",
+      action: "rollback",
+      commit: C,
+      from: "2.30.2",
+    });
+    expect(ok.summary).toContain("## Roll back from 2.30.2 to 2.30.1");
+    expect(ok.summary).toContain("**Host-side differences between 2.30.1 and 2.30.2**");
+    expect(ok.summary).toContain("- `ops/deploy.sh`");
+    expect(ok.summary).toContain("**Approving** rolls production back from 2.30.2 to 2.30.1");
+    for (const [what, inputs, between, reason] of [
+      ["no 'from'", { version: "2.30.1", rollback: true, from: "" }, [], "from"],
+      [
+        "a newer target",
+        { version: "2.30.1", rollback: true, from: "2.30.0" },
+        [],
+        "rollback-not-older",
+      ],
+      [
+        "an added migration in between",
+        { version: "2.30.1", rollback: true, from: "2.30.2" },
+        [{ filename: "migrations/011_x.sql", status: "added" }],
+        "rollback-across-migration",
+      ],
+      [
+        "a migration renamed away in between",
+        { version: "2.30.1", rollback: true, from: "2.30.2" },
+        [
+          {
+            filename: "docs/011_x.sql",
+            status: "renamed",
+            previous_filename: "migrations/011_x.sql",
+          },
+        ],
+        "rollback-across-migration",
+      ],
+    ] as const) {
+      const refused = dispatch(inputs, { between: [...between] });
+      expect({ what, code: refused.code, reason: refused.outputs.reason }).toEqual({
+        what,
+        code: 1,
+        reason,
+      });
+    }
+  });
+
+  test("warns about the Tuesday maintenance window and the daily backup by the clock", () => {
+    const at = (now: string) =>
+      plan([{ filename: "src/main.ts", status: "modified" }], { now }).summary;
+    const maintenance = "weekly maintenance runs Tuesdays 19:00-23:00 UTC";
+    const backup = "The daily backup runs around now";
+    for (const now of ["2 1800", "2 1930", "2 2259"])
+      expect({ now, s: at(now) }).toEqual({ now, s: expect.stringContaining(maintenance) });
+    for (const now of ["2 1759", "2 2300", "3 2000", "1 1930"])
+      expect({ now, s: at(now) }).toEqual({ now, s: expect.not.stringContaining(maintenance) });
+    for (const now of ["4 0415", "2 0444"])
+      expect({ now, s: at(now) }).toEqual({ now, s: expect.stringContaining(backup) });
+    for (const now of ["4 0414", "4 0445", "4 1200"])
+      expect({ now, s: at(now) }).toEqual({ now, s: expect.not.stringContaining(backup) });
   });
 
   test("an edited applied migration, another image behind the commit tag or a weak gate fails", () => {

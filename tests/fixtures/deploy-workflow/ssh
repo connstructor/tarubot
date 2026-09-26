@@ -9,10 +9,12 @@
 #   drop      a dropped connection with no output (255)
 #   hostkey   a changed host key (255)       denied  a rejected key (255)
 #   usage     the host's usage line (64)     quiet   no output, exit 1
+#   noconnect no TCP connection (255); as the plan's last line it repeats for every later call
 set -uo pipefail
 n=$(($(cat "$STUB/n" 2>/dev/null || printf 0) + 1))
 printf '%s\n' "$n" >"$STUB/n"
 behavior=$(sed -n "${n}p" "$STUB/plan")
+if [[ -z $behavior && $(tail -n 1 "$STUB/plan") == noconnect ]]; then behavior=noconnect; fi
 {
   printf 'call %s: key-variable=%s\n' "$n" "${DEPLOY_SSH_KEY+set}"
   printf '%s\n' "$@"
@@ -52,5 +54,9 @@ case $behavior in
     exit 64
     ;;
   quiet) exit 1 ;;
+  noconnect)
+    printf 'ssh: connect to host deploy.example.invalid port 22: Connection timed out\n' >&2
+    exit 255
+    ;;
   *) exit 99 ;;
 esac
