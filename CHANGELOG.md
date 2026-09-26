@@ -8,7 +8,7 @@ The docs and the settings-copy tool no longer name the production host; `host-en
 
 - **Settings copy.** `scripts/host-env-backup.ts` has no default host: run it as `bun run host:env-backup -- --host tarubot@<production host> --identity …`. Without `--host` it stops with a message naming the flag, before any SSH read or file write. Everything else it does is unchanged.
 - **Docs.** HOSTING.md, CLAUDE.md, SESSION_HANDOFF.md and VERIFICATION.md write `tarubot@<production host>` in commands and "the production host" in prose, and the rebuild runbook's DNS steps name no domain.
-- **Tests.** `host-env-backup.test.ts` covers the missing host. The site's guard against hosts under the operator's domain keeps every case (a sentence-final period, a DNS record, a hyphen suffix, a URL) with example host names.
+- **Tests.** `host-env-backup.test.ts` covers the missing host. The site's guard against hosts under the operator's domain keeps every case (a sentence-final period, a DNS record, a hyphen suffix, a URL), written with the bare domain.
 - No member note: members notice nothing.
 
 ## 2.29.1 — Claude reviews the agent's pull requests

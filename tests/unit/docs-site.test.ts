@@ -126,16 +126,17 @@ const forbidden: readonly Guard[] = [
   {
     pattern: /deconfined\.com(?:$|.)/imu,
     what: "a host under the upstream operator's domain",
-    // Any host under the domain, shown here with example names. A period or hyphen after it (the
-    // end of a sentence, a DNS record) must not let it through.
+    // The pattern ignores what comes before the domain, so the samples use the bare domain and
+    // cover every subdomain too. A period or hyphen after it (the end of a sentence, a DNS record)
+    // must not let it through.
     bad: [
-      "ssh to host.deconfined.com.",
-      "host.deconfined.com. IN SSHFP 4 2 0",
+      "ssh to deconfined.com.",
+      "deconfined.com. IN SSHFP 4 2 0",
       "see deconfined.com.\nnext",
-      "bot.deconfined.com-old",
-      "host bot.deconfined.com",
-      "`tarubot@host.deconfined.com`",
-      "https://bot.deconfined.com/health",
+      "deconfined.com-old",
+      "host deconfined.com",
+      "`tarubot@deconfined.com`",
+      "https://deconfined.com/health",
     ],
   },
   {

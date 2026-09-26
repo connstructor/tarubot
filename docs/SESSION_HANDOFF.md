@@ -242,7 +242,7 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 
 **Update, 2.29.2 (current version):**
 - **Why.** The owner asked that the repository stop naming the production host.
-- **Change.** HOSTING.md, CLAUDE.md, this file and VERIFICATION.md write `tarubot@<production host>` in commands and "the production host" in prose. `scripts/host-env-backup.ts` has no default host: `bun run host:env-backup -- --host tarubot@<production host> --identity ~/tarubot-cutover/age/tarubot.key`, and without `--host` it stops with a message naming the flag, before any SSH read or file write. The site guard's fixtures use example hosts. Tooling, tests and documentation only: no bot change, no migration, nothing to deploy.
+- **Change.** HOSTING.md, CLAUDE.md, this file and VERIFICATION.md write `tarubot@<production host>` in commands and "the production host" in prose. `scripts/host-env-backup.ts` has no default host: `bun run host:env-backup -- --host tarubot@<production host> --identity ~/tarubot-cutover/age/tarubot.key`, and without `--host` it stops with a message naming the flag, before any SSH read or file write. The site guard's samples use the bare domain. Tooling, tests and documentation only: no bot change, no migration, nothing to deploy.
 - **Status.** Branch `chore/generic-host-2.29.2` from `be733ba`; not pushed.
 
 **Local handoff checkpoint (historical, 2026-09-23):** the documentation and release-reference changes were validated on `docs/v2-release-handoff`. The first signing attempt required a local GPG unlock (commits are now signed with the SSH key described below). That branch had not been pushed or given a PR at the checkpoint.
