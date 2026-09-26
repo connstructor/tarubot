@@ -66,6 +66,7 @@ import {
 import { managedRoleOrder } from "../domain/role-layout.js";
 import { MISSING_CONFIRM_SECONDS } from "../domain/profiles.js";
 import type { DiscordPort, GuildRecord } from "./records.js";
+import { dropWaiting } from "./status-notices.js";
 import type {
   ApplicationChoiceRow,
   ApplicationState,
@@ -761,6 +762,10 @@ export class Service {
    * posted later. Moving or unsetting the channel keeps the baseline. Where onboarding manages
    * channel visibility, the result says who can read the channel, so the receipt can warn
    * (decision 4: warn only, never force it visible).
+   *
+   * Unsetting the officer notifications channel (2.29.0) drops every member status change still
+   * waiting or frozen for a post in the same transaction (dropWaiting), so none of it is posted
+   * once a channel is set again.
    */
   async configure(
     actor: Actor,
@@ -911,6 +916,16 @@ export class Service {
         .where(eq(t.guilds.id, actor.guildId))
         .returning();
       if (!updated) throw new Error("Missing guild");
+      // Status posts (2.29.0, owner decision 5: nothing is saved for a channel set later): a save
+      // that leaves no officer notifications channel drops everything the guild has waiting or
+      // frozen for a post, in this transaction, for members who left the server too. Nothing else
+      // would: an officer.status job that ended failed is never revived, and neither the repair
+      // pass (present members only) nor a reconcile.user parked while Discord changes are paused
+      // reaches every row, so the leftovers would post once a channel is set again. The guild row
+      // is held FOR UPDATE above, so this takes the member rows in the documented order (guild,
+      // then members in user order, then jobs), before anything below queues a job.
+      if (column === "officer_notifications_channel_id" && value === null)
+        await dropWaiting(client, actor.guildId);
       if (field === "fc_id" && value) {
         await db
           .insert(t.ledgerAccounts)

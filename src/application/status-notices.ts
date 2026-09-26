@@ -8,9 +8,11 @@
  * Recording: a successful reconciliation pass records its decisive values (recordStatus), and the
  * accepted roster records confirmed departures in its own transaction (lockDepartingOwners, then
  * recordDepartures). Either queues the guild's one `officer.status` job, key officer:<guild>:status.
- * With no officer notifications channel nothing is saved for later (owner decision 5): a pass takes
- * its change as announced at once and clears whatever the member still had waiting or frozen from
- * before the unset, the roster records no departure, and neither queues the job.
+ * With no officer notifications channel nothing is saved for later (owner decision 5): /config's
+ * unset drops everything the guild has waiting or frozen in its own transaction (dropWaiting), for
+ * members who left the server too, so no failed job's leftovers post once a channel is set again;
+ * afterwards a pass takes its change as announced at once (and, as a backstop, clears whatever the
+ * member still has waiting or frozen), the roster records no departure, and neither queues the job.
  *
  * Delivery (deliverStatus): a batch frozen earlier is resent first, unchanged and with no waits
  * (or only marked, when its `delivered` attempt shows Discord already took it); then the job waits
@@ -24,7 +26,8 @@
  * mark, the no-channel drop), then guild_users rows in (guild_id, user_id) order compared as plain
  * strings (COLLATE "C"), then (recordStatus and the roster only, through enqueue) the guild's status
  * job row last. /config, /setup and activation lock the guild row FOR UPDATE before any member row,
- * so they queue behind these on the guild row rather than deadlocking with them; the guild-first
+ * so they queue behind these on the guild row rather than deadlocking with them (/config's unset
+ * then locks the waiting rows in user order, dropWaiting, before it queues any job); the guild-first
  * lock matters for recordStatus too, since its job insert takes FOR KEY SHARE on the guild row
  * through the foreign key. Member rows are locked FOR NO KEY UPDATE: like FOR UPDATE it serializes
  * with every other member-row lock (the FOR UPDATE of /unclaim, /verify and the two-404 unlink
@@ -112,10 +115,9 @@ async function lockGuild(db: Orm, guildId: string): Promise<LockedGuild | null> 
  * written, and no log line either: the next reconcile.guild creates the row, and its pass takes the
  * baseline silently, as nickname() waits too. An unchanged pass writes nothing. With no officer
  * notifications channel the change is taken as announced at once and nothing is queued (owner
- * decision 5: changes made while it is unset aren't saved for later); what waited from before the
- * unset, and the member's entry in a frozen batch, are cleared too, changed pass or not, as the job
- * its change queued clears them (dropStatus), since that job may have ended failed. Returns
- * whether a post was queued.
+ * decision 5: changes made while it is unset aren't saved for later). The unset itself already
+ * dropped what waited (dropWaiting); as a backstop, anything the member still has waiting or frozen
+ * is cleared too, changed pass or not, as dropStatus would. Returns whether a post was queued.
  */
 export async function recordStatus(
   app: Service,
@@ -142,10 +144,10 @@ export async function recordStatus(
     const recorded = observe(readState(row.state), observation, joinedAt.toISOString());
     if (!guild.channel) {
       // With no channel, every pass clears what the member has waiting, a frozen batch entry
-      // included, exactly as dropStatus does, whether or not the pass changed anything: a change
-      // recorded before the unset may belong to a job that ended failed, which nothing revives to
-      // drop it, so it would otherwise post when a channel is set later. (Unchanged, `pending` is
-      // the stored state's.) A pass with nothing to clear still writes nothing.
+      // included, exactly as dropStatus does, whether or not the pass changed anything. /config's
+      // unset already dropped it (dropWaiting); this backstop keeps anything else from waiting for
+      // a channel set later, since a job that ended failed is never revived to drop it. (Unchanged,
+      // `pending` is the stored state's.) A pass with nothing to clear still writes nothing.
       if (!recorded.changed && !recorded.pending && row.since === null && row.posting === null)
         return false;
       await db
@@ -270,26 +272,41 @@ function lockWaiting(db: Orm, guildId: string, due: SQL<boolean>) {
 }
 
 /**
+ * Drop everything the guild has waiting or frozen (owner decision 5: nothing is saved for a channel
+ * set later): each waiting row's state is announced as it is, its unposted departures and its entry
+ * in a frozen batch are dropped, and status_since and status_posting are cleared, for every member
+ * with such a row, present or not. It locks those rows in user order (FOR NO KEY UPDATE) and takes
+ * no jobs-row lock; the caller must already hold the guild row (FOR SHARE in dropStatus, FOR UPDATE
+ * in /config's unset), so the header's lock order holds. Usually matches no rows. Returns how many
+ * rows it cleared.
+ */
+export async function dropWaiting(client: Connection, guildId: string): Promise<number> {
+  const db = orm(client);
+  const rows = await lockWaiting(db, guildId, sql<boolean>`true`);
+  for (const row of rows) {
+    const state = readState(row.state);
+    await db
+      .update(t.guildUsers)
+      .set({
+        ...(state ? { status_state: dropPending(state) } : {}),
+        status_since: null,
+        status_posting: null,
+      })
+      .where(and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, row.user_id)));
+  }
+  return rows.length;
+}
+
+/**
  * No officer notifications channel (checked before the effects gate, like `layout disabled`):
- * nothing is saved for later (owner decision 5). One transaction announces what waits as it is,
- * drops unposted departures and any frozen batch, so no job parks just because the channel is unset.
+ * nothing is saved for later (owner decision 5). One transaction, the guild row shared first, drops
+ * what waits (dropWaiting), so no job parks just because the channel is unset. /config's unset
+ * already dropped it in its own transaction; this covers whatever a job still finds.
  */
 export async function dropStatus(app: Service, guildId: string): Promise<{ skipped: string }> {
   await app.db.transaction(async (client) => {
-    const db = orm(client);
-    await lockGuild(db, guildId);
-    const rows = await lockWaiting(db, guildId, sql<boolean>`true`);
-    for (const row of rows) {
-      const state = readState(row.state);
-      await db
-        .update(t.guildUsers)
-        .set({
-          ...(state ? { status_state: dropPending(state) } : {}),
-          status_since: null,
-          status_posting: null,
-        })
-        .where(and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, row.user_id)));
-    }
+    await lockGuild(orm(client), guildId);
+    await dropWaiting(client, guildId);
   });
   return { skipped: "officer notifications unconfigured" };
 }

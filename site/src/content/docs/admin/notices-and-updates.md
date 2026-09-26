@@ -66,7 +66,7 @@ Second Alt @ Diabolos (@Casey)
 
 - **About 2 minutes after the first change,** one post covers everything that changed in that window. A change undone inside it cancels out: a `/guest grant` to a visitor with no linked character, followed by `/guest revoke` a minute later, posts nothing (`/guest reset` then clears the revocation). For a visitor who already has Guest through a registered character, the grant changes nothing, so the revoke alone posts "Guest → No access · guest access revoked".
 - **Large changes** are split: a post names at most 100 members, fewer when their lines are long, and the rest follow straight away. Nobody is left out.
-- **Without a channel,** changes aren't saved for later. Setting the officer notifications channel afterwards, even within 2 minutes, posts none of what happened before it.
+- **Without a channel,** changes aren't saved for later. Setting the officer notifications channel afterwards, even within 2 minutes, posts none of what happened before it. Unsetting the channel also drops anything still waiting to be posted.
 - **While Discord changes are paused,** the post waits and goes out once they're back on.
 
 While a post waits, the officer view of [`/sync status`](/tarubot/reference/commands/#sync-status) lists it as a queued `officer.status` job (`… QUEUED`); members never see it.

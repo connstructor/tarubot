@@ -7899,7 +7899,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
 
   /**
    * Officer status notices (2.29.0, issue #31). Used by these tests: guilds
-   * 666666666666666740-768, FCs 9232097761132950100-115, users 9310xxxx-9336xxxx (and the 18-digit
+   * 666666666666666740-769, FCs 9232097761132950100-116, users 9310xxxx-9337xxxx (and the 18-digit
    * 9318…), characters 883xxxxx-887xxxxx and role and channel IDs 824xx. Each test builds its own
    * guild with the four roles bound, the officer notifications channel set and effects on, reads
    * `sent` by guild, and stands in for the two-minute window by moving `status_since` back.
@@ -8832,7 +8832,11 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
       expect((await statusOf(guildId, frozenUser))?.posting).not.toBeNull();
       await grant(guildId, waitingUser);
       expect(await waiting(guildId)).toEqual([frozenUser, waitingUser]);
-      await service.configure(officerOf(guildId), "officer_notifications_channel_id", null);
+      // /config's unset drops what waits itself (the owner-who-left scenario below). Clearing the
+      // column directly leaves it waiting, so the job's own no-channel drop is what clears it here.
+      await db.query("UPDATE guilds SET officer_notifications_channel_id=NULL WHERE id=$1", [
+        guildId,
+      ]);
       const paused = new Service(db, discord, lodestone, { ...config, ENABLE_EFFECTS: false });
       expect(await runStatus(guildId, paused)).toMatchObject({
         status: "succeeded",
@@ -9263,9 +9267,13 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         current: { guest: true },
       });
       expect(await waiting(guildId)).toEqual([frozenUser, waitingUser]);
-      // With the channel unset, each member's next pass changes nothing, yet clears what waits
-      // and the frozen entry, exactly as the job's own drop would have: nothing is saved for later.
-      await service.configure(officerOf(guildId), "officer_notifications_channel_id", null);
+      // /config's unset drops all of this itself (the next scenario). Clearing the column directly
+      // leaves it, so this reaches the passes' backstop: with no channel, each member's next pass
+      // changes nothing, yet clears what waits and the frozen entry, exactly as the job's own drop
+      // would have: nothing is saved for later.
+      await db.query("UPDATE guilds SET officer_notifications_channel_id=NULL WHERE id=$1", [
+        guildId,
+      ]);
       for (const user of [frozenUser, waitingUser]) {
         await reconcileIn(guildId, user);
         const dropped = await statusOf(guildId, user);
@@ -9295,6 +9303,102 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         [{ name: "No access → Guest · guest grant", value: mention(later) }],
       ]);
       expect((await statusJobs(guildId)).map((row) => row.status)).toEqual(["failed", "succeeded"]);
+    });
+
+    test("unsetting the channel drops what a failed job froze, for an owner who left too; a later channel posts only new changes", async () => {
+      const [guildId, fcId] = [reserved(29), reservedFc(16)];
+      // A member whose only character leaves the FC, an owner who already left the Discord server
+      // losing theirs (no pass ever reaches them), and a visitor granted Guest once the channel is
+      // back. An unlinked character stays, so the roster isn't empty.
+      const [single, gone, later] = ["93370001", "93370002", "93370003"];
+      const [lone, orphan, staying] = ["88730001", "88730002", "88730003"];
+      await statusGuild(guildId, fcId);
+      await statusMember(guildId, single, [lone]);
+      await statusMember(guildId, gone, [orphan]);
+      await statusMember(guildId, later);
+      await publishRoster(
+        fcId,
+        [lone, orphan, staying].map((character) => fcMember(character, fcId)),
+      );
+      for (const user of [single, gone, later]) await reconcileIn(guildId, user);
+      absent.add(gone);
+      const enumerate = discord.members;
+      const send = discord.send;
+      try {
+        const start = Date.now() + 1000;
+        await publishRoster(fcId, [fcMember(staying, fcId)], new Date(start));
+        await publishRoster(fcId, [fcMember(staying, fcId)], new Date(start + 61_000));
+        expect(await waiting(guildId)).toEqual([single, gone]);
+        await reconcileIn(guildId, single);
+        expect(await reconcileIn(guildId, gone)).toMatchObject({ skipped: "user absent or bot" });
+        await elapse(guildId);
+        // The job's last attempt freezes both members' lines, then meets an outage (a plain error,
+        // so an ordinary retry) with its budget spent: it ends failed with the batch still frozen,
+        // and nothing revives it (requeueParked never takes failed jobs).
+        const [job] = await statusJobs(guildId);
+        await db.query("UPDATE jobs SET attempts=7 WHERE id=$1", [job?.id]);
+        discord.send = async () => {
+          throw new Error("Test Discord outage.");
+        };
+        expect(await runStatus(guildId)).toMatchObject({
+          status: "failed",
+          last_error: "transient",
+        });
+        discord.send = send;
+        const batch = (await statusOf(guildId, gone))?.posting?.batch;
+        expect(batch).toMatch(/^[0-9a-f-]{36}$/);
+        expect((await statusOf(guildId, single))?.posting?.batch).toBe(batch ?? "");
+        expect((await statusOf(guildId, gone))?.state?.departed).toHaveLength(1);
+        // Unsetting the channel drops all of it in its own transaction, before any pass runs: the
+        // owner who left, whom no pass reaches, included. Setting the channel again before the
+        // repair pass runs therefore finds nothing to post either.
+        await service.configure(officerOf(guildId), "officer_notifications_channel_id", null);
+        expect(await waiting(guildId)).toEqual([]);
+        for (const user of [single, gone]) {
+          const dropped = await statusOf(guildId, user);
+          expect(dropped).toMatchObject({ since: null, posting: null });
+          expect(dropped?.state).toMatchObject({ reasons: {}, departed: [] });
+          expect(dropped?.state?.announced).toEqual(dropped?.state?.current);
+        }
+        // The repair pass the unset queued enumerates the present members and runs their passes,
+        // which find nothing left to clear: the status columns stay as the unset left them (the
+        // enumeration itself rewrites the row, so its xmin moves).
+        const cleared = await statusOf(guildId, single);
+        discord.members = async () =>
+          [single, later].flatMap((user) => {
+            const member = members.get(user);
+            return member ? [member] : [];
+          });
+        const parent = await enqueue(db.pool, "reconcile.guild", `guild:${guildId}`, {}, guildId);
+        expect(await sync.guild(guildId, parent)).toMatchObject({ enumerationComplete: true });
+        for (const user of [single, later]) await reconcileIn(guildId, user);
+        const repaired = await statusOf(guildId, single);
+        expect(repaired).toMatchObject({ since: null, posting: null });
+        expect(repaired?.state).toEqual(cleared?.state ?? null);
+        expect(await waiting(guildId)).toEqual([]);
+        // With the channel set again, only a change made after it posts, from a new job: no stale
+        // "Left the FC" line and no resent batch.
+        await service.configure(officerOf(guildId), "officer_notifications_channel_id", CHANNEL);
+        await grant(guildId, later);
+        expect(await waiting(guildId)).toEqual([later]);
+        await elapse(guildId);
+        expect(await runStatus(guildId)).toMatchObject({
+          status: "succeeded",
+          result: { status: "delivered", posts: 1, members: 1 },
+        });
+        expect(statusPosts(guildId).map(shown)).toEqual([
+          [{ name: "No access → Guest · guest grant", value: mention(later) }],
+        ]);
+        expect((await statusJobs(guildId)).map((row) => row.status)).toEqual([
+          "failed",
+          "succeeded",
+        ]);
+        expect(await statusOf(guildId, gone)).toMatchObject({ since: null, posting: null });
+      } finally {
+        absent.delete(gone);
+        discord.members = enumerate;
+        discord.send = send;
+      }
     });
   });
 });
