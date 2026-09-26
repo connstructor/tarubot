@@ -37,7 +37,7 @@ Grant these at the server level. In each channel TaruBot posts to, it also needs
 | **Send Messages** | Post ledger entries, officer notices, member status posts, guest review messages and update posts. |
 | **Embed Links** | Ledger posts, guest review messages, member status posts (officer notifications channel), update posts and `/version` are embeds. |
 | **Attach Files** | Deliver an officer's **Full details (JSON)** file, and keep explicit access in onboarding's managed rooms. |
-| **Read Message History** | Find its own earlier messages, so a notice isn't posted twice and a review message can be updated. |
+| **Read Message History** | TaruBot checks for it, with View Channel, Send Messages and Embed Links, before it posts in a channel, and redrawing a guest review message fetches the earlier one. |
 
 Leave **Administrator** off. TaruBot needs only the permissions above, and a bot with Administrator can see and change everything in the server.
 

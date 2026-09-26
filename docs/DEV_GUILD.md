@@ -58,7 +58,7 @@ The generic procedures are on the documentation site ([`deploy/operations.md`](.
 - The accepted snapshot at `2026-09-22T15:33:15.264Z` contains 105 distinct members, one leader, and six characters with FC rank `Officer`. At the end of setup there were no active DevBot character links, so withholding membership-derived roles was correct.
 - The requested public test-guild reply policy was deployed. Readiness reports `publicTestResponses: true`; scoped visibility tests passed. A human repeat command can confirm channel-visible interaction delivery.
 - Restart posted the updated character-verification plan in `#chat` as message `1551983447013064705`, with separate You/Me/DevBot responsibilities.
-- Shion Tsuji (`38371223`) completed profile-token verification after an initial publication-delay result. Link `4da8b599-533f-4d63-aa5f-26a670bff5e7` is active with `profile_token` provenance; the challenge was consumed and only its hash was persisted. The proof token is deliberately excluded from this log.
+- The owner's character completed profile-token verification after an initial publication-delay result. Link `4da8b599-533f-4d63-aa5f-26a670bff5e7` is active with `profile_token` provenance; the challenge was consumed and only its hash was persisted. The proof token is deliberately excluded from this log.
 - Discord readback confirmed **DevBot Member** and **DevBot FC Leader** on the verified owner, alongside the pre-existing Member role. The accepted FC rank is `Fussy Bunbun`; the configured `Officer` rank did not match.
 - The verified user is the guild owner. Nickname delivery is correctly blocked by Discord hierarchy, while roles are applied and ownership remains committed.
 - Successful verification responses were visible through the ordinary `#chat` message API with flags `0`, confirming the requested public response behavior.
@@ -72,7 +72,7 @@ The generic procedures are on the documentation site ([`deploy/operations.md`](.
 The first layout checked priority but allowed interleaving and retained newly created duplicates. The owner requested one consecutive block and reuse of the original Member/Guest roles. The corrected deployment was verified on 2026-09-22:
 
 - Guild configuration revision **9** binds Member to `1042089882677420172` and Guest to `1042089887798677545`. Setup reused all four IDs with `created: false`, renaming the two original roles to the requested DevBot-prefixed names.
-- Original Member and Guest permissions remain exactly `1071698529857`; their existing IDs and Discord references were retained. Both verified FC members (`669230721168179200` and `725369723964882976`) hold the original Member role; the owner also retains FC Leader.
+- Original Member and Guest permissions remain exactly `1071698529857`; their existing IDs and Discord references were retained. Both verified FC members, the owner and one other member, hold the original Member role; the owner also retains FC Leader.
 - Removed the obsolete roles `1551979199554912286` and `1551979205183406210` only after confirming their setup-creation audit records, retired bindings, zero holders in a complete seven-member enumeration, and zero channel references. Both removals were audited.
 - Live readback verified adjacent managed positions **4, 3, 2, 1**, all with separate member-list display enabled. DevBot remains at position 6 and the other bot at position 5, above the whole block.
 - Follow-up layout job `4ccba9e7-65de-4772-ab80-e7bfe60467db` succeeded with empty hoist/position deltas. Readiness showed zero pending work and zero degraded FCs. The sole blocked effect remained the expected guild-owner nickname update.
@@ -138,7 +138,7 @@ At that point onboarding was still opted out. The separate room's creation and p
 - Published 2.12.1 bot/sidecar images (revision `da7ed72aa0a2e072f1566282b212453a8a8dce12`, the PR #7 merge; application code identical to 2.12.0) replaced 2.11.1 with no source mounts. With the writer stopped, `tarubot_dev` was backed up to `.cache/backups/tarubot_dev-before-2.12.1-da7ed72.dump`. A disposable restore matched every row, sequence, trigger, and constraint, and migration 004 was rehearsed there before being applied to DevBot at 13:05:46 UTC; all 25 application tables were unchanged by it.
 - Guild registration was replaced and read back as identical to the image's definitions (19 roots / 40 paths); only `/apply` had changed. Readiness passed with no pending/blocked work, and startup posted the plan as message `1552305018441310379`. Guild revision 10, both active links, and the uninitialized ledger were retained.
 - The owner ran `/config guest_applications channel:#officer-chat` (revision 11, audited); `/config validate` reported all nine role/channel capabilities available.
-- Unverified visitor `1010097911566180445` submitted application `f6198657-4f4b-4477-b9c8-c98ba09fa9ed` with bounded answers. Nothing was granted before the decision, and a repeated submission returned the same application. Review message `1552306613384118474` was posted in officer-chat. The owner approved it: the grant, audit, updated review, approval DM, and DevBot Guest role were all delivered.
+- The visitor tester, then unverified, submitted application `f6198657-4f4b-4477-b9c8-c98ba09fa9ed` with bounded answers. Nothing was granted before the decision, and a repeated submission returned the same application. Review message `1552306613384118474` was posted in officer-chat. The owner approved it: the grant, audit, updated review, approval DM, and DevBot Guest role were all delivered.
 - Follow-up: expected role-layout lock waits and a gateway-echo generation change were logged at error level, and the final no-op reconciliation replaced the applied Guest delta in its job result. See [OPEN_ITEMS.md](OPEN_ITEMS.md).
 
 ### 2.12.3 rollout and launch-scope session (in progress) — 2026-09-23
@@ -186,31 +186,32 @@ The owner ran the 2.14.0 reply session from plan message `1552528212054249474`, 
 
 Testers:
 
-- The owner, kaanidog (`725369723964882976`), a server manager and officer.
-- PigeonMuffin (`289803961693765632`), an officer by rank through Wyra Riyuh (`38804790`), served as the non-officer. The owner removed his officer access with `/officer revoke` (`1552536049245364347`; its `reconcile.user` job succeeded, and read-back showed Member only), and at 05:06:23 UTC the owner restored it with `/officer grant` ("Pity."), a manual grant. The 2.15.0 session's `/officer reset` removed that grant, so the rank decides again ([the 2.15.0 session](#2150-session--2026-09-24)).
-- moonbun_art and poppymori each made a first link. The subject of the `/guest` checks was pazzberry (`1010097911566180445`), the 2.12.1 applicant.
+- The owner, a server manager and officer.
+- The officer tester, an officer by rank through their linked character, served as the non-officer. The owner removed their officer access with `/officer revoke` (`1552536049245364347`; its `reconcile.user` job succeeded, and read-back showed Member only), and at 05:06:23 UTC the owner restored it with `/officer grant` ("Pity."), a manual grant. The 2.15.0 session's `/officer reset` removed that grant, so the rank decides again ([the 2.15.0 session](#2150-session--2026-09-24)).
+- Two more testers each made a first link. The subject of the `/guest` checks was the visitor tester, the 2.12.1 applicant.
+- The testers are thanked by name on the site's [Thank you](../site/src/content/docs/project/credits.md) page.
 
 Steps covered:
 
 1. **Utility and configuration (04:00 UTC).** `/version` (`1552530073956126830`), `/ping` (`1552530099297853470`), `/channel` (`1552530116347822151`), `/config show` (`1552530145750028288`) and `/config validate` (`1552530176041164860`) matched their mockups apart from D1. No warn or error lines were logged, and no mentions were parsed.
 2. **Characters.**
-   - The owner ran `/claim` for I'kayah Tsuji (`47536018`, `1552531545254928414`). The verify button first showed the pending card, then Check again edited it in place to "I'kayah Tsuji is verified" (`1552531608660090881`).
+   - The owner ran `/claim` for another of their characters (`1552531545254928414`). The verify button first showed the pending card, then Check again edited it in place to "… is verified", naming the character (`1552531608660090881`).
    - A Check again inside the cooldown (`1552531668517130290`) showed "Please wait a moment" with `Code cooldown · Ref 1552531661609246790`.
    - `/characters` (`1552531891155107870`) matched the self-list. `/main` naming the current main (`1552531913804087306`) replied "Main character updated" (D2). `/unclaim` succeeded (`1552531957697740891`).
    - On a second claim, `/verify` before the token was published (`1552535836745138226`) showed "Token not on the Lodestone yet" with `Code pending_proof · Ref 1552535835897897011`. After publication, `/verify` (`1552536301641801828`) verified the character.
-   - moonbun_art (`1552536749283221585`, `1552537060869546056`) and poppymori (`1552539965429260378`, `1552540154084986891`, `1552540182232961025`) each made a first link. It set their main and nickname as the approved cards show.
+   - One tester (`1552536749283221585`, `1552537060869546056`) and a second tester (`1552539965429260378`, `1552540154084986891`, `1552540182232961025`) each made a first link. It set their main and nickname as the approved cards show.
    - The owner's `/nickname enabled:true` (`1552539884886167612`) showed the Server owner warning (D7).
 3. **Ledger.**
-   - moonbun_art, as a member: a deposit (`1552536866715074590`, post `1552536873786671115`), `/ledger balance` (`1552536940845334589`) and `/ledger history` (`1552536989511847967`), all in the member layout.
+   - The first of those testers, as a member: a deposit (`1552536866715074590`, post `1552536873786671115`), `/ledger balance` (`1552536940845334589`) and `/ledger history` (`1552536989511847967`), all in the member layout.
    - Officer deposits: `1552532057840816218` and `1552532221519331458`.
    - An oversized withdrawal of 999,999,999 (`1552540004914303057`) replied "Nothing was recorded.". Three withdrawals (`1552540076011946098`, `1552540113995571240`, `1552540153430544424`) had their posts read back.
    - Officer `/ledger balance`: `1552540194714943528`. `/ledger history` with Older (`1552541180561072161`) edited itself in place to page 2 of 2.
    - The 2.12.3 leftover `/ledger adjust`: a bad entry (`1552532645689298964`, `Code input · Ref 1552532645072601128`) showed no Example (D3), and the owner had read the option as the entry number (D4). The UUID then recorded "Correction recorded", which corrects #5 (`1552532747442978937`, audited as `ledger.adjust`).
 4. **Guests.**
-   - Member `/guest status`: `1552537055517483028`. The officer's `/guest status member:1010097911566180445` (`1552540327456546846`), `/guest revoke` (`1552540373740421131`) and `/guest grant` (`1552540418334400512`) matched guests-board/5 and /6.
-   - `/config guest_applications clear:true` (`1552541488909385738`, revision 12) closed applications. PigeonMuffin's `/apply` got the approved closed card (`1552541633894154311`).
+   - Member `/guest status`: `1552537055517483028`. The officer's `/guest status` for the visitor tester (`1552540327456546846`), `/guest revoke` (`1552540373740421131`) and `/guest grant` (`1552540418334400512`) matched guests-board/5 and /6.
+   - `/config guest_applications clear:true` (`1552541488909385738`, revision 12) closed applications. The officer tester's `/apply` got the approved closed card (`1552541633894154311`).
    - `channel:#officer-chat` reopened applications (`1552541733059952711`, revision 13) and requeued one held job. Closing by unsetting the channel prompted D8.
-5. **Non-officer denials (PigeonMuffin).**
+5. **Non-officer denials (the officer tester, while revoked).**
    - `/config show` (`1552537134991278200`) and `/ledger withdraw` (`1552537200833331251`) were refused as specified.
    - `/characters member:` with a typed name (`1552537269104017408`, `1552537555138777139`) was "Check your input" (D5). With a real mention (`1552537890251087962`), it reached "Only your own records".
    - A spaces-only note can't be sent: the Discord client refuses a blank required option, so the server-side note check stays covered by unit tests.
@@ -221,11 +222,11 @@ Steps covered:
    - Its Full details (`1552540263988199465`) was a 3,600-byte `tarubot-sync.json` with no tokens, secrets or application answers.
 7. **Paused pass.**
    - DevBot restarted at 04:52:41 UTC with `ENABLE_EFFECTS=false` as a shell override (`.env` unchanged): readiness 200, `effects:false`, `writerLease:true`, and one lease holder. 11 jobs went `disabled`, each with the paused warn line, and the plan was re-posted with "Effects: paused".
-   - `/nickname enabled:false` (`1552543671792963684`), `/guest revoke` and `/guest grant` for pazzberry (`1552543751937859584`, `1552543776222879754`) and `/refresh` (`1552543794988060702`) each showed the pending "Saved, Discord changes paused" card with `‖ PAUSED`. None showed QUEUED or "shortly".
+   - `/nickname enabled:false` (`1552543671792963684`), `/guest revoke` and `/guest grant` for the visitor tester (`1552543751937859584`, `1552543776222879754`) and `/refresh` (`1552543794988060702`) each showed the pending "Saved, Discord changes paused" card with `‖ PAUSED`. None showed QUEUED or "shortly".
    - The officer's `/sync status` (`1552543830190981180`) showed 23 paused items. `/config validate` (`1552543909026996314`) warned `[WARN] Disabled for this deployment`. Full details (`1552545789740580874`) listed 23 `disabled` jobs.
    - Effects were restored at 05:03:49 UTC: readiness 200, one lease holder and no warn or error lines. "Requeued work held while Discord changes were off" requeued 7 jobs (one per dedupe key, with duplicates closed as `skipped: superseded`). All 45 recent jobs succeeded, including the 10 of run `95855457`.
-   - Read-back: pazzberry has Guest, kaanidog has FC Leader and Member, and PigeonMuffin has Member only. The plan was re-posted as `1552546091290067046`.
-   - Not covered live: PigeonMuffin's member `/sync status` while paused, because the tester had left. The guests#43 deviation tests cover it.
+   - Read-back: the visitor tester has Guest, the owner has FC Leader and Member, and the officer tester has Member only. The plan was re-posted as `1552546091290067046`.
+   - Not covered live: the officer tester's member `/sync status` while paused, because they had left. The guests#43 deviation tests cover it.
 
 The review message of decided application `f6198657` (`1552306613384118474`, officer-chat) still has its pre-2.14.0 text. 2.14.0 converts a review message on its next update, and a decided application gets none. The conversion therefore couldn't be confirmed live: that needs a new application, and the forms are on hold. Unit tests cover it.
 
@@ -238,10 +239,10 @@ Deviations and decisions. The owner first planned D1–D4 as a 2.14.2 patch, the
 | D3 | The input failures for `/ledger adjust entry:` and `/sync status run_id:` had no Example. | "If there's a parameter to input, it should provide an example." | Every option of every registered path has an Example; a test walks the registered commands. A failure that isn't about an option's value, such as `/nickname enabled:true` without a main, shows none. |
 | D4 | The owner read `/ledger adjust entry:` as the `#5` shown in history, receipts and posts, but the option took only the UUID. | "Allow it to accept the integer, or the UUID." | Accepts `5`, `#5` or the UUID, with a number resolved in the current FC account. Re-register the commands. |
 | D5 | `member:` accepted only an ID or a resolved mention, so a typed name never reached "Only your own records". | Autocomplete on the member picker. | Every member option suggests server members, from the cache and then Discord's member search. IDs and mentions are still accepted. Re-register the commands. |
-| D6 | PigeonMuffin's officer assignment was removed and he then re-linked Wyra Riyuh, leaving one active link and no main ("Nickname sync: On (no main set)"). His verify reply would have said "Main character: Unchanged". | "Yes, auto-main on relink." | A new link becomes the main when the member has no main and no other active link; it keeps the sync setting, and with sync on it replaces the nickname restore the unlink queued. The reply says "Set as your main because you didn't have one." Imported members keep their state. |
+| D6 | The link an officer had assigned to the officer tester was removed, and they then re-linked their character, leaving one active link and no main ("Nickname sync: On (no main set)"). Their verify reply would have said "Main character: Unchanged". | "Yes, auto-main on relink." | A new link becomes the main when the member has no main and no other active link; it keeps the sync setting, and with sync on it replaces the nickname restore the unlink queued. The reply says "Set as your main because you didn't have one." Imported members keep their state. |
 | D7 | The owner's `/nickname enabled:true` queued `reconcile.user` `52ffb81e`. The job blocked because the owner isn't manageable, sat under Needs attention, and blocked again after each `/config` change. | Skip the owner's nickname instead of blocking. | The gateway marks the server owner, and reconciliation leaves the owner's nickname alone and drops any pending restore or write. |
 | D8 | Applications opened and closed only through the review channel (`clear:true` closed them). | "The channel setting should be separate from whether applications are enabled." No option is named `clear` ("Clear sounds like you're erasing the channel's history"). | Migration 006 adds a stored switch. `/config guest_applications` takes `enabled:true\|false`, `channel:#…` and `unset_channel:true`. Imports keep the legacy channel with the switch off, and waiting applications stay reviewable. Switching on validates the channel that will take applications, including a stored legacy one. The unset options are `unset_channel`, `unset_role` and `unset_rank`. |
-| D9 | Restoring PigeonMuffin with `/officer grant` would leave a manual override; no command removed one. | "Have a third option that removes any override and goes back to membership/rank logic." | `/officer reset` removes the officer override; like grant and revoke, it needs a manager whose highest role is above the Officer role (the server owner is exempt). `/guest reset` lifts the revocation and ends every active grant of any provenance, and ended grants stay as history, which grandfathering still counts. 19 roots / 43 paths. |
+| D9 | Restoring the officer tester with `/officer grant` would leave a manual override; no command removed one. | "Have a third option that removes any override and goes back to membership/rank logic." | `/officer reset` removes the officer override; like grant and revoke, it needs a manager whose highest role is above the Officer role (the server owner is exempt). `/guest reset` lifts the revocation and ends every active grant of any provenance, and ended grants stay as history, which grandfathering still counts. 19 roots / 43 paths. |
 
 Before the 2.15.0 PR, an adversarial review of the change set found gaps in the D2, D3 and D6–D9 fixes; commit `07af9d8` closes them, and the 2.15.0 column above describes the fixed behavior ([VERIFICATION.md](VERIFICATION.md#automated-suites) lists the findings). The 2.15.0 session checks three of them live: the `/config officer_rank` repeat, a deleted stored review channel refusing `enabled:true`, and `/officer reset` by a manager below the Officer role.
 
@@ -271,8 +272,8 @@ The owner ran the plan's first steps from 14:22 to 14:25 UTC, and at 18:00 UTC m
   - receipts: `1552687049499480166`, `1552687107355582597`, `1552687173789024310`;
   - posts in #dev: `1552687059909746699`, `1552687116843094148`, `1552687191090659472`.
   - The receipt footers show the FC tag once.
-- **D9.** `/officer reset member:PigeonMuffin` (`1552687267439444039`) replied "Officer override removed", audited as `officer.reset` with `previous: granted`.
-  - It removed the manual grant from the 2.14.0 session (`officer.grant`, 05:06:23 UTC, "Pity."). Earlier notes said PigeonMuffin was still revoked; that was wrong, because the grant had restored him.
+- **D9.** `/officer reset` for the officer tester (`1552687267439444039`) replied "Officer override removed", audited as `officer.reset` with `previous: granted`.
+  - It removed the manual grant from the 2.14.0 session (`officer.grant`, 05:06:23 UTC, "Pity."). Earlier notes said the officer tester was still revoked; that was wrong, because the grant had restored their access.
   - He now has no override and is an officer by rank. Its `reconcile.user` and `channels.access` jobs succeeded.
 - **Routine roster read.** The 17:31 UTC roster read accepted 105 members with no departures and posted the plain-text roster notice (`1552734198656143421`). Officer notices stay plain text until 2.17.0 (OPS-11).
 - **Logs.** From 13:02 to 18:00 UTC there were no warn or error log lines (595 info lines), and every job succeeded.
@@ -338,7 +339,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - The backup `~/tarubot-cutover/work/backups/before-2.17.0.dump` is 271,248 bytes, sha256 `a6ee39060ef8951a04bb1e5e6a33fbf07f407daf18eaae285ad3022221bb88fc`, with 26 tables of data. It is kept off Linode.
   - `migrate.js` in the new image applied 007. Its restore point is 00:34:35.012502 UTC.
   - The bot was healthy at 00:34:50, about 31 s of downtime. Readiness was 200, with one lease holder at head 007 and info log lines only; the storm's warnings were gone.
-- **The storm's characters:** 13746792 and 51218446 completed as `{status: "private"}`, their next checks paced a day out. 35999242 had no active link: an officer had already run `/unassign` at 2026-09-24 22:56:10 UTC ("Deleted from the Lodestone."), so the automatic two-404 unlink had nothing to do there. The PostgreSQL tests cover it.
+- **The storm's characters:** the two private profiles completed as `{status: "private"}`, their next checks paced a day out. The character deleted from the Lodestone had no active link: an officer had already run `/unassign` at 2026-09-24 22:56:10 UTC ("Deleted from the Lodestone."), so the automatic two-404 unlink had nothing to do there. The PostgreSQL tests cover it.
 
 ### 2.18.0 rollout — 2026-09-25
 
@@ -421,7 +422,8 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 
 - **DevBot:** 619 jobs, all succeeded. The writer stopped at 20:10:01 UTC with no lease holders, head 008. The backup `.cache/backups/tarubot_dev-before-2.24.3-ef0893b.dump` is 135,241 bytes (mode 600), sha256 `2f62ca6673d9b4d0f44243d6caf5c2dcf2102961216d93d460ebc363bbae09d6`; 2.24.3's `check-restore.js` verified the restore at 008 and the copy was dropped. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.24.3` at 20:10:15, healthy at 20:10:31; readiness 200 with the writer lease held, and no warning or error at startup.
 - **Production:** the host clone pulled `ef0893b`, then `TARUBOT_IMAGE_TAG=2.24.3` (the `.env` stays mode 600), pull, and `up -d --wait --remove-orphans` at 20:10:57, healthy at 20:11:03 on the same image digest. Readiness 200 with the writer lease held, `publicTestResponses` false and effects on; the heartbeat URL is set; no warning or error at startup; the backup crontab line is present.
-- **Not run:** the DevBot `/refresh force:true` check (it writes to Discord) and the read-only `commands.js list` (nothing was registered). The production check after the next scheduled roster read (no new `officer:<guild>` row, nothing in the officer channel) is still to record.
+- **Not run:** the DevBot `/refresh force:true` check (it writes to Discord) and the read-only `commands.js list` (nothing was registered).
+- **Production check, 2026-09-26: passed.** A read-only query found the linked FC's last successful roster read at 12:40:45 UTC with no error, 3 roster jobs since this deploy, and no `officer.notify` job since, so no roster notice and nothing in the production officer channel ([VERIFICATION.md](VERIFICATION.md)).
 - **During an outage.** The new degraded key has no history, so a deploy during a Lodestone outage can post one more degraded notice, and later its recovery line.
 - **Rollback** is re-pinning 2.24.2: rows queued under the new keys keep the `{message}` payload, which 2.24.2 posts.
 - There is no safe way to break the Lodestone on purpose, so the PostgreSQL tests cover the degraded and recovery notices ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
@@ -480,15 +482,33 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 
 2.29.1 (the Claude review for the agent's pull requests, [PR #40](https://github.com/deconfined/tarubot/pull/40)) and 2.29.2 (generic production host references, [PR #42](https://github.com/deconfined/tarubot/pull/42), `4f3b377`) change CI, tooling and documentation only; DevBot and production stay on 2.29.0. PR #42, opened by `tarubot-agent[bot]`, confirmed 2.29.1 live: its Claude review (run 36217057772) started by itself and posted ([VERIFICATION.md](VERIFICATION.md)).
 
-### 2.30.0 — planned rollout (production deploys over SSH)
+### 2.30.0 rollout — 2026-09-26
 
-2.30.0 (issue #41) adds the Deploy production workflow and `ops/deploy.sh`, with no bot change, no migration and no command change. Each remaining step waits for the owner.
+2.30.0 (issue #41, [PR #44](https://github.com/deconfined/tarubot/pull/44), `853c4f3`) adds the Deploy production workflow and `ops/deploy.sh`, with no bot change, no migration and no command change. @deconfined merged PR #44 at 12:29 UTC and gave the go-ahead for the hand deploys ("Go for it."). Publish run 36242066698 published `tarubot:2.30.0` (`sha256:d4f9a9e78a9d804e5af19d10bb0e91cbd52e8c2429fee6925f322c0c60548c64`, revision `853c4f3`), and CodeQL on `main` passed. The "Deploy production" run after the publish stopped at the `DEPLOY_ENABLED` gate, still unset, so both deploys were by hand, then the first automated run followed.
 
-- **DevBot:** nothing to deploy. GitHub's runners can't reach the dev VM, so DevBot stays manual, and 2.30.0 changes no running code. Deploy it to DevBot only with the next release that does.
-- **Done before the merge (owner, 2026-09-26):** the `production` environment (reviewer `deconfined` only, self-review allowed, no admin bypass, `main` only) and `notify` (`main` only), which a read-only run of the plan's gate accepts; the `DEPLOY_SSH_KEY` secret and the `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS` variables; both Pushover secrets; the firewall; and the agent guards. `DEPLOY_ENABLED` stays unset, so the first "Deploy production" run after the merge does nothing.
-- **Production, by hand once:** the restart procedure (`git pull --ff-only`, the pin, `pull`, `up -d --wait --remove-orphans`) puts `ops/deploy.sh` on the host at 2.30.0, its floor. No registration is needed: the commands are unchanged.
-- **Then the rest of the owner's setup** ([HOSTING.md](HOSTING.md#setting-it-up-owner) steps 3, 5, 6 and 12): `jq` and the `KillUserProcesses` check; the deploy key's restricted line in `~tarubot/.ssh/authorized_keys` (the forced command `/opt/tarubot/tarubot/ops/deploy.sh`) and the probes, with a new key if step 4's private half is gone; `DEPLOY_ENABLED=true`.
-- **First run:** Deploy production with `version=2.30.0`, approved by the owner: expect `already-live`, no restart, `commands=registered` with a clean read-back, and one Pushover message. Record the run here and in VERIFICATION.md.
+- **Done before the merge (owner, 2026-09-26):** the `production` environment (reviewer `deconfined` only, self-review allowed, no admin bypass, `main` only) and `notify` (`main` only); the `DEPLOY_SSH_KEY` secret and the `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS` variables; the deploy key's restricted line in `~tarubot/.ssh/authorized_keys`; both Pushover secrets; the firewall; and the agent guards.
+- **Host prerequisites** (read-only, before the deploy): `jq` installed (`/usr/bin/jq`); logind's `KillUserProcesses` at its default (`no`), and no lingering; the host clone on `main` with no tracked changes.
+- **DevBot:** 721 jobs, all succeeded. The writer stopped at 12:36:09 UTC with no lease holders, head 010. The backup `.cache/backups/tarubot_dev-before-2.30.0-853c4f3.dump` is 144,899 bytes (mode 600), sha256 `0b59428f6688a8e8a5c6028b0a4c499932a2b51310fce00e046f9351c88065eb`; 2.30.0's `check-restore.js` verified the restore at 010 and the copy was dropped. No migration.
+  - With `TARUBOT_IMAGE_TAG=2.30.0`, `up` at 12:36:18, healthy at 12:36:35 on image digest `d4f9a9e7…`. Readiness 200 with the writer lease held; no warning or error; "Modules loaded" (21 commands, 7 components, 15 events) and "Database writer lease acquired" at info, the two lines `ops/deploy.sh` judges.
+  - The startup repair pass (`channels.access`, `reconcile.guild`, `roles.layout` and 8 `reconcile.user` jobs) succeeded.
+  - `commands.js list` was clean (global 0, production guild 0, test guild 21). No registration: the commands are unchanged.
+- **Production, by hand:** the host clone pulled `853c4f3`, which put `ops/deploy.sh` on the host (`bash -n` clean; mode 775, because a pull by hand follows the host user's umask of 0002; deploys write under `umask 077`, see HOSTING.md "File modes"). Then `TARUBOT_IMAGE_TAG=2.30.0` (the `.env` stays mode 600), pull (`d4f9a9e7…`), and `up -d --wait --remove-orphans tarubot` at 12:37:33, healthy at 12:37:39.
+  - Readiness 200 with the writer lease held, effects on and `publicTestResponses` false, and the Lodestone idle with the bundled selectors current. No warning or error; both judged log messages at info; the backup crontab line is present. No migration and no registration.
+  - The operator clone moved to `853c4f3` and was rebuilt; `commands.js list` was clean (global 21, the old guild scope 0), exit 0.
+- **First automated run** (dispatched and approved by @deconfined):
+  - Run 36242804814 (12:43 UTC) was skipped: `DEPLOY_ENABLED` had been created as a variable of the `production` environment, which the environment-less plan job can't see. @deconfined moved it to a repository variable. An environment copy would also override the repository variable inside the deploy job, which runs in `production`, and defeat the pause ([HOSTING.md](HOSTING.md#setting-it-up-owner) step 12).
+  - Run 36242986952 (12:46:33 UTC): the plan succeeded, the deploy waited for @deconfined's approval, and the host's result was `outcome=already-live`, `commands=registered`, with no restart (the container still started at 12:37:33 UTC) and no warning or error afterwards. Notify sent one Pushover message, "2.30.0 is live and verified; commands registered" (priority -1). The operator read-back was clean (global 21, the old guild scope 0).
+- **Deploy key probe** (@deconfined, 12:58–13:05 UTC): no command, `id`, scp and sftp, `-W localhost:22` and a `-L` forward to the Docker socket were all refused, and the host's `entry.log` recorded each request. A control with an unrestricted key got Docker's `OK` through the same socket forward. The socket forward's refusal reads "connect failed", not "administratively prohibited" as HOSTING.md step 6 expected; 2.30.1 corrects the step ([VERIFICATION.md](VERIFICATION.md)).
+- **Update post:** none was due: 2.30.0 has no member note.
+
+### Channel obfuscation test toggle — 2026-09-26
+
+Discord makes Private Channel Obfuscation mandatory on 2026-11-16; [#47](https://github.com/deconfined/tarubot/issues/47) (2.30.2) prepares TaruBot for it.
+
+- **Toggle:** the "Private Channel Obfuscation" setting in DevBot's Developer Portal is on, for testing. It is DevBot's alone; the production application is unchanged.
+- **Restart:** DevBot restarted at 13:34:49 UTC and was healthy at 13:35:06.
+- **Gateway:** DevBot's gateway view now shows the hidden community updates channel and its category obfuscated, with one fake permission overwrite and the parent kept. REST reads are unchanged until 2026-11-16.
+- **Onboarding pass:** unaffected, because it excludes the community updates channel by its ID, not by what the channel shows.
 
 ### Remaining unverified-visitor form checks (on hold until after launch)
 

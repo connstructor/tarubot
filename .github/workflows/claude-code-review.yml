@@ -73,9 +73,28 @@ jobs:
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          # The plugin grants its own `gh` commands; allowing the inline-comment tool is what makes
-          # the action start that MCP server.
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # The tools the review may use without asking (2.30.1). No one can answer a prompt here,
+          # so anything else is denied: the 2.15.0 review, with only the inline-comment tool listed,
+          # recorded 55 Bash and 3 Write denials. The plugin grants its own `gh` commands, including
+          # the comment it posts, but a rule here also covers its subagents. Allowing the
+          # inline-comment tool is what makes the action start that MCP server. The rest only
+          # reads: files, git history, the pull request and issues, and the readers a pipe needs.
+          # Nothing here writes: no Write or Edit, no `gh api` (it can post), and no `find` rule
+          # (Claude Code already runs its read-only forms, and Glob finds files). The deny rule
+          # stops git's `--output=<file>`. An output redirect needs an Edit rule, so it stays
+          # denied. `:*` also matches the bare command. The action reads every quoted value after
+          # a flag, up to the next flag, as one rule. The next step prints the denial counts.
+          claude_args: >-
+            --allowedTools
+            "mcp__github_inline_comment__create_inline_comment"
+            "Read" "Grep" "Glob"
+            "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)"
+            "Bash(git blame:*)"
+            "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh pr checks:*)" "Bash(gh pr list:*)"
+            "Bash(gh issue view:*)" "Bash(gh issue list:*)" "Bash(gh search:*)"
+            "Bash(ls:*)" "Bash(cat:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(grep:*)"
+            --disallowedTools
+            "Bash(git *--output*)"
           # The full transcript, tool results included, prints only when debug logging is on (a
           # re-run with debug logging, or the ACTIONS_STEP_DEBUG secret or variable, which must
           # never be set repository-wide), because this repository's Actions logs are public. The

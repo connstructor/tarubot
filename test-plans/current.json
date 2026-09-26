@@ -1,19 +1,18 @@
 {
-  "title": "Session: 2.30.0 approved production deploys over SSH",
-  "objective": "2.30.0 adds the Deploy production workflow and ops/deploy.sh: production deploys run from GitHub after the owner approves them, over one restricted SSH key. The bot is unchanged: no migration, no command change. Deploys stay off until DEPLOY_ENABLED is set.",
+  "title": "Session: 2.30.1 cleanup patch",
+  "objective": "2.30.1 (#48) catches up records and deploy docs after 2.30.0, marks the agent rule confirmed, drops the DigitalOcean tool-guard paths, gives the Claude review a read-only tool list, pins deploy.sh's umask 077 with tests, and re-slots the public roadmap (v3 stabilization and web baseline, v4 member web app). No bot behavior change, no migration.",
   "user": [
-    "Done 2026-09-26: the production and notify environments, the deploy key secret, DEPLOY_HOST, DEPLOY_KNOWN_HOSTS, Pushover, the firewall and the agent guards.",
-    "Before the merge: confirm the agent-rule clauses listed in the PR, and decide on signed build provenance (docs/CI_CD.md).",
-    "After the merge: deploy 2.30.0 by hand (a restart), install jq, add the key's restricted authorized_keys line and run the probes, then set DEPLOY_ENABLED=true.",
-    "First run: dispatch Deploy production with version=2.30.0 and approve it; expect already live, commands registered and one Pushover message.",
-    "Still open from 2.29.0: /officer revoke, then /officer reset on a rank officer, each gives one 'Member status changes' post; /guest grant, revoke and reset on a visitor with no linked character posts nothing."
+    "Approve the 2.30.1 Deploy production run; expect deployed (a restart) and one Pushover message.",
+    "Owed from earlier releases, run or waive: 2.25.0 changelog checks, 2.28.0 /suggest checks, 2.29.0 status posts (/officer revoke and reset; /guest grant, revoke and reset).",
+    "Check the docs site's search, 404 page and edit links; confirm Public Bot is off and both apps' portal settings match the docs.",
+    "Optional on the host: chmod -R go-w ~/tarubot once."
   ],
   "assistant": [
-    "Prepare the owner's setup commands (docs/HOSTING.md, Automated deploys); follow the agent rule in AGENTS.md: never approve, reject, cancel or re-run a deployment, and never hold the deploy key.",
-    "Record the first automated runs in docs/VERIFICATION.md."
+    "Update DevBot to 2.30.1 with the owner's go-ahead (no migration) and read back the commands.",
+    "Record the 2.30.1 run in docs/VERIFICATION.md; follow the agent rule: never approve, reject, cancel or re-run a deployment."
   ],
   "bot": [
-    "Keep running 2.29.0 on schema 010 until the owner deploys 2.30.0; it changes no running code.",
+    "Run 2.30.1 on schema 010; nothing changes for members.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

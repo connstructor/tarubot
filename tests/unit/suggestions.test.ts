@@ -309,7 +309,7 @@ describe("the hostile review's bypasses", () => {
     ])
       gone(form);
     // A scheme word on its own, or at the end of another word, stays.
-    for (const phrase of ["https: is better than http: for sure", "my profile:Kaanidog, news:none"])
+    for (const phrase of ["https: is better than http: for sure", "my profile:Wren, news:none"])
       stays(phrase);
   });
 
@@ -414,7 +414,7 @@ describe("the hostile review's bypasses", () => {
       expect(cleaned(`mail ${address} soon`)).toBe("mail [email removed] soon");
     // A name at a world (FFXIV's Name@World) has no dot and stays, like a look-alike dot (U+A4F8).
     for (const [raw, expected] of [
-      ["find Kaani Dog@Cactuar soon", "find Kaani Dog＠Cactuar soon"],
+      ["find Juniper Fox@Cactuar soon", "find Juniper Fox＠Cactuar soon"],
       ["mail john@example\u{A4F8}com soon", "mail john＠example\u{A4F8}com soon"],
     ])
       expect(cleaned(raw ?? "")).toBe(expected ?? "");

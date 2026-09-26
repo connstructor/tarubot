@@ -296,7 +296,7 @@ describe("/verify", () => {
   });
 
   test("a re-link with no main becomes the main and keeps the sync setting (2026-09-24)", () => {
-    // PigeonMuffin in the 2.14.0 session: an officer assignment removed, then a verified re-link
+    // The officer tester in the 2.14.0 session: an officer assignment removed, then a verified re-link
     // left one active link and no main while the reply said "Unchanged".
     const relink = { ...R.verified, primary: true, firstLink: false };
     const on = onlyEmbed(verifyReply({ ...relink, nicknameSync: true }, VIEWERS.member));
@@ -937,7 +937,7 @@ describe("character failures", () => {
   test("a typed name in /assign member: is 'Check your input', never a raw error", () => {
     let error: unknown;
     try {
-      userId("Pazzberry");
+      userId("Wrenfield");
     } catch (caught) {
       error = caught;
     }

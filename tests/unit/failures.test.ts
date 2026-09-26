@@ -219,7 +219,7 @@ describe("classifyFailure shape", () => {
 
   test("malformed user IDs classify as input, so the reply asks the user to check it", () => {
     // DevBot 2.12.3: /assign member:<typed name> surfaced as a raw SyntaxError before 2.13.0.
-    for (const input of ["Pazzberry", "@Pazzberry", "12 34", "<@123>"]) {
+    for (const input of ["Wrenfield", "@Wrenfield", "12 34", "<@123>"]) {
       let caught: unknown;
       try {
         id(input);

@@ -789,7 +789,7 @@ describe("resolved inconsistencies", () => {
 
   test("22. member options suggest members and still take an ID or mention (2026-09-24)", () => {
     // The owner's decision replaced the free-text wording: every member option autocompletes.
-    const error = thrown(() => userId("Pazzberry"));
+    const error = thrown(() => userId("Wrenfield"));
     expect(error).toBeInstanceOf(Failure);
     const text = JSON.stringify(render(error, "officer", "/assign"));
     expect(text).toContain(
