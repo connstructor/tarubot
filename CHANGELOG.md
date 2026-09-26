@@ -1,6 +1,28 @@
 # Version history
 
-The current application version is **2.30.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.30.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.30.2 — Keep onboarding correct under Discord's channel obfuscation
+
+Issue [#47](https://github.com/deconfined/tarubot/issues/47). From 2026-11-16, Discord hides channels a bot can't view: `GET /guilds/{id}/channels` leaves them out, and the gateway sends them as `___hidden___`, flagged `CHANNEL_OBFUSCATED`, with a single fake @everyone deny. Only the id, type, position and parent_id are real. Without a fix, onboarding would have blocked from that date on servers where TaruBot can't see the Community Updates channel or its category, and elsewhere a managed channel TaruBot can't see would have silently dropped out of the pass. @deconfined decided on #47 to **fail closed**: refuse, naming the channel and the fix, rather than leave a half-working setup. Production is unaffected, because onboarding is off there.
+
+- **The Community Updates area.** The pass finds it through the gateway cache, which keeps its id and parent. An excluded channel missing from this pass's list counts as unreadable, and the pass then keeps @everyone's View Channel default, the fallback ACCESS-05 already documents. The saved scope and the pre-write check use the same result, so the pass can't loop on `superseded`.
+- **Hidden managed channels fail closed.** A channel in the gateway cache but missing from the list is checked with one `GET /channels/{id}`:
+  - `50001`, an obfuscated answer, or one that denies TaruBot View Channel: the pass refuses with the existing "TaruBot needs View Channel…" fix, naming `<#id>`;
+  - `10003`: the channel is deleted and ignored, unless the gateway cache still holds it obfuscated, or denying TaruBot View Channel (a slash-command channel option clears the flag but keeps the fake deny), in which case the pass refuses the same way;
+  - a full `200`: the channel was created mid-pass and is skipped.
+
+  A server where nothing is hidden makes no extra requests. `/setup` refuses a hidden saved room instead of creating a second one, and recreates only a saved room Discord confirms deleted.
+- **No writes from placeholder data.** Overwrites are copied from the forced read before any other wait, and a channel that is obfuscated, or wasn't readable in this pass, is never written. A guild the gateway hasn't delivered yet makes the pass retry, instead of deciding from an empty cache.
+- **Smaller fixes.**
+  - In a channel TaruBot can't view (the interaction's permissions lack View Channel, or the cached entry is obfuscated), `/channel` shows only the ID and the unavailable card ("TaruBot can't see this channel's details"), instead of `___hidden___` or a real name over fake permissions.
+  - Channel validation (`/config` and `/setup` destinations, guest applications, posts) treats a `10003` for a text channel the gateway still holds obfuscated, or denying TaruBot View Channel, as the permissions refusal with its fix rather than "unavailable".
+  - `discord-inspect.js` now asks Discord about each destination the channel list left out and reports it as `hidden_or_other_server` (50001), `deleted` (10003), `other_server` or `unchecked`, instead of only `exists: false`.
+  - A shared helper, `src/discord/obfuscation.ts`, reads the flag, the error codes and whether a cached entry looks hidden.
+- **Tests.** The access fixture models the post-2026-11-16 Discord by default, alongside "off" and the Developer Portal's gateway-only test toggle. It includes hidden answers of every kind, a guild the gateway hasn't delivered yet, slash-command options that patch cached entries, and hooks that inject failures.
+  - Channel-access tests cover a hidden updates area, hidden managed channels and saved rooms (also when Discord answers `10003` for an entry a channel option un-flagged), deleted and mid-pass channels, the request budget in both modes, and every new guard; ten mutations of the guards each fail a test. Channel-validation tests cover a `10003` for a cached hidden text channel and for a deleted one.
+  - An integration test runs whole reconciliations against PostgreSQL.
+- **Docs.** The site's setup, "Add TaruBot to a server", command reference and "Progress and problems" pages, REQUIREMENTS ACCESS-01 and ACCESS-05, CLAUDE.md and MODULES.md, and the records now describe the behavior. They include the DevBot checks for the date: DevBot keeps the obfuscation test toggle on until then.
 
 ## 2.30.1 — Cleanup after automated deploys
 

@@ -111,17 +111,21 @@ The server owner and Administrator bypass channel restrictions, as always in Dis
 
 TaruBot becomes the authority for **View Channel** in managed channels: competing allows and denies, including custom-role and individual-member exceptions, are brought back in line. Other permission bits stay as they are, apart from the chat and command permissions the lobby and staff rooms need and TaruBot's own delivery permissions. Give bots and integrations the access roles they need.
 
-@everyone loses the server-wide View Channel default only when that can't change an excluded area (below): each excluded channel or category must have its own explicit @everyone allow or deny. Otherwise the default stays, and TaruBot enforces onboarding through each managed channel's overwrites instead. A new channel may then be visible briefly, until TaruBot processes its creation. Channel events also repair public overwrites that an admin adds later.
+@everyone loses the server-wide View Channel default only when that can't change an excluded area (below): each excluded channel or category must have its own explicit @everyone allow or deny, which TaruBot checks in the channel list Discord gives it. Otherwise the default stays as it is, and TaruBot enforces onboarding through each managed channel's overwrites instead. A new channel may then be visible briefly, until TaruBot processes its creation. Channel events also repair public overwrites that an admin adds later.
 
 ### Permissions TaruBot checks first
 
 TaruBot needs server-level Manage Channels and Manage Roles and its own View Channel, plus View Channel, Manage Channels and Manage Roles in each existing managed channel. It checks these before it changes anything. It sets up the lobby's visibility before changing any default, and categories before the channels in them. After a pass it verifies the result. If a pass fails partway, the work and the original permissions stay recorded, so a retry picks up safely.
+
+A channel onboarding should manage that TaruBot can't see stops the pass before anything changes, and `/sync status` names the channel with the fix: TaruBot needs View Channel, Manage Channels and Manage Roles there. TaruBot won't secure the rest and leave that channel unmanaged, because members could then see too much or too little in it. `/setup` stops the same way at a saved lobby or officer room TaruBot can't see, instead of creating a second one. From 16 November 2026 Discord hides such a channel from the bot: it is left out of the channel list the bot reads, and the bot sees only a placeholder name and placeholder permissions for it. TaruBot never works from those placeholders, and still stops at the channel as described.
 
 Creating, changing or deleting a channel queues a repair of channel access. Startup, the bot rejoining, role changes, configuration changes and `/refresh` do too. [`/sync status`](/tarubot/reference/commands/#sync-status) shows the work, or a blocked permission. Run `/setup` again to repair missing bindings, and `/refresh` after fixing permissions in Discord.
 
 ### Community resources outside onboarding
 
 Discord's configured **community-updates channel** and its category are excluded. They are never chosen as the lobby or officer room, TaruBot doesn't need to see them, and onboarding never changes their permissions or position. Protecting the category also keeps its permission sync from changing the channel. They keep whatever policy you set.
+
+From 16 November 2026, if TaruBot can't see them, Discord leaves them out of the channel list TaruBot reads, so TaruBot can't read their permissions either. It then leaves the server's @everyone View Channel default as it is and gates each managed channel through its own overwrites ([above](#channel-visibility)). To let TaruBot remove the default, give its role View Channel in the community-updates channel and its category, and give each of them an explicit @everyone View Channel allow or deny.
 
 If the community-updates setting changes, TaruBot rechecks at once. If a saved lobby or officer room becomes the community-updates channel, run `/setup` with a different room.
 

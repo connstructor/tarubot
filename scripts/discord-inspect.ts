@@ -26,6 +26,9 @@ import {
   type ManagedRoleTarget,
   memberIntent,
   targetReport,
+  type UnlistedState,
+  unlistedState,
+  unlistedTargets,
 } from "../src/discord/inspection.js";
 import { readDump } from "../src/import/dump.js";
 import { id, idSchema, json } from "../src/domain/values.js";
@@ -41,6 +44,27 @@ async function request(token: string, path: string): Promise<{ status: number; b
     signal: AbortSignal.timeout(15000),
   });
   return { status: response.status, body: response.ok ? await response.json() : null };
+}
+/**
+ * GET /channels/{id} for a destination the guild's channel list left out. Only Discord's JSON
+ * error code and the channel's server are kept, never the raw body: from 2026-11-16 the list omits
+ * channels TaruBot can't view (#47), and 50001 (hidden, or another server's) versus 10003
+ * (deleted) tells them apart.
+ */
+async function probeChannel(token: string, channelId: string) {
+  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}`, {
+    method: "GET",
+    headers: { authorization: `Bot ${token}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = z
+    .object({ code: z.number().optional(), guild_id: idSchema.optional() })
+    .safeParse(await response.json().catch(() => null));
+  return {
+    ok: response.ok,
+    code: body.success ? body.data.code : undefined,
+    guildId: body.success ? (body.data.guild_id ?? null) : null,
+  };
 }
 async function get(token: string, path: string): Promise<unknown> {
   const { status, body } = await request(token, path);
@@ -233,6 +257,12 @@ async function production(): Promise<void> {
   const member = z
     .object({ roles: z.array(idSchema) })
     .parse(await call(`/guilds/${args.guild}/members/${self.id}`));
+  // A destination the list left out may be hidden or deleted; ask Discord, one GET each.
+  const unlisted: Record<string, UnlistedState> = {};
+  for (const channelId of unlistedTargets(channelTargets, channels)) {
+    const state = unlistedState(await probeChannel(token.data, channelId), args.guild);
+    if (state) unlisted[channelId] = state;
+  }
   // Functional probe of the Server Members intent: listing members needs it.
   const probe = await request(token.data, `/guilds/${args.guild}/members?limit=1`);
   if (probe.status !== 200 && probe.status !== 403)
@@ -265,6 +295,7 @@ async function production(): Promise<void> {
             bot: { id: self.id, roles: member.roles },
             managedRoles,
             channelTargets,
+            unlisted,
           }),
         },
         commands: "Read back global and guild command scopes with dist/scripts/commands.js list.",

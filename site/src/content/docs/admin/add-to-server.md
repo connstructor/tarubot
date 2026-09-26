@@ -47,9 +47,9 @@ Discord only lets a bot manage roles below its own highest role, and nicknames o
 
 1. In **Server Settings → Roles**, drag TaruBot's role above the four roles it will manage, and above the members whose nicknames it will manage.
 2. The access roles (Member, Guest, Officer, FC Leader) must be distinct, ordinary roles without Administrator, Manage Server or Manage Roles. With onboarding on, they must not have Manage Channels either.
-3. Give TaruBot's role View Channel, and make sure it can see and manage every channel onboarding will secure.
+3. Give TaruBot's role View Channel, and make sure it can see and manage every channel onboarding will secure. Onboarding stops at a channel TaruBot can't see, naming it, until TaruBot can see and manage it.
 
-Discord's configured community-updates channel and its category are left out of onboarding and its permission checks.
+Discord's configured community-updates channel and its category are left out of onboarding and its permission checks, so TaruBot doesn't need to see them. From 16 November 2026, if it can't, it leaves the server's @everyone View Channel default as it is; see [Community resources outside onboarding](/tarubot/admin/setup/#community-resources-outside-onboarding).
 
 TaruBot can't change the server owner's nickname: Discord doesn't allow any bot to.
 

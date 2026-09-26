@@ -3026,41 +3026,132 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
 
   test("large-guild reconciliation uses two catalogues and reads only changed targets", async () => {
     // Exercise the real application loop, SDK adapter, and database together; count REST endpoints.
+    // The budget is the same before 2026-11-16 ("off": REST lists the hidden community area) and
+    // after it ("enforced": REST leaves it out and it is never read one by one), #47.
+    for (const obfuscation of ["off", "enforced"] as const) {
+      const fixture = discordAccessFixture();
+      fixture.discord.obfuscation = obfuscation;
+      try {
+        const everyone = fixture.roles.find((role) => role.id === "100");
+        if (!everyone) throw new Error("Missing everyone role");
+        everyone.permissions = String(BigInt(everyone.permissions) & ~P.ViewChannel);
+        const closed = [
+          { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+        ];
+        const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
+        const updates = fixture.add(
+          "community-updates",
+          ChannelType.GuildText,
+          structuredClone(closed),
+          parent.id,
+        );
+        fixture.community.updatesChannelId = updates.id;
+        const lobby = fixture.add(
+          "lobby",
+          ChannelType.GuildText,
+          channelAccessOverwrites([], "100", "900", fixture.bindings, "lobby"),
+        );
+        const officers = fixture.add(
+          "officer-chat",
+          ChannelType.GuildText,
+          channelAccessOverwrites([], "100", "900", fixture.bindings, "officers"),
+        );
+        const ordinary = Array.from({ length: 80 }, (_, index) =>
+          fixture.add(
+            `room-${index}`,
+            ChannelType.GuildText,
+            channelAccessOverwrites([], "100", "900", fixture.bindings, "members"),
+          ),
+        );
+        // Each mode starts from the same guild row and no remembered policies.
+        const binding = {
+          effects_enabled: true,
+          access_policy_enabled: true,
+          lobby_channel_id: lobby.id,
+          officer_channel_id: officers.id,
+          member_role_id: fixture.bindings.member,
+          guest_role_id: fixture.bindings.guest,
+          officer_role_id: fixture.bindings.officer,
+          leader_role_id: fixture.bindings.leader,
+          access_everyone_before: everyone.permissions,
+        };
+        await db.orm
+          .insert(t.guilds)
+          .values({ id: "100", ...binding })
+          .onConflictDoUpdate({
+            target: t.guilds.id,
+            set: { ...binding, revision: sql`${t.guilds.revision}+1` },
+          });
+        await db.orm
+          .delete(t.channelAccessPolicies)
+          .where(eq(t.channelAccessPolicies.guild_id, "100"));
+        const policy = new GuildAccess(service, fixture.port);
+        expect({
+          obfuscation,
+          result: await policy.reconcile("100", async () => {}),
+        }).toMatchObject({
+          obfuscation,
+          result: {
+            status: "secured",
+            channels: 82,
+            changed: [],
+            defaultChanged: false,
+          },
+        });
+        expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
+        expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toHaveLength(0);
+        expect(fixture.writes).toEqual([]);
+        fixture.reads.length = 0;
+        const changed = ordinary[0];
+        if (!changed) throw new Error("Missing drift target");
+        changed.permission_overwrites = [];
+        expect(await policy.reconcile("100", async () => {})).toMatchObject({
+          status: "secured",
+          changed: [changed.id],
+        });
+        expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
+        expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toEqual([
+          `/channels/${changed.id}`,
+          `/channels/${changed.id}`,
+        ]);
+        expect(fixture.writes).toEqual([`/channels/${changed.id}`]);
+        expect([parent.permission_overwrites, updates.permission_overwrites]).toEqual([
+          closed,
+          closed,
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    }
+  });
+
+  test("a whole reconcile under channel obfuscation secures around a hidden updates area and refuses a hidden managed channel (#47)", async () => {
+    // Discord from 2026-11-16 (the fixture's default): REST leaves out channels the bot can't
+    // view, and the gateway cache holds them obfuscated. Guild 100 is shared with the test above,
+    // so its row is upserted and its policies cleared.
     const fixture = discordAccessFixture();
     try {
-      const everyone = fixture.roles.find((role) => role.id === "100");
-      if (!everyone) throw new Error("Missing everyone role");
-      everyone.permissions = String(BigInt(everyone.permissions) & ~P.ViewChannel);
       const closed = [
         { id: "100", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
       ];
       const parent = fixture.add("Admin", ChannelType.GuildCategory, structuredClone(closed));
       const updates = fixture.add(
-        "community-updates",
+        "moderator-only",
         ChannelType.GuildText,
         structuredClone(closed),
         parent.id,
       );
       fixture.community.updatesChannelId = updates.id;
-      const lobby = fixture.add(
-        "lobby",
-        ChannelType.GuildText,
-        channelAccessOverwrites([], "100", "900", fixture.bindings, "lobby"),
-      );
-      const officers = fixture.add(
-        "officer-chat",
-        ChannelType.GuildText,
-        channelAccessOverwrites([], "100", "900", fixture.bindings, "officers"),
-      );
-      const ordinary = Array.from({ length: 80 }, (_, index) =>
-        fixture.add(
-          `room-${index}`,
-          ChannelType.GuildText,
-          channelAccessOverwrites([], "100", "900", fixture.bindings, "members"),
-        ),
-      );
-      await db.orm.insert(t.guilds).values({
-        id: "100",
+      const lobby = fixture.add("lobby");
+      const officers = fixture.add("officer-chat", ChannelType.GuildText, [
+        ...structuredClone(closed),
+        { id: "600", type: OverwriteType.Role, allow: String(P.ViewChannel), deny: "0" },
+      ]);
+      const general = fixture.add("general");
+      expect([fixture.hidden(parent), fixture.hidden(updates)]).toEqual([true, true]);
+      const everyone = fixture.roles.find((role) => role.id === "100")?.permissions;
+      if (!everyone) throw new Error("Missing everyone role");
+      const binding = {
         effects_enabled: true,
         access_policy_enabled: true,
         lobby_channel_id: lobby.id,
@@ -3069,36 +3160,75 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         guest_role_id: fixture.bindings.guest,
         officer_role_id: fixture.bindings.officer,
         leader_role_id: fixture.bindings.leader,
-        access_everyone_before: everyone.permissions,
-      });
+        access_everyone_before: everyone,
+      };
+      await db.orm
+        .insert(t.guilds)
+        .values({ id: "100", ...binding })
+        .onConflictDoUpdate({
+          target: t.guilds.id,
+          set: { ...binding, revision: sql`${t.guilds.revision}+1` },
+        });
+      await db.orm
+        .delete(t.channelAccessPolicies)
+        .where(eq(t.channelAccessPolicies.guild_id, "100"));
       const policy = new GuildAccess(service, fixture.port);
+      // Secured, with the area excluded and the default kept: no superseded retry loop.
       expect(await policy.reconcile("100", async () => {})).toMatchObject({
         status: "secured",
-        channels: 82,
-        changed: [],
+        channels: 3,
         defaultChanged: false,
+        excludedChannels: [parent.id, updates.id].sort(),
+        preservedEveryoneView: true,
       });
-      expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
-      expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toHaveLength(0);
-      expect(fixture.writes).toEqual([]);
-      fixture.reads.length = 0;
-      const changed = ordinary[0];
-      if (!changed) throw new Error("Missing drift target");
-      changed.permission_overwrites = [];
+      expect(
+        BigInt(fixture.roles.find((role) => role.id === "100")?.permissions ?? "0") & P.ViewChannel,
+      ).toBe(P.ViewChannel);
+      const guild = await fixture.client.guilds.fetch("100");
+      const newcomer = await guild.members.fetch("400"),
+        member = await guild.members.fetch("401");
+      const room = await guild.channels.fetch(general.id);
+      expect(room?.permissionsFor(newcomer).has(P.ViewChannel)).toBe(false);
+      expect(room?.permissionsFor(member).has(P.ViewChannel)).toBe(true);
+      const protectedRoutes = [`/channels/${parent.id}`, `/channels/${updates.id}`];
+      expect(fixture.reads.filter((route) => protectedRoutes.includes(route))).toEqual([]);
+      expect(fixture.writes.filter((route) => protectedRoutes.includes(route))).toEqual([]);
+      // A second pass is a no-op.
+      const writes = fixture.writes.length;
       expect(await policy.reconcile("100", async () => {})).toMatchObject({
         status: "secured",
-        changed: [changed.id],
+        changed: [],
+        preservedEveryoneView: true,
       });
-      expect(fixture.reads.filter((route) => route === "/guilds/100/channels")).toHaveLength(2);
+      expect(fixture.writes).toHaveLength(writes);
+      // A channel onboarding should manage but TaruBot can't see blocks the pass, named, with
+      // nothing written: it isn't silently left out.
+      const secret = fixture.add("secret", ChannelType.GuildText, [
+        { id: "600", type: OverwriteType.Role, allow: "0", deny: String(P.ViewChannel) },
+      ]);
+      fixture.reads.length = 0;
+      await expect(policy.reconcile("100", async () => {})).rejects.toMatchObject({
+        code: "blocked",
+        message: `TaruBot needs View Channel, Manage Channels and Manage Roles in <#${secret.id}>.`,
+        detail: {
+          kind: "resource",
+          resource: "channel",
+          id: secret.id,
+          fix: "channel_permissions",
+        },
+      });
       expect(fixture.reads.filter((route) => route.startsWith("/channels/"))).toEqual([
-        `/channels/${changed.id}`,
-        `/channels/${changed.id}`,
+        `/channels/${secret.id}`,
       ]);
-      expect(fixture.writes).toEqual([`/channels/${changed.id}`]);
-      expect([parent.permission_overwrites, updates.permission_overwrites]).toEqual([
-        closed,
-        closed,
-      ]);
+      expect(fixture.writes).toHaveLength(writes);
+      // Once TaruBot can see it again, the next pass manages it.
+      secret.permission_overwrites = [];
+      expect(await policy.reconcile("100", async () => {})).toMatchObject({
+        status: "secured",
+        channels: 4,
+        changed: [secret.id],
+        preservedEveryoneView: true,
+      });
     } finally {
       await fixture.close();
     }

@@ -1,6 +1,14 @@
 /** Guild channel provisioning and visibility writes, with fresh reads and explicit bot access. */
 import { ChannelType, PermissionFlagsBits as P } from "discord.js";
-import type { Client, Guild, GuildMember, Role } from "discord.js";
+import type {
+  Channel,
+  Client,
+  Guild,
+  GuildMember,
+  NonThreadGuildBasedChannel,
+  PermissionOverwriteManager,
+  Role,
+} from "discord.js";
 import {
   channelAccessOverwrites,
   sameOverwrites,
@@ -11,6 +19,7 @@ import {
   type ChannelAudience,
 } from "../domain/channel-access.js";
 import { Failure, normalized } from "../domain/values.js";
+import { cachedAsHidden, isObfuscated, unlistedChannel } from "./obfuscation.js";
 import type {
   GuildAccessPort,
   GuildAccessSession,
@@ -20,9 +29,102 @@ import type {
 /** Immutable identity fences around the Gateway-updated SDK cache for one pass only. */
 interface ReconciliationScope {
   guild: Guild;
+  /** The channels this pass's REST list returned: the only ones TaruBot could read. */
   channelIds: ReadonlySet<string>;
   communityUpdatesId: string | null;
+  /** The updates channel's parent as the gateway cache holds it (kept on obfuscated entries). */
   communityParentId: string | null;
+  /** Excluded channels missing from this pass's REST list, whose real overwrites are unknown. */
+  unreadable: ReadonlySet<string>;
+  /** Stale cache entries Discord confirmed deleted in this pass, so later scope reads skip them. */
+  deleted: ReadonlySet<string>;
+}
+
+/** What channelScope resolved for one REST read of the guild's channels. */
+interface ChannelScope {
+  channels: NonThreadGuildBasedChannel[];
+  excluded: ReadonlySet<string>;
+  communityUpdatesId: string | null;
+  communityParentId: string | null;
+  unreadable: ReadonlySet<string>;
+  /** Cached channels the list left out that Discord confirmed deleted (see refuseHidden). */
+  deleted: ReadonlySet<string>;
+  preserveEveryoneView: boolean;
+}
+
+/**
+ * The gateway hasn't delivered this guild, or has lost it, so its channel cache is no picture of
+ * Discord: a guild first seen through REST has only what the channel list returned, which from
+ * 2026-11-16 leaves out every hidden channel. Retry once the gateway is back rather than decide.
+ */
+function gatewayUnavailable(): Failure {
+  return new Failure(
+    "transient",
+    "Discord scope is unavailable; retry after the gateway reconnects.",
+  );
+}
+
+/**
+ * The refusal for a channel onboarding should manage but TaruBot can't use. Discord hides a
+ * channel TaruBot can't view (from 2026-11-16 it leaves it out of the REST list), so the same
+ * refusal and fix name a hidden channel too: the pass fails closed rather than skip it.
+ */
+function unmanageable(id: string): Failure {
+  return new Failure(
+    "blocked",
+    `TaruBot needs View Channel, Manage Channels and Manage Roles in <#${id}>.`,
+    0,
+    { kind: "resource", resource: "channel", id, fix: "channel_permissions" },
+  );
+}
+
+/**
+ * The gateway cache lacks the Community Updates channel or its category, so scope is unknown.
+ * Discord sends both even when TaruBot can't view them (obfuscated), so seeing them is not the fix.
+ */
+function communityMissing(id: string): Failure {
+  return new Failure(
+    "blocked",
+    "Discord didn't return the Community Updates channel or its category. Check the server's Community settings, then retry.",
+    0,
+    { kind: "resource", resource: "channel", id },
+  );
+}
+
+/**
+ * Plain copies of a channel's cached overwrites. Copy them synchronously after the read they come
+ * from: a gateway update applied during a later await (an obfuscated CHANNEL_UPDATE carries one
+ * synthetic @everyone deny) would otherwise become the base of a plan or a write.
+ */
+function overwritesOf(channel: {
+  readonly permissionOverwrites: PermissionOverwriteManager;
+}): AccessOverwrite[] {
+  return [...channel.permissionOverwrites.cache.values()].map((value) => ({
+    id: value.id,
+    type: value.type,
+    allow: String(value.allow.bitfield),
+    deny: String(value.deny.bitfield),
+  }));
+}
+
+/**
+ * Whether a 200 answer to GET /channels/{id} shows a channel TaruBot can view. Discord answers
+ * 50001 for a hidden channel today and doesn't document its answer from 2026-11-16, so a 200 that
+ * is obfuscated, or whose overwrites deny TaruBot View Channel, counts as hidden too.
+ */
+function viewable(fetched: Channel | null, bot: GuildMember): boolean {
+  if (!fetched || !("guildId" in fetched) || fetched.isThread() || isObfuscated(fetched))
+    return false;
+  return fetched.permissionsFor(bot).has(P.ViewChannel);
+}
+
+/** Without an explicit @everyone View overwrite, changing the guild default changes this area too. */
+function inheritsEveryoneView(
+  channel: { readonly permissionOverwrites: PermissionOverwriteManager },
+  guildId: string,
+): boolean {
+  const everyone = channel.permissionOverwrites.cache.get(guildId);
+  return !everyone || ((everyone.allow.bitfield | everyone.deny.bitfield) & P.ViewChannel) === 0n;
 }
 
 export class DiscordGuildAccess implements GuildAccessPort {
@@ -123,54 +225,126 @@ export class DiscordGuildAccess implements GuildAccessPort {
     };
   }
 
-  /** Exclude configured community resources by ID, including a parent whose edits could propagate. */
-  private async channelScope(guild: Guild) {
-    const channels = [...(await guild.channels.fetch()).values()].filter(
-      (channel) => channel !== null,
-    );
+  /**
+   * Exclude configured community resources by ID, including a parent whose edits could propagate.
+   *
+   * From 2026-11-16 the REST list holds only channels TaruBot can view, so the Community Updates
+   * channel and its category are resolved from the gateway cache, which keeps their id and
+   * parent_id even when it obfuscates them. Absence from this REST list is the authority on what
+   * TaruBot can read: an excluded channel it left out is unreadable, its real overwrites unknown,
+   * so the pass keeps @everyone's View default (ACCESS-05's fallback) and gates each managed
+   * channel through its own overwrites. Only when the cache lacks them too is scope unknown.
+   *
+   * All of this needs the gateway's picture of the guild, so the pass waits for it (transient)
+   * before and after the list. `knownDeleted` carries this pass's confirmed deletions forward.
+   */
+  private async channelScope(
+    guild: Guild,
+    bot: GuildMember,
+    knownDeleted: ReadonlySet<string> = new Set(),
+  ): Promise<ChannelScope> {
+    if (!this.client.isReady() || !guild.available) throw gatewayUnavailable();
+    const listed = await guild.channels.fetch();
+    if (!this.client.isReady() || !guild.available) throw gatewayUnavailable();
+    const channels = [...listed.values()].filter((channel) => channel !== null);
+    const readable = new Set(channels.map((channel) => channel.id));
     const excluded = new Set<string>();
-    if (guild.publicUpdatesChannelId) {
-      const updates = channels.find((channel) => channel.id === guild.publicUpdatesChannelId);
-      if (!updates)
-        throw new Failure(
-          "blocked",
-          "Discord didn't return the Community Updates channel or its category. Check that TaruBot can see them, then retry.",
-          0,
-          { kind: "resource", resource: "channel", id: guild.publicUpdatesChannelId },
-        );
+    const communityUpdatesId = guild.publicUpdatesChannelId ?? null;
+    let communityParentId: string | null = null;
+    if (communityUpdatesId) {
+      const updates = guild.channels.cache.get(communityUpdatesId);
+      if (!updates || updates.isThread()) throw communityMissing(communityUpdatesId);
       excluded.add(updates.id);
-      if (updates.parentId) excluded.add(updates.parentId);
+      communityParentId = updates.parentId;
+      if (updates.parentId) {
+        // Discord dispatches a category whenever it dispatches a child, so a missing one is not
+        // hidden but unknown; currentScope would otherwise call every pass superseded.
+        const parent = guild.channels.cache.get(updates.parentId);
+        if (!parent || parent.isThread()) throw communityMissing(updates.parentId);
+        excluded.add(parent.id);
+      }
     }
+    const unreadable = new Set([...excluded].filter((id) => !readable.has(id)));
     const preserveEveryoneView = [...excluded].some((id) => {
-      const channel = channels.find((channel) => channel.id === id);
-      if (!channel)
-        throw new Failure(
-          "blocked",
-          "Discord didn't return the Community Updates channel or its category. Check that TaruBot can see them, then retry.",
-          0,
-          { kind: "resource", resource: "channel", id },
-        );
-      const everyone = channel.permissionOverwrites.cache.get(guild.id);
-      // Without an explicit everyone View override, changing the guild default changes this area too.
-      return (
-        !everyone || ((everyone.allow.bitfield | everyone.deny.bitfield) & P.ViewChannel) === 0n
-      );
+      const channel = listed.get(id);
+      // Never read an unlisted channel's cached overwrites: an obfuscated entry's are synthetic.
+      return !channel || inheritsEveryoneView(channel, guild.id);
     });
-    return { channels, excluded, preserveEveryoneView };
+    const deleted = await this.refuseHidden(guild, bot, readable, excluded, knownDeleted);
+    return {
+      channels,
+      excluded,
+      communityUpdatesId,
+      communityParentId,
+      unreadable,
+      deleted,
+      preserveEveryoneView,
+    };
+  }
+
+  /**
+   * Fail closed on channels Discord hides from TaruBot (ACCESS-01/02, the owner's decision on #47).
+   * From 2026-11-16 the REST list silently leaves them out, so a channel onboarding should manage
+   * would drop out of the pass while it still reported "secured". Each non-thread, non-excluded
+   * channel only the gateway cache knows is confirmed with GET /channels/{id}:
+   * - 50001 Missing Access: hidden, so the pass refuses, naming it with the permissions fix;
+   * - 200: created (or unhidden) after the list was read, so it is left for the pass its channel
+   *   event queues. A 200 that is obfuscated or denies TaruBot View Channel is hidden instead;
+   * - 10003 Unknown Channel: a deleted channel's stale cache entry, ignored and returned. If the
+   *   gateway still holds a non-thread entry that is obfuscated, or whose cached overwrites deny
+   *   TaruBot View Channel, it is hidden instead (`cachedAsHidden`): a slash-command channel
+   *   option clears the flag but keeps the synthetic @everyone deny, so the flag alone would let
+   *   a hidden channel drop out. A stale entry for a deleted channel TaruBot could view stays
+   *   deleted. A real deletion's CHANNEL_DELETE removes the entry and queues a pass, so a
+   *   refusal of a deleted hidden channel clears itself.
+   * Discord answers 50001 for a hidden channel today and doesn't document the single-channel
+   * answer from 2026-11-16, so the other two are checked for a hidden channel as above. Anything
+   * else is rethrown for the queue to classify. A server with nothing hidden makes no extra
+   * requests, and an ID in `knownDeleted` isn't asked about again.
+   */
+  private async refuseHidden(
+    guild: Guild,
+    bot: GuildMember,
+    readable: ReadonlySet<string>,
+    excluded: ReadonlySet<string>,
+    knownDeleted: ReadonlySet<string>,
+  ): Promise<ReadonlySet<string>> {
+    const deleted = new Set(knownDeleted);
+    const unlisted = [...guild.channels.cache.values()].filter(
+      (channel) =>
+        !channel.isThread() &&
+        !readable.has(channel.id) &&
+        !excluded.has(channel.id) &&
+        !deleted.has(channel.id),
+    );
+    for (const channel of unlisted) {
+      const state = await this.client.channels.fetch(channel.id, { force: true }).then(
+        (fetched) => (viewable(fetched, bot) ? ("visible" as const) : ("hidden" as const)),
+        (error: unknown) => {
+          const answer = unlistedChannel(error);
+          if (!answer) throw error;
+          if (answer !== "deleted") return answer;
+          // Read the cache after the answer: a CHANNEL_DELETE applied meanwhile removed the entry.
+          const cached = guild.channels.cache.get(channel.id);
+          return cached && !cached.isThread() && cachedAsHidden(cached, bot) ? "hidden" : answer;
+        },
+      );
+      if (state === "hidden") throw unmanageable(channel.id);
+      if (state === "deleted") deleted.add(channel.id);
+    }
+    return deleted;
   }
 
   /** Retain only identities; channel objects continue receiving normal Guilds Gateway updates. */
-  private retainScope(
-    guild: Guild,
-    channels: readonly { id: string; parentId: string | null }[],
-  ): ReconciliationScope {
-    const communityUpdatesId = guild.publicUpdatesChannelId ?? null;
+  private retainScope(guild: Guild, scope: ChannelScope): ReconciliationScope {
     return {
       guild,
-      channelIds: new Set(channels.map((channel) => channel.id)),
-      communityUpdatesId,
-      communityParentId:
-        channels.find((channel) => channel.id === communityUpdatesId)?.parentId ?? null,
+      channelIds: new Set(scope.channels.map((channel) => channel.id)),
+      communityUpdatesId: scope.communityUpdatesId,
+      // The same cached parent currentScope compares with, so a hidden area never looks moved.
+      communityParentId: scope.communityParentId,
+      unreadable: scope.unreadable,
+      deleted: scope.deleted,
     };
   }
 
@@ -178,10 +352,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
   private currentScope(scope: ReconciliationScope) {
     const guild = this.client.guilds.cache.get(scope.guild.id);
     if (!this.client.isReady() || guild !== scope.guild || !guild.available)
-      throw new Failure(
-        "transient",
-        "Discord scope is unavailable; retry after the gateway reconnects.",
-      );
+      throw gatewayUnavailable();
     if ((guild.publicUpdatesChannelId ?? null) !== scope.communityUpdatesId)
       throw new Failure("superseded", "The community channel scope changed; retry reconciliation.");
     const excluded = new Set<string>();
@@ -195,20 +366,25 @@ export class DiscordGuildAccess implements GuildAccessPort {
       excluded.add(updates.id);
       if (updates.parentId) excluded.add(updates.parentId);
     }
-    const preserveEveryoneView = [...excluded].some((id) => {
+    // Every protected channel must still be cached before any one of them decides the default.
+    const protectedChannels = [...excluded].map((id) => {
       const channel = guild.channels.cache.get(id);
       if (!channel || channel.isThread())
         throw new Failure(
           "superseded",
           "Protected channel metadata changed; retry reconciliation.",
         );
-      // Obfuscated overwrites are synthetic; they cannot justify lowering a shared default.
-      if (channel.flags.has(1 << 17)) return true;
-      const everyone = channel.permissionOverwrites.cache.get(guild.id);
-      return (
-        !everyone || ((everyone.allow.bitfield | everyone.deny.bitfield) & P.ViewChannel) === 0n
-      );
+      return channel;
     });
+    const preserveEveryoneView = protectedChannels.some(
+      (channel) =>
+        // Unreadable in this pass: its cached overwrites can't justify lowering a shared default,
+        // even when an interaction option has cleared the obfuscated flag and left the synthetic
+        // overwrite behind. The flag is the second signal: an area hidden since the list was read.
+        scope.unreadable.has(channel.id) ||
+        isObfuscated(channel) ||
+        inheritsEveryoneView(channel, guild.id),
+    );
     return { guild, excluded, preserveEveryoneView };
   }
 
@@ -230,6 +406,13 @@ export class DiscordGuildAccess implements GuildAccessPort {
         0,
         { kind: "resource", resource: "channel", id: channelId },
       );
+    // Hidden since this pass listed it: its cached name and overwrites are synthetic, so nothing is
+    // planned or written from them. The next pass lists it afresh and refuses it if still hidden.
+    if (isObfuscated(channel))
+      throw new Failure(
+        "superseded",
+        "An onboarding channel became hidden from TaruBot; retry reconciliation.",
+      );
     return channel;
   }
 
@@ -240,30 +423,31 @@ export class DiscordGuildAccess implements GuildAccessPort {
 
   /** Fetch the full inventory once and share it through all effects in this reconciliation. */
   async begin(guildId: string, bindings: AccessRoles): Promise<GuildAccessSession> {
+    const { snapshot, retained } = await this.observe(guildId, bindings);
+    return {
+      snapshot,
+      channel: (channel, audience, guard) =>
+        this.channelWithin(retained, channel, bindings, audience, guard),
+      restrictEveryone: (guard) => this.restrictEveryoneWithin(retained, guard),
+    };
+  }
+
+  /** One pass's snapshot, with the scope it retains; prepare also reads the confirmed deletions. */
+  private async observe(guildId: string, bindings: AccessRoles) {
     const { guild, bot } = await this.management(guildId);
     const roles = this.roles(guild, bot, bindings);
-    const scope = await this.channelScope(guild);
+    const scope = await this.channelScope(guild, bot);
     const channels: AccessChannel[] = [];
     for (const channel of scope.channels) {
       if (scope.excluded.has(channel.id)) continue;
       if (!channel.permissionsFor(bot).has([P.ViewChannel, P.ManageChannels, P.ManageRoles]))
-        throw new Failure(
-          "blocked",
-          `TaruBot needs View Channel, Manage Channels and Manage Roles in <#${channel.id}>.`,
-          0,
-          { kind: "resource", resource: "channel", id: channel.id, fix: "channel_permissions" },
-        );
+        throw unmanageable(channel.id);
       channels.push({
         id: channel.id,
         name: channel.name,
         type: channel.type,
         parentId: channel.parentId,
-        overwrites: [...channel.permissionOverwrites.cache.values()].map((value) => ({
-          id: value.id,
-          type: value.type,
-          allow: String(value.allow.bitfield),
-          deny: String(value.deny.bitfield),
-        })),
+        overwrites: overwritesOf(channel),
         everyoneVisible: channel.permissionsFor(guild.roles.everyone).has(P.ViewChannel, false),
         memberVisible: channel.permissionsFor(roles.member).has(P.ViewChannel, false),
         guestVisible: channel.permissionsFor(roles.guest).has(P.ViewChannel, false),
@@ -276,13 +460,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
       preserveEveryoneView: scope.preserveEveryoneView,
       channels,
     };
-    const retained = this.retainScope(guild, scope.channels);
-    return {
-      snapshot,
-      channel: (channel, audience, guard) =>
-        this.channelWithin(retained, channel, bindings, audience, guard),
-      restrictEveryone: (guard) => this.restrictEveryoneWithin(retained, guard),
-    };
+    return { snapshot, retained: this.retainScope(guild, scope) };
   }
 
   /** Prefer saved IDs, then a unique recognizable room; ambiguity requires an explicit setup option. */
@@ -293,7 +471,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     lobbyId: string | null,
     officerId: string | null,
   ): Promise<PreparedAccess> {
-    const before = await this.snapshot(guildId, roles);
+    const { snapshot: before, retained } = await this.observe(guildId, roles);
     const guild = await this.client.guilds.fetch(guildId);
     const text = before.channels.filter((channel) => channel.type === ChannelType.GuildText);
     const pick = (
@@ -315,6 +493,14 @@ export class DiscordGuildAccess implements GuildAccessPort {
             throw new Failure("input", "The lobby and officer rooms must be text channels.");
           return known;
         }
+        // A saved room the gateway still knows but the snapshot couldn't list isn't known to be
+        // gone: refuse rather than fall through to the name and private-room guesses and create
+        // a second room beside it. The snapshot's hidden-channel check refuses a hidden room
+        // first; this catches one that reappeared after the list. Only a room Discord confirmed
+        // deleted in this pass (a stale cache entry) falls through to be recreated.
+        const cached = guild.channels.cache.get(configured);
+        if (cached && !cached.isThread() && !retained.deleted.has(configured))
+          throw unmanageable(configured);
       }
       for (const name of names) {
         const matches = candidates.filter((channel) => normalized(channel.name) === name);
@@ -428,16 +614,25 @@ export class DiscordGuildAccess implements GuildAccessPort {
       this.managedChannel(scope, channelId);
       // Refresh just this target; Gateway events keep the protected binding/parent cache current.
       const fetched = await this.client.channels.fetch(channelId, { force: true });
-      if (!fetched || !("guildId" in fetched) || fetched.guildId !== guildId || fetched.isThread())
+      if (
+        !fetched ||
+        !("guildId" in fetched) ||
+        fetched.guildId !== guildId ||
+        fetched.isThread() ||
+        !("permissionOverwrites" in fetched)
+      )
         throw new Failure("superseded", "The channel scope changed before mutation.");
+      // Copied before the next await, so the write is planned from what this read returned.
+      const overwrites = overwritesOf(fetched);
       await guard();
-      return this.managedChannel(scope, channelId);
+      // Rechecked after the last await: listed in this pass, not excluded, and not obfuscated.
+      return { channel: this.managedChannel(scope, channelId), overwrites };
     };
     const botId = this.client.user?.id;
     if (!botId) throw new Failure("blocked", "Discord bot identity is unavailable.");
     let moved = false;
     if (audience === "lobby" && channel.type === ChannelType.GuildText && channel.parentId) {
-      channel = await freshForWrite();
+      ({ channel } = await freshForWrite());
       if (channel.type !== ChannelType.GuildText)
         throw new Failure("blocked", "The lobby must remain a guild text channel.");
       await channel.setParent(null, {
@@ -446,20 +641,16 @@ export class DiscordGuildAccess implements GuildAccessPort {
       });
       moved = true;
     }
-    const read = (): AccessOverwrite[] =>
-      [...channel.permissionOverwrites.cache.values()].map((value) => ({
-        id: value.id,
-        type: value.type,
-        allow: String(value.allow.bitfield),
-        deny: String(value.deny.bitfield),
-      }));
-    let before = read(),
+    // The no-op check reads the cache: managedChannel just confirmed it listed and not obfuscated.
+    let before = overwritesOf(channel),
       desired = channelAccessOverwrites(before, guildId, botId, roles, audience);
     if (sameOverwrites(before, desired)) return moved;
-    channel = await freshForWrite();
-    before = read();
+    const fresh = await freshForWrite();
+    channel = fresh.channel;
+    before = fresh.overwrites;
     desired = channelAccessOverwrites(before, guildId, botId, roles, audience);
     if (sameOverwrites(before, desired)) return moved;
+    // No await since freshForWrite's last managedChannel check, so the target is still readable.
     await channel.permissionOverwrites.set(
       desired.map((value) => ({ ...value, allow: BigInt(value.allow), deny: BigInt(value.deny) })),
       "TaruBot onboarding visibility policy",
@@ -467,12 +658,7 @@ export class DiscordGuildAccess implements GuildAccessPort {
     const verified = await this.client.channels.fetch(channelId, { force: true });
     if (!verified || !("permissionOverwrites" in verified))
       throw new Failure("blocked", "Channel disappeared during access enforcement.");
-    const actual = [...verified.permissionOverwrites.cache.values()].map((value) => ({
-      id: value.id,
-      type: value.type,
-      allow: String(value.allow.bitfield),
-      deny: String(value.deny.bitfield),
-    }));
+    const actual = overwritesOf(verified);
     if (!sameOverwrites(actual, channelAccessOverwrites(actual, guildId, botId, roles, audience)))
       throw new Failure(
         "transient",
@@ -483,9 +669,9 @@ export class DiscordGuildAccess implements GuildAccessPort {
 
   /** Close the default only when excluded community resources have independent View overwrites. */
   async restrictEveryone(guildId: string, guard: () => Promise<void>): Promise<boolean> {
-    const { guild } = await this.management(guildId);
-    const scope = await this.channelScope(guild);
-    return this.restrictEveryoneWithin(this.retainScope(guild, scope.channels), guard);
+    const { guild, bot } = await this.management(guildId);
+    const scope = await this.channelScope(guild, bot);
+    return this.restrictEveryoneWithin(this.retainScope(guild, scope), guard);
   }
 
   /** A shared-default mutation gets one extra authoritative catalogue check, never one per target. */
@@ -499,8 +685,9 @@ export class DiscordGuildAccess implements GuildAccessPort {
     if (!everyone.permissions.has(P.ViewChannel, false)) return false;
     await guard();
     const guildId = scope.guild.id;
-    const { guild } = await this.management(guildId);
-    const refreshed = await this.channelScope(guild);
+    const { guild, bot } = await this.management(guildId);
+    // The pass's confirmed deletions aren't asked about again; anything newly hidden still is.
+    const refreshed = await this.channelScope(guild, bot, scope.deleted);
     if (refreshed.preserveEveryoneView) return false;
     everyone = guild.roles.everyone;
     if (!everyone.permissions.has(P.ViewChannel, false)) return false;

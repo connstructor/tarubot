@@ -22,6 +22,7 @@ import type {
 } from "../application/records.js";
 import { roleLayoutPlan, rolePositionChanges, type RoleLayoutPlan } from "../domain/role-layout.js";
 import { existingRoleId } from "../domain/role-selection.js";
+import { cachedAsHidden, MISSING_ACCESS, UNKNOWN_CHANNEL } from "./obfuscation.js";
 import { changelogPost } from "./presenters/changelog.js";
 import { decisionDm, guestReviewPost } from "./presenters/guests.js";
 import { ledgerPost } from "./presenters/ledger.js";
@@ -321,11 +322,15 @@ export class DiscordGateway implements DiscordPort {
    * Fetch the channel globally, then explicitly check guild ownership and current overwrites. A
    * deleted, non-text or other-server channel is refused as unavailable, with no permissions
    * remedy; a channel TaruBot can't use (or, 50001 Missing Access, can't even view) gets the
-   * permissions refusal with its channel-permissions fix.
+   * permissions refusal with its channel-permissions fix. Discord doesn't document its answer for
+   * a hidden channel from 2026-11-16 (#47), so a 10003 for a text channel the gateway still holds
+   * as hidden from TaruBot gets the permissions refusal too.
    */
   async validateChannel(guildId: string, channelId: string): Promise<void> {
     const guild = await this.client.guilds.fetch(guildId);
     await guild.roles.fetch();
+    // Fetched before the channel so a 10003 can be read against the cached entry's permissions.
+    const bot = await guild.members.fetchMe({ force: true });
     const affected = { kind: "resource", resource: "channel", id: channelId } as const;
     // Its wording ('View Channel') is also what ledger post states read as "missing channel
     // permissions".
@@ -340,20 +345,27 @@ export class DiscordGateway implements DiscordPort {
       .fetch(channelId, { force: true })
       .catch((error: unknown) => {
         if (!(error instanceof DiscordAPIError)) throw error;
-        // 10003 Unknown Channel: the channel was deleted, so no permission change can fix it.
-        if (Number(error.code) === 10003) return null;
+        const cached = guild.channels.cache.get(channelId);
+        // 10003 Unknown Channel: normally the channel was deleted, so no permission change can fix
+        // it. But a text channel the gateway still holds obfuscated, or whose cached overwrites
+        // deny TaruBot View Channel (a channel option clears the flag but keeps the synthetic
+        // deny), may be Discord hiding it from 2026-11-16: that is a permissions problem. A stale
+        // entry TaruBot could view, or none, is a deleted channel and unavailable.
+        if (Number(error.code) === UNKNOWN_CHANNEL) {
+          if (cached?.type === ChannelType.GuildText && cachedAsHidden(cached, bot))
+            throw permissionsRefusal();
+          return null;
+        }
         // 50001 Missing Access: Discord hides a channel TaruBot can't view. A text channel this
         // server still lists (the guild's channel cache holds hidden channels too) is a
         // permissions problem with a remedy; anything else, such as another server's channel, is
         // unavailable.
-        if (Number(error.code) === 50001) {
-          if (guild.channels.cache.get(channelId)?.type === ChannelType.GuildText)
-            throw permissionsRefusal();
+        if (Number(error.code) === MISSING_ACCESS) {
+          if (cached?.type === ChannelType.GuildText) throw permissionsRefusal();
           return null;
         }
         throw error;
       });
-    const bot = await guild.members.fetchMe({ force: true });
     // A deleted channel, a non-text channel or one in another server can't be fixed by changing
     // permissions, so this refusal carries no permissions remedy. Its wording ('unavailable')
     // is also what ledger post states read to say "channel unavailable".

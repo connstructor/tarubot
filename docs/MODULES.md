@@ -37,6 +37,7 @@ One-shot tools under `scripts/` keep their I/O at the edges and put testable log
 
 - `src/config/deployment.ts` is the pure deployment-identity guard every Discord/database tool calls before any I/O ([CONFIGURATION.md](CONFIGURATION.md#maintenance-tool-profiles)).
 - `src/discord/inspection.ts` holds pure helpers over raw Discord REST payloads (command paths, intents, role order, permissions, inventory differences) shared by `commands.ts`, `register.ts`, `discord-inspect.ts`, and `discord-smoke.ts`.
+- `src/discord/obfuscation.ts` (2.30.2, #47) holds the shared helpers for Discord's channel obfuscation: the `CHANNEL_OBFUSCATED` flag check, `cachedAsHidden` (whether a cached entry is obfuscated or its cached overwrites deny TaruBot View Channel, which decides a 10003) and the reading of `GET /channels/{id}`'s 50001 and 10003 answers. The onboarding pass (`guild-access.ts`), channel validation (`gateway.ts` `validateChannel`), `/channel` and the inspector's unlisted-destination states use them.
 - `src/domain/grandfathering.ts` classifies humans for first-activation grandfathering, computes the plan checksum, and summarizes plans; `src/application/grandfathering.ts` gathers the evidence and writes grants; `src/application/activation.ts` runs activation as one transaction. `scripts/preview.ts` and `scripts/activate.ts` supply Discord validation and enumeration around them.
 - `src/infrastructure/lodestone/` is the Lodestone adapter ([LODESTONE.md](LODESTONE.md)): the parser and its workers run in the bot process (2.21.0).
 
