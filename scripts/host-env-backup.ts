@@ -5,8 +5,9 @@
  * keys in `ops/age-recipients.txt`. Only the encrypted file is written; the settings never touch
  * this machine's disk or the terminal. docs/HOSTING.md ("Rebuilding the host") restores it.
  *
- * Usage: bun scripts/host-env-backup.ts [--host USER@HOST] [--out DIRECTORY] [--identity KEY_FILE]
+ * Usage: bun scripts/host-env-backup.ts --host USER@HOST [--out DIRECTORY] [--identity KEY_FILE]
  *
+ * --host is required: the production host as the operator reaches it over SSH (docs/HOSTING.md).
  * With --identity (the private key), the new file is also decrypted in memory and compared with
  * what was read, proving the key opens it. The output names only the settings present, never values.
  */
@@ -16,8 +17,6 @@ import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-/** The production host, as the operator reaches it (docs/HOSTING.md). */
-export const DEFAULT_HOST = "tarubot@tarubot.deconfined.com";
 /** Settings a production `.env` must hold for the Compose file to start (docs/HOSTING.md). */
 export const REQUIRED_SETTINGS = [
   "TARUBOT_IMAGE_TAG",
@@ -46,10 +45,17 @@ export interface Options {
   identity: string | null;
 }
 
-/** Parse the command line; unknown arguments are refused rather than ignored. */
+/** Refusal when --host is missing; thrown before any SSH connection or file write. */
+export const MISSING_HOST =
+  "Name the production host with --host USER@HOST, such as --host tarubot@<production host>.";
+
+/**
+ * Parse the command line; unknown arguments are refused rather than ignored. The host has no
+ * default, so a run without --host stops here, before anything reaches the network or the disk.
+ */
 export function parseArgs(argv: readonly string[], home = homedir()): Options {
   const options: Options = {
-    host: DEFAULT_HOST,
+    host: "",
     out: `${home}/tarubot-cutover/env-backups`,
     identity: null,
   };
@@ -64,6 +70,7 @@ export function parseArgs(argv: readonly string[], home = homedir()): Options {
     else options.identity = value;
     index++;
   }
+  if (!options.host) throw new Error(MISSING_HOST);
   return options;
 }
 

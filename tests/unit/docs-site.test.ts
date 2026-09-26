@@ -126,16 +126,16 @@ const forbidden: readonly Guard[] = [
   {
     pattern: /deconfined\.com(?:$|.)/imu,
     what: "a host under the upstream operator's domain",
-    // The private host is already public in scripts/host-env-backup.ts; a period or hyphen after
-    // it (the end of a sentence, a DNS record) must not let it through.
+    // Any host under the domain, shown here with example names. A period or hyphen after it (the
+    // end of a sentence, a DNS record) must not let it through.
     bad: [
-      "ssh to tarubot.deconfined.com.",
-      "tarubot.deconfined.com. IN SSHFP 4 2 0",
+      "ssh to host.deconfined.com.",
+      "host.deconfined.com. IN SSHFP 4 2 0",
       "see deconfined.com.\nnext",
-      "tarubot.deconfined.com-old",
-      "host tarubot.deconfined.com",
-      "`tarubot@tarubot.deconfined.com`",
-      "https://tarubot.deconfined.com/health",
+      "bot.deconfined.com-old",
+      "host bot.deconfined.com",
+      "`tarubot@host.deconfined.com`",
+      "https://bot.deconfined.com/health",
     ],
   },
   {

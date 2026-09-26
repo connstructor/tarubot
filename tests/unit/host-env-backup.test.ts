@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import {
   backupName,
   checkSettings,
-  DEFAULT_HOST,
+  MISSING_HOST,
   parseArgs,
   type Runner,
   recipients,
@@ -17,9 +17,9 @@ import {
   writeBackup,
 } from "../../scripts/host-env-backup.js";
 
-test("arguments default to the production host and the operator's backup folder", () => {
-  expect(parseArgs([], "/home/op")).toEqual({
-    host: DEFAULT_HOST,
+test("arguments need the host and default to the operator's backup folder", () => {
+  expect(parseArgs(["--host", "tarubot@prod"], "/home/op")).toEqual({
+    host: "tarubot@prod",
     out: "/home/op/tarubot-cutover/env-backups",
     identity: null,
   });
@@ -27,6 +27,11 @@ test("arguments default to the production host and the operator's backup folder"
     host: "tarubot@new",
     identity: "/k/key.txt",
   });
+  // There is no default host: without --host the run stops before any SSH read or file write,
+  // with a message naming the flag.
+  expect(() => parseArgs([], "/home/op")).toThrow(MISSING_HOST);
+  expect(() => parseArgs(["--identity", "/k/key.txt"])).toThrow("--host USER@HOST");
+  expect(() => parseArgs(["--host"])).toThrow("--host needs a value");
   expect(() => parseArgs(["--hots", "x"])).toThrow("Unknown argument --hots");
   expect(() => parseArgs(["--out"])).toThrow("--out needs a value");
   expect(() => parseArgs(["--out", "--host"])).toThrow("--out needs a value");

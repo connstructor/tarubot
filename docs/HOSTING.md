@@ -8,7 +8,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 
 | Piece | Where |
 | --- | --- |
-| Host | Linode `tarubot`: us-iad-2, 1 vCPU / 2 GB, Ubuntu 26.04. Reached as `tarubot@tarubot.deconfined.com`. The DNS zone is DNSSEC-signed and carries SSHFP records, so `ssh -o VerifyHostKeyDNS=yes` checks the host key. |
+| Host | Linode `tarubot`: us-iad-2, 1 vCPU / 2 GB, Ubuntu 26.04. Reached as `tarubot@<production host>`. The DNS zone is DNSSEC-signed and carries SSHFP records, so `ssh -o VerifyHostKeyDNS=yes` checks the host key. |
 | Bot | `~/tarubot` on the host: a clone of this repository, run with [`docker-compose.production.yml`](../docker-compose.production.yml). It has only `tarubot`: no bundled PostgreSQL, no parser sidecar (the Lodestone parser runs inside the bot since 2.21.0), the release pinned by `TARUBOT_IMAGE_TAG`, bounded logs. |
 | Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below), and since 2.28.0 `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` (the TaruBot GitHub App behind `/suggest`; the key is a double-quoted multi-line PEM like the CA, and either one empty switches `/suggest` off; see [Public suggestions](#public-suggestions-the-github-app)). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
 | Database | Linode managed PostgreSQL `tarubot-pgsql`, PostgreSQL 18, us-iad-2. Use the **direct port 27520**, never the 27521 pool, which can't hold the writer lease. The login and database are `tarubot`, and `tarubot` owns the database. The admin login `akmadmin` is for provisioning only; the tool guard refuses it. The allow list holds the host and the operator's address. |
@@ -19,7 +19,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 ## Everyday checks
 
 ```sh
-ssh tarubot@tarubot.deconfined.com
+ssh tarubot@<production host>
 cd ~/tarubot
 docker compose -f docker-compose.production.yml ps
 docker compose -f docker-compose.production.yml logs --since 1h tarubot
@@ -49,7 +49,7 @@ Since 2.22.0 the bot pings a [healthchecks.io](https://healthchecks.io) check ev
 To set or change the URL on the host from the operator machine, without it passing through a terminal or chat:
 
 ```sh
-tr -d '\r\n' < ~/tarubot-cutover/healthchecks-production.url | ssh tarubot@tarubot.deconfined.com \
+tr -d '\r\n' < ~/tarubot-cutover/healthchecks-production.url | ssh tarubot@<production host> \
   'set -e; umask 077; cd ~/tarubot; read -r u || true; [ -n "$u" ]; tmp=$(mktemp .env.XXXXXX)
    grep -v "^HEALTHCHECKS_PING_URL=" .env > "$tmp"; printf "HEALTHCHECKS_PING_URL=%s\n" "$u" >> "$tmp"
    chmod 600 "$tmp"; mv "$tmp" .env
@@ -61,7 +61,7 @@ tr -d '\r\n' < ~/tarubot-cutover/healthchecks-production.url | ssh tarubot@tarub
 Since 2.28.0 (REQUIREMENTS.md "Approved public-suggestion amendments"), `/suggest idea:…` opens an issue in the **public** repository `deconfined/tarubot`, as the TaruBot GitHub App. It works only in Woven Souls (production's `deployments.production.guilds`), for holders of the bound Member or Guest role. What goes public, the limits, moderation and the failures members see are on the documentation site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#public-suggestions); this section holds the production-only parts. DevBot needs none of it: with `GITHUB_REPORTS_TOKEN` set it previews suggestions into the private `deconfined/tarubot-reports`, and it ignores the app settings.
 
 - **The app.** App ID 5076273, client ID in `GITHUB_APP_CLIENT_ID`. It has Issues write and Metadata read only, no webhook, and is installed on `deconfined/tarubot` alone. Its issues show the app's bot account as author.
-- **Key storage.** The private key lives only in the host's `.env` as `GITHUB_APP_PRIVATE_KEY` (a double-quoted multi-line PEM, like `DATABASE_CA_CERT`), and in the operator's `~/tarubot-cutover/` (mode 600). It is never pasted in chat and never goes into DevBot's `.env` or `docker-compose.yml`. After changing it, refresh the encrypted settings copy (`bun run host:env-backup`; see "Settings copy").
+- **Key storage.** The private key lives only in the host's `.env` as `GITHUB_APP_PRIVATE_KEY` (a double-quoted multi-line PEM, like `DATABASE_CA_CERT`), and in the operator's `~/tarubot-cutover/` (mode 600). It is never pasted in chat and never goes into DevBot's `.env` or `docker-compose.yml`. After changing it, refresh the encrypted settings copy (`bun run host:env-backup -- --host tarubot@<production host>`; see "Settings copy").
 - **Tokens.** Each post signs a nine-minute JWT with the key, looks up the app's installation on the repository and mints a one-hour installation token narrowed to that repository's issues. Nothing is cached or stored.
 - **Deploying it.** 2.28.0 is a restart with no migration. Put both settings in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA), refresh the settings copy, deploy, then register the commands with `register.js --global` (21 roots / 46 paths) and read them back. Probe the app (below) before announcing the command. Without the settings, `/suggest` tells members it is switched off.
 - **Rotation.** Generate a second key on the app's settings page, put it in the host's `.env`, recreate the bot with `docker compose -f docker-compose.production.yml up -d --wait` (a plain `docker compose restart` keeps the old `.env` values), check one `/suggest` or the probe below, then delete the old key on GitHub. There is no downtime.
@@ -148,7 +148,7 @@ set -a; . ~/tarubot-cutover/backup-storage.env; set +a
 { printf 'BACKUP_STORAGE_ENDPOINT=%s\nBACKUP_STORAGE_ACCESS_KEY=%s\nBACKUP_STORAGE_SECRET_KEY=%s\nBACKUP_STORAGE_REGION=us-iad-2\n' \
     "$BACKUP_STORAGE_ENDPOINT" "$BACKUP_STORAGE_ACCESS_KEY" "$BACKUP_STORAGE_SECRET_KEY"
   printf 'HEALTHCHECKS_BACKUP_URL=%s\n' "$(tr -d '\r\n' < ~/tarubot-cutover/healthchecks-backup.url)"
-} | ssh tarubot@tarubot.deconfined.com 'set -e; umask 077; cd ~/tarubot; tmp=$(mktemp .env.XXXXXX)
+} | ssh tarubot@<production host> 'set -e; umask 077; cd ~/tarubot; tmp=$(mktemp .env.XXXXXX)
     grep -v -E "^(BACKUP_STORAGE_[A-Z_]+|HEALTHCHECKS_BACKUP_URL)=" .env > "$tmp"; cat >> "$tmp"
     chmod 600 "$tmp"; mv "$tmp" .env'
 # On the host, as tarubot: the schedule, then one run to check it.
@@ -187,10 +187,10 @@ Compare the result with `check-restore.js`, then stop the bot and point `DATABAS
 
 ## Settings copy (off the host)
 
-The host's `.env` is the one thing a rebuild can't recreate from Git, so an encrypted copy is kept off the host (since 2.23.0). `scripts/host-env-backup.ts` runs on the operator machine. It reads `~/tarubot/.env` over SSH and encrypts it with [`age`](https://age-encryption.org) for the public keys in [`ops/age-recipients.txt`](../ops/age-recipients.txt). It writes only the encrypted file, to `~/tarubot-cutover/env-backups/tarubot-env-<UTC time>.age` (mode 600). The settings never touch the operator machine's disk or the terminal.
+The host's `.env` is the one thing a rebuild can't recreate from Git, so an encrypted copy is kept off the host (since 2.23.0). `scripts/host-env-backup.ts` runs on the operator machine. It reads `~/tarubot/.env` over SSH from the host named by `--host` (required) and encrypts it with [`age`](https://age-encryption.org) for the public keys in [`ops/age-recipients.txt`](../ops/age-recipients.txt). It writes only the encrypted file, to `~/tarubot-cutover/env-backups/tarubot-env-<UTC time>.age` (mode 600). The settings never touch the operator machine's disk or the terminal.
 
 ```sh
-bun run host:env-backup -- --identity ~/tarubot-cutover/age/tarubot.key
+bun run host:env-backup -- --host tarubot@<production host> --identity ~/tarubot-cutover/age/tarubot.key
 ```
 
 - **The output** names the settings present and any expected ones that are absent, never their values. With `--identity`, it also decrypts the new copy in memory and confirms it matches what was read.
@@ -201,7 +201,7 @@ bun run host:env-backup -- --identity ~/tarubot-cutover/age/tarubot.key
 
 Use this when the host is lost, compromised, or being replaced. The data lives in the managed database, so a rebuild loses nothing: the new bot picks up its state from PostgreSQL. Budget about an hour, most of it waiting for DNS.
 
-You need the latest settings copy and the `age` key (above), access to Linode, the DNS for `deconfined.com`, and the healthchecks.io check.
+You need the latest settings copy and the `age` key (above), access to Linode, the domain's DNS, and the healthchecks.io check.
 
 1. **Stop the old bot**, if the old host is still reachable: `docker compose -f docker-compose.production.yml stop tarubot`. The writer lease would make a second bot wait anyway; stopping it keeps the handover clean. Pause the healthchecks.io check.
 2. **Create the Linode:**
@@ -230,7 +230,7 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
    ```
 
    Before closing the root session, confirm that `ssh tarubot@NEW_IP true` works from the operator machine.
-4. **Point DNS at the new host.** Update `tarubot.deconfined.com`'s A and AAAA records to the new addresses. Replace its SSHFP records with the output of `ssh-keygen -r tarubot.deconfined.com` (as root on the new host). On the operator machine, run `ssh-keygen -R tarubot.deconfined.com`. Use the IP address until DNS has updated.
+4. **Point DNS at the new host.** Update the production host name's A and AAAA records to the new addresses. Replace its SSHFP records with the output of `ssh-keygen -r <production host>` (as root on the new host). On the operator machine, run `ssh-keygen -R <production host>`. Use the IP address until DNS has updated.
 5. **Let the new host reach the database.** In Linode Cloud Manager → Databases → `tarubot-pgsql` → Access Controls, add the new host's IPv4 address. Remove the old host's address in step 11.
 6. **Clone the repository** as `tarubot`: `ssh tarubot@NEW_IP 'git clone https://github.com/deconfined/tarubot.git ~/tarubot'`.
 7. **Restore the settings** from the operator machine, then pin the current release:
@@ -245,7 +245,7 @@ You need the latest settings copy and the `age` key (above), access to Linode, t
 8. **Start the bot:** `ssh tarubot@NEW_IP 'cd ~/tarubot && docker compose -f docker-compose.production.yml pull && docker compose -f docker-compose.production.yml up -d --wait'`.
 9. **Check it** with the everyday checks above. Readiness must be all true, and the logs must show "Database writer lease acquired" and "TaruBot ready". Resume the healthchecks.io check; it should turn green within five minutes. Commands are registered globally and survive a rebuild, so there is nothing to register.
 10. **Restore the backup schedule:** add the database's new access-list entry first (step 5), then follow "Setting it up" under Daily dumps. The first run should turn the "TaruBot backups" check green.
-11. **Retire the old host.** Delete the old Linode and remove its database access entry. Update the Layout table above, and take a fresh settings copy (`bun run host:env-backup`).
+11. **Retire the old host.** Delete the old Linode and remove its database access entry. Update the Layout table above, and take a fresh settings copy (`bun run host:env-backup -- --host tarubot@<production host>`).
 
 ## DigitalOcean leftovers
 
