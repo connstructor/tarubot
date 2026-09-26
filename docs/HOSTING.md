@@ -227,6 +227,8 @@ Each step is the owner's, with his go-ahead; Claude prepares the commands only.
    restrict,command="/home/tarubot/tarubot/ops/deploy.sh" ssh-ed25519 AAAA… tarubot-deploy-github
    ```
 
+   `restrict` turns off forwarding (so no database tunnel), PTYs and `~/.ssh/rc`; `command=` also captures `exec`, `sftp` and `scp`. sshd runs the forced command through `tarubot`'s shell, which reads `~/.bashrc` for SSH sessions: keep Ubuntu's default, which returns at once when non-interactive, and put nothing that prints or changes the environment ahead of that return. There is no `from=`: GitHub's runner addresses can't be listed.
+
 6. **Probe the restriction:** `ssh -i "$d/k" -o IdentitiesOnly=yes tarubot@<production host>`, first with no command, then with `id`, then `sftp -i "$d/k" tarubot@<production host>`. Each must end with the usage line or exit status 64, never a shell. Then `shred -u "$d/k"; rm -rf "$d"`: a lost key is replaced, not restored.
 7. **Pin the host and its key** from your SSHFP-verified session: `ssh -o VerifyHostKeyDNS=yes tarubot@<production host> cat /etc/ssh/ssh_host_ed25519_key.pub`, then:
 
