@@ -22,7 +22,7 @@
  * Scenarios need git and jq; the image build (oven/bun, which has neither) skips them, and CI's
  * checks job and the dev VM run them.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -47,6 +47,12 @@ const SCRIPT = root("ops/deploy.sh");
 const STUBS = root("tests/fixtures/deploy-stubs");
 const hasGit = Bun.which("git") !== null;
 const hasJq = Bun.which("jq") !== null;
+// The linux/arm64 image build runs the unit suite under QEMU, many times slower at starting
+// processes, where two tests like these exceeded Bun's 5 s default (deploy-workflow.test.ts
+// names them). Every test without a limit of its own gets two minutes here, which only stops a
+// hang. The tests below that name a limit keep it: each bounds a wait on a real process (a lock
+// holder, a detached worker, or a git scenario, which the image build skips without git and jq).
+setDefaultTimeout(120_000);
 /** The end-to-end entry test runs the real worker on its fixed PATH, which needs these there. */
 const endToEnd = ["jq", "curl", "setsid", "flock"].every(
   (tool) => Bun.which(tool, { PATH: "/usr/local/bin:/usr/bin:/bin" }) !== null,

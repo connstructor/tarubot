@@ -9,11 +9,11 @@
  * - The repository names no host: the workflow and ops/deploy.sh carry no host name beyond
  *   GitHub's, the registry's and Pushover's.
  * - Behavior: the plan, SSH and notify scripts run here with simulated gh, docker, ssh, curl and
- *   date (tests/fixtures/deploy-workflow) to check the runtime-change rule, the gates, dispatches
- *   and rollbacks, the host-side summary, the clock warnings, the SSH retry rules and the
- *   messages.
+ *   date (tests/fixtures/deploy-workflow) to check the runtime-change rule, the compare API's
+ *   300-file cap, the gates, dispatches and rollbacks, the host-side summary, the clock warnings,
+ *   the SSH retry rules and the messages.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   cpSync,
@@ -36,6 +36,14 @@ const root = (path: string) => fileURLToPath(new URL(`../../${path}`, import.met
 const read = (path: string) => readFileSync(root(path), "utf8");
 const STUBS = root("tests/fixtures/deploy-workflow");
 const hasJq = Bun.which("jq") !== null;
+
+// The linux/arm64 image build runs the unit suite under QEMU, many times slower at starting
+// processes: "the SSH step > tells a refused format, a lost host and a host never reached apart"
+// took 5.3 s there and "the notify step > reports each outcome with its priority" 5.0 s, past
+// Bun's 5 s default (PR #44's "Container build (tarubot)"). Natively each takes well under a
+// second. The scripts' clocks are simulated (the SSH tests' `clock` prelude and the `sleep` and
+// `date` stubs), so no assertion depends on real time; this limit only stops a hung script.
+setDefaultTimeout(120_000);
 
 const step = z
   .object({
@@ -693,6 +701,11 @@ describe("the notify step", () => {
         "0",
       ],
       [
+        { PLAN_RESULT: "failure", PLAN_REASON: "compare-too-large" },
+        "2.30.1 not deployable: compare-too-large (see the run)",
+        "0",
+      ],
+      [
         { PLAN_RESULT: "failure", PLAN_VERSION: "", PLAN_REASON: "" },
         "? not deployable: ? (see the run)",
         "0",
@@ -914,7 +927,6 @@ describe.skipIf(!hasJq)("the plan step", () => {
       [{ filename: ".github/workflows/publish.yml", status: "modified" }],
       [{ filename: "ops/deploy.sh", status: "modified" }],
       [{ filename: "docs/moved.ts", status: "renamed", previous_filename: "src/moved.ts" }],
-      Array.from({ length: 300 }, (_, i) => ({ filename: `docs/${i}.md`, status: "added" })),
     ]) {
       const p = plan(files as File[]);
       expect({ files: files.length, code: p.code, deploy: p.outputs.deploy }).toEqual({
@@ -930,6 +942,56 @@ describe.skipIf(!hasJq)("the plan step", () => {
         reason: "-",
       });
     }
+  });
+
+  test("a compare GitHub may have cut at 300 files is refused, never read as complete", () => {
+    /** `count` changed files: documentation, with a host-side file and an edited migration last. */
+    const many = (count: number, tail: File[] = []) => [
+      ...Array.from({ length: count - tail.length }, (_, i) => ({
+        filename: `docs/${i}.md`,
+        status: "added",
+      })),
+      ...tail,
+    ];
+    // Below the cap the list is whole: 299 documentation files are a quiet merge.
+    expect(plan(many(299)).outputs).toMatchObject({ deploy: "false", reason: "no-runtime-change" });
+    // At the cap the rest may be missing, so neither "no runtime change", "no host-side file" nor
+    // "no edited migration" can be read from it, whatever the listed files are.
+    const hidden: File[] = [
+      { filename: "ops/deploy.sh", status: "modified" },
+      { filename: "migrations/001_init.sql", status: "modified" },
+    ];
+    for (const files of [many(300), many(301), many(300, hidden)]) {
+      const p = plan(files);
+      expect({ files: files.length, code: p.code, reason: p.outputs.reason }).toEqual({
+        files: files.length,
+        code: 1,
+        reason: "compare-too-large",
+      });
+      expect(p.outputs.deploy).toBeUndefined();
+      expect(p.stdout).toContain(
+        "::error::This merge changes 300 files or more, more than GitHub's compare API lists",
+      );
+      expect(p.summary).toBe("");
+    }
+    // A rollback's range is read the same way, before the migration check and the host-side list.
+    const rollback = { version: "2.30.1", rollback: true, from: "2.30.2" };
+    expect(dispatch(rollback, { between: many(299) }).outputs).toMatchObject({
+      deploy: "true",
+      action: "rollback",
+    });
+    for (const between of [many(300), many(300, hidden)]) {
+      const p = dispatch(rollback, { between });
+      expect({ code: p.code, reason: p.outputs.reason }).toEqual({
+        code: 1,
+        reason: "compare-too-large",
+      });
+      expect(p.outputs.deploy).toBeUndefined();
+      expect(p.stdout).toContain("::error::The way back from 2.30.2 to 2.30.1 changes 300 files");
+      expect(p.summary).toBe("");
+    }
+    // An answer without a file list is refused too, not read as an empty merge.
+    expect(plan(null as unknown as File[]).outputs.reason).toBe("compare");
   });
 
   test("the plan lists added migrations and host-side changes, and names the approval", () => {
@@ -1149,18 +1211,56 @@ describe("the runtime-change rule", () => {
 });
 
 describe("the agent rule", () => {
-  test("AGENTS.md carries REQUIREMENTS.md's canonical wording verbatim, and the others point to it", () => {
-    // The rule is the blockquote in "Approved SSH-deploy amendments (2026-09-26)".
-    const rule = /\n> (A chat go-ahead doesn't replace[^\n]+)\n/u.exec(
-      read("REQUIREMENTS.md"),
-    )?.[1];
-    expect(rule).toContain("never approve, reject or bypass a deployment");
-    expect(rule).toContain("never create, read or hold the deploy key");
-    expect(rule).toContain(
+  test("AGENTS.md carries REQUIREMENTS.md's wording verbatim, its confirmed and proposed parts marked", () => {
+    // The rule is the blockquote in "Approved SSH-deploy amendments (2026-09-26)": the part the
+    // owner's answer to question 1 confirmed, then the clauses still awaiting confirmation.
+    const requirements = read("REQUIREMENTS.md");
+    const confirmed =
+      /\n> (Confirmed \(question 1\): [^\n]+)\n/u.exec(requirements)?.[1] ?? "no confirmed part";
+    const proposed =
+      /\n> (Proposed in PR #44, pending @deconfined's confirmation; [^\n]+)\n/u.exec(
+        requirements,
+      )?.[1] ?? "no proposed part";
+    for (const clause of [
+      "the owner's approval of the `production` environment in GitHub is the go-ahead",
+      "a chat go-ahead doesn't replace it",
+      "Claude sessions never approve a deployment",
+      "a deploy by hand still needs the owner's explicit go-ahead",
+      "provider, token, key, firewall and account changes stay separate owner steps",
+    ])
+      expect({ clause, confirmed: confirmed.includes(clause) }).toEqual({
+        clause,
+        confirmed: true,
+      });
+    // No clause was dropped: the rest are the agent's proposal, followed in the meantime.
+    expect(proposed).toContain("follow them in the meantime (they only restrict agents)");
+    for (const clause of [
+      "never approve, reject or bypass a deployment",
+      "never create, read or hold the deploy key",
+      "never change the `production` or `notify` environments, their secrets or their variables, or `DEPLOY_ENABLED`",
       "never enable, disable, cancel or re-run the Deploy production workflow",
-    );
-    expect(read("AGENTS.md")).toContain(rule ?? "no rule");
-    for (const file of ["CLAUDE.md", "docs/CI_CD.md", "docs/HOSTING.md"])
-      expect({ file, points: /agent rule/iu.test(read(file)) }).toEqual({ file, points: true });
+      "dispatch it only when the owner asks in that session",
+    ])
+      expect({
+        clause,
+        proposed: proposed.includes(clause),
+        confirmed: confirmed.includes(clause),
+      }).toEqual({
+        clause,
+        proposed: true,
+        confirmed: false,
+      });
+    const agents = read("AGENTS.md");
+    expect(agents).toContain(`- ${confirmed}\n`);
+    expect(agents).toContain(`- ${proposed}\n`);
+    // The files that point to it say the same: only part of it is confirmed.
+    for (const file of ["CLAUDE.md", "docs/CI_CD.md", "docs/HOSTING.md"]) {
+      const text = read(file);
+      expect({
+        file,
+        points: /agent rule/iu.test(text),
+        pending: text.includes("PR #44") && text.includes("pending @deconfined's confirmation"),
+      }).toEqual({ file, points: true, pending: true });
+    }
   });
 });

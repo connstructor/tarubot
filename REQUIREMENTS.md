@@ -288,11 +288,11 @@ The host acts only after confirming with GitHub's API that this exact run, title
 - the host's fresh encrypted dump, with point-in-time recovery and the restore point, stands in for the independent operator dump (decision 3; the manual procedure keeps it);
 - the tools run inside the deployed container with the Compose-supplied production environment (OPS-14).
 
-**Agent rule (decisions 1 and 10).** This is the canonical wording; AGENTS.md carries it verbatim, and CLAUDE.md, [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) and [docs/HOSTING.md](docs/HOSTING.md#automated-deploys-2300) point here:
+**Agent rule (decisions 1 and 10).** This is the canonical wording; AGENTS.md carries it verbatim, and CLAUDE.md, [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) and [docs/HOSTING.md](docs/HOSTING.md#automated-deploys-2300) point here. Only its first part is the owner's decision so far:
 
-> A chat go-ahead doesn't replace the owner's approval of the `production` environment in GitHub, and a deploy by hand still needs the owner's explicit go-ahead. Agents, Claude sessions included, never approve, reject or bypass a deployment; never create, read or hold the deploy key; never change the `production` or `notify` environments, their secrets or their variables, or `DEPLOY_ENABLED`; never enable, disable, cancel or re-run the Deploy production workflow; and dispatch it only when the owner asks in that session. Provider, token, key, firewall and account changes stay separate owner steps.
-
-The owner's answer to question 1 covers the approval and the rule that Claude sessions never approve. The other clauses (never reject or bypass; the deploy key; the environments, secrets, variables and `DEPLOY_ENABLED`; enabling, disabling, cancelling and re-running; dispatching only when asked) are the agent's proposal in the 2.30.0 pull request, for the owner to confirm before it merges.
+> Confirmed (question 1): the owner's approval of the `production` environment in GitHub is the go-ahead for a production deploy; a chat go-ahead doesn't replace it, and Claude sessions never approve a deployment. As before, a deploy by hand still needs the owner's explicit go-ahead, and provider, token, key, firewall and account changes stay separate owner steps.
+>
+> Proposed in PR #44, pending @deconfined's confirmation; follow them in the meantime (they only restrict agents): agents, Claude sessions included, never approve, reject or bypass a deployment; never create, read or hold the deploy key; never change the `production` or `notify` environments, their secrets or their variables, or `DEPLOY_ENABLED`; never enable, disable, cancel or re-run the Deploy production workflow; and dispatch it only when the owner asks in that session.
 
 **Quiet releases (decision 5).** A merge that changes only documentation, tests, CI or the version asks for no approval; a quiet Pushover message says so. If an earlier release wasn't deployed, the owner runs the workflow with the newest version.
 

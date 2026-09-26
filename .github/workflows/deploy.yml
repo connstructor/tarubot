@@ -106,6 +106,14 @@ jobs:
           raw() { gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/$1?ref=$2"; }
           older() { local -a a b; local i; IFS=. read -r -a a <<< "$1"; IFS=. read -r -a b <<< "$2"; for i in 0 1 2; do (( a[i] == b[i] )) && continue; (( a[i] < b[i] )); return; done; return 1; }
           is_runtime() { [[ $1 =~ $ALWAYS_RUNTIME ]] || ! [[ $1 =~ $NON_RUNTIME ]]; }
+          # GitHub's compare API lists at most 300 files and can't page past them, so a list of
+          # 300 may be cut short. The plan claims nothing from such a list: it refuses, since the
+          # approver couldn't see the host-side changes (the host would still decide migrations).
+          listed() {
+            local n
+            n=$(jq -e '.files | arrays | length' <<< "$1") || fail compare "The compare API's answer has no file list."
+            (( n < 300 )) || fail compare-too-large "$2 changes 300 files or more, more than GitHub's compare API lists, so the plan can't show the host-side changes or check the migrations. Deploy by hand per docs/HOSTING.md."
+          }
 
           # 1. The gate is real: production needs @deconfined alone, admins can't bypass it, and
           #    both environments accept only main (an environment a typo auto-created has none).
@@ -145,7 +153,9 @@ jobs:
               [[ $FROM =~ $VER ]] || fail from "A rollback names the live version it leaves in 'from'."
               older "$V" "$FROM" || fail rollback-not-older "A rollback goes to an older release than $FROM."
               C_FROM=$(revision_of "$FROM") || fail image "$IMAGE:$FROM carries no revision label."
-              across=$(gh api "repos/$R/compare/$C...$C_FROM" --jq '[.files[] | select((.filename | startswith("migrations/")) or ((.previous_filename // "") | startswith("migrations/")))] | length') || fail compare "The compare API didn't answer."
+              back=$(gh api "repos/$R/compare/$C...$C_FROM") || fail compare "The compare API didn't answer."
+              listed "$back" "The way back from $FROM to $V"
+              across=$(jq '[.files[] | select((.filename | startswith("migrations/")) or ((.previous_filename // "") | startswith("migrations/")))] | length' <<< "$back")
               [[ $across == 0 ]] || fail rollback-across-migration "Migrations lie between $V and $FROM; the way back is a fix release or a restore."
             else
               [[ -z $INPUT_FROM ]] || fail from "'from' is only for a rollback."
@@ -168,8 +178,8 @@ jobs:
             [[ $P =~ ^[0-9a-f]{40}$ ]] || fail compare "$C has no parent to compare with."
             previous=$(raw package.json "$P" | jq -r .version || true)
             cmp=$(gh api "repos/$R/compare/$P...$C") || fail compare "The compare API didn't answer."
+            listed "$cmp" "This merge"
             runtime=false
-            (( $(jq '.files | length' <<< "$cmp") < 300 )) || runtime=true
             while IFS= read -r f; do
               [[ -n $f ]] || continue
               if [[ $f == package.json ]]; then
@@ -195,7 +205,7 @@ jobs:
               exit 0
             fi
           elif [[ $ACTION == rollback ]]; then
-            mapfile -t host_files < <(gh api "repos/$R/compare/$C...$C_FROM" --jq '.files[].filename' | grep -E "$HOST_SIDE" || true)
+            mapfile -t host_files < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$back" | grep -E "$HOST_SIDE" || true)
           fi
           newest=$(gh api "repos/$R/contents/migrations?ref=$C" --jq '[.[].name | select(test("^[0-9]{3}_[a-z0-9_]+\\.sql$"))] | sort | last // "none"') || newest=unknown
 
