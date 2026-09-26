@@ -260,6 +260,12 @@ describe("the contract with ops/deploy.sh", () => {
       });
   });
 
+  test("the host looks for the deploy job by the name the workflow gives it", () => {
+    // ops/deploy.sh requires a job with this name to be in progress; a rename would refuse every run.
+    expect(deploy.jobs.deploy.name).toBe("Deploy");
+    expect(script).toContain('.name == "Deploy" and .status == "in_progress"');
+  });
+
   test("the plan and the host agree on the version pattern", () => {
     expect(pattern(runOf("plan", "plan"), "VER")).toBe(pattern(script, "readonly VERSION"));
   });
