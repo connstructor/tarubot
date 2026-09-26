@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# A simulated gh for the plan job in tests/unit/deploy-workflow.test.ts. `gh api [-H …] PATH
+# [--jq FILTER]` answers from $STUB/api/<PATH with / and ? as _>, filtered through jq like gh.
+set -euo pipefail
+[[ $1 == api ]] || exit 1
+shift
+path= filter=
+while (($#)); do
+  case $1 in
+    -H) shift 2 ;;
+    --jq) filter=$2; shift 2 ;;
+    *) path=$1; shift ;;
+  esac
+done
+file=$STUB/api/$(printf '%s' "$path" | tr '/?=' '___')
+if [[ ! -f $file ]]; then
+  printf 'gh: Not Found (HTTP 404) %s\n' "$path" >&2
+  exit 1
+fi
+if [[ -n $filter ]]; then jq -r "$filter" "$file"; else cat "$file"; fi
