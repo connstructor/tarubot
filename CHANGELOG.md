@@ -1,6 +1,20 @@
 # Version history
 
-The current application version is **2.29.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.30.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.30.0 — Approved production deploys over SSH
+
+Issue [#41](https://github.com/deconfined/tarubot/issues/41): production deploys run from GitHub Actions after the owner approves them, over one restricted SSH key. The owner approved the [plan](https://github.com/deconfined/tarubot/issues/41#issuecomment-5843136740) and answered its ten questions on 2026-09-26 ([decision comment](https://github.com/deconfined/tarubot/issues/41#issuecomment-5843517579)). No bot change, no migration (it requires `010_status_notices.sql`, as 2.29.0 does) and no command change.
+
+- **Host script.** `ops/deploy.sh` is the deploy key's forced command (`restrict,command=`). It accepts exactly `deploy <version> <commit> <digest> <run>` or `rollback <version> <commit> <digest> <run> <from>`; anything else prints the usage line and exits 64 before any lock, git or Docker call. It checks with GitHub's public API that this exact run is in progress on main, names that target and was approved by @deconfined for `production`, and refuses while manual work looks in progress (the bot stopped, the pin not the running release, a backup running, a changed clone, a log level above info). Then:
+  - no migration files added since the live release: `docker compose up` onto the new release, a one-minute stability check, then the `.env` pin;
+  - migration files added: stop, a fresh `ops/backup.sh` dump, `migrate.js` in the new image, the pin, then start;
+  - the previous release comes back automatically only when the new one provably never took the writer lease (its logs must reach "Modules loaded" and show no lease line), or the migration did not commit; otherwise the new release stays, pinned, and the result asks for the owner;
+  - `register.js --global` and `commands.js list` run on every run that starts or verifies a release;
+  - the image must be the digest the plan showed;
+  - a migration during the Tuesday maintenance window warns but runs (the owner's answer to question 9);
+  - only fixed `step`, `warning` and `result` lines leave the host; tool output stays in `~/.local/state/tarubot-deploy/runs/<run>/worker.log`. The worker runs detached with a clean environment and holds a per-run lock, so a dropped connection reattaches and a dead worker is reported.
+- **Tests.** `deploy-script.test.ts` runs the real script against a throwaway git repository with simulated `docker`, `curl` and `df`: hostile requests, every path and recovery rule, the refusals, the approval check, attach and replay (with a committed v1 run directory) and the detached launch. `migration-files.test.ts` now forbids migrations that control their own transaction, which the recovery rule relies on.
 
 ## 2.29.2 — Generic production host references
 
