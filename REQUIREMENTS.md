@@ -288,7 +288,7 @@ The host acts only after confirming with GitHub's API that this exact run, title
 - the host's fresh encrypted dump, with point-in-time recovery and the restore point, stands in for the independent operator dump (decision 3; the manual procedure keeps it);
 - the tools run inside the deployed container with the Compose-supplied production environment (OPS-14).
 
-**Agent rule (decisions 1 and 10).** This is the canonical wording; AGENTS.md carries it verbatim, and CLAUDE.md, [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) and [docs/HOSTING.md](docs/HOSTING.md#automated-deploys-2300) point here. Only its first part is the owner's decision so far:
+**Agent rule (decisions 1 and 10).** This is the canonical wording; AGENTS.md carries it verbatim, and CLAUDE.md, [docs/CI_CD.md](docs/CI_CD.md#agent-access-to-deployments) and [docs/HOSTING.md](docs/HOSTING.md#automated-deploys-2300) point here. Only its first part is the owner's decision so far; the owner is asked to confirm the rest before PR #44 merges:
 
 > Confirmed (question 1): the owner's approval of the `production` environment in GitHub is the go-ahead for a production deploy; a chat go-ahead doesn't replace it, and Claude sessions never approve a deployment. As before, a deploy by hand still needs the owner's explicit go-ahead, and provider, token, key, firewall and account changes stay separate owner steps.
 >

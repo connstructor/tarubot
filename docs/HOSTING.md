@@ -119,7 +119,7 @@ The `pg` helper and the writer-lease gate are MIGRATION.md's [E0 conventions](MI
 
 ## Automated deploys (2.30.0)
 
-Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy. What agents may and may not do around it is REQUIREMENTS.md's "Agent rule" (verbatim in AGENTS.md): Claude sessions never approve a deployment (confirmed), and, as proposed in PR #44 pending @deconfined's confirmation, agents never reject or bypass one and never hold the deploy key. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
+Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), the **Deploy production** workflow (`.github/workflows/deploy.yml`) deploys each published release to this host once @deconfined approves it in GitHub. That approval is the go-ahead for a production deploy. What agents may and may not do around it is REQUIREMENTS.md's "Agent rule" (verbatim in AGENTS.md): Claude sessions never approve a deployment (confirmed); the other clauses, among them never rejecting or bypassing one and never holding the deploy key, are proposed in PR #44, pending @deconfined's confirmation, and followed in the meantime. The workflow's jobs, environments and settings are in [CI_CD.md](CI_CD.md#deploy-production); this section is the host side and what to do.
 
 ### A deploy
 
