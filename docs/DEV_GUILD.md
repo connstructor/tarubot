@@ -457,6 +457,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - The operator clone moved to `c0a4f98` (2.28.0) and was rebuilt. `register.js --global` registered 21 roots / 46 paths, and `commands.js list` was clean (global 21, the old guild scope 0), exit 0.
 - **Owner test.** The owner's `/suggest` in Woven Souls at 23:58:53 UTC opened [issue #39](https://github.com/deconfined/tarubot/issues/39), authored by the TaruBot app (`app/tarubot`) with the labels `enhancement` and `from-discord`. Its body is only the fixed first line, the fenced idea and "Sent by TaruBot 2.28.0", with no IDs and no `@`. `claude.yml` run 36203081249 (the `issues` event) was skipped by the suggestion guard. `tarubot-agent[bot]` closed the issue as not planned.
 - **Not recorded:** the DevBot `/suggest` checks from the plan (the preview issue in `deconfined/tarubot-reports`, "You can suggest again later" within the hour, "Check your input" for a short idea, and "FC membership needed" without the Member or Guest role), and whether Woven Souls got an update post with 2.28.0's member note. Production had no changelog channel at the 2.25.0 rollout; the owner has since set one ("Changelog channel config was already done.", 2026-09-25), at a time not recorded. Setting a channel stores the running version, so the note posted only if the channel was set before production started 2.28.0 (healthy at 23:50:27 UTC). The owner can check the channel for "TaruBot updated to v2.28.0", or, with the owner's go-ahead, a read-only production query can: `guilds.changelog_channel_id` and `changelog_version` confirm the channel, though the version should read 2.29.0 either way, and the `audit` rows settle it (the `config` row for `changelog_channel_id` with its time and `baseline`, and any `changelog.advanced` row to 2.28.0 with a `messageId`).
+- **Update post:** production's startup delivered "TaruBot updated to v2.28.0" to Woven Souls' changelog channel at 23:50:23 UTC (the first update post, carrying the `/suggest` note), and `changelog_version` moved from 2.25.0 to 2.28.0.
 
 ### 2.29.0 rollout — 2026-09-26
 
@@ -473,6 +474,8 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
   - The operator clone moved to `9d6e136` and was rebuilt; `commands.js list` was clean (global 21), and nothing needed registering.
 - **Not recorded:** the owner's status-post checks from 2.29.0's plan: `/officer revoke`, then `/officer reset` on a rank officer, each giving one "Member status changes" post; `/guest grant`, revoke and reset within a minute on a visitor with no linked character, giving none; and `status_since` clear again afterwards.
 - **Rollback** across migration 010 is a fix release, a restore, or the manual reversal on the site's monitoring page ("Status notices", `site/src/content/docs/deploy/monitoring.md`): an older image refuses to start on schema 010.
+- **Update post:** none, as designed: 2.29.0 has no member note, so its startup moved `changelog_version` to 2.29.0 without posting (`nothing for members`).
+
 
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
