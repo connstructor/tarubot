@@ -94,3 +94,15 @@ Next: [back up](/tarubot/deploy/operations/#backup) the database regularly, and 
 ## Pinning an exact image
 
 `TARUBOT_IMAGE_TAG` also accepts `sha-<commit>`, the full commit that published an image. To pin by digest, set `TARUBOT_IMAGE` to the complete reference, such as `ghcr.io/deconfined/tarubot@sha256:<digest>`; it overrides `TARUBOT_IMAGE_TAG`.
+
+## The bot's container
+
+The stock Compose file locks the bot's container down. It runs as the image's unprivileged `bun` user, and:
+
+- its root filesystem is read-only (`read_only: true`);
+- it has no Linux capabilities (`cap_drop: [ALL]`);
+- nothing in it can gain privileges (`no-new-privileges`).
+
+The bot writes no files: its records are in PostgreSQL, and its log goes to standard output. The [maintenance tools](/tarubot/deploy/tools/) run in the same locked-down container, so they can't write files there either. Most only print: to keep their output, redirect it on the host. The two that write a file need [a writable mount](/tarubot/deploy/tools/#previewjs) for that one run.
+
+If you write your own Compose override, such as one for an [external database](/tarubot/deploy/requirements/#a-database), keep these three settings, and make any mount it adds read-only. A writable mount belongs only on a single tool run, never in the override. The bundled PostgreSQL container keeps Docker's defaults, because it prepares its data directory as root when it starts.

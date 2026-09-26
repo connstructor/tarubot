@@ -1,17 +1,16 @@
 {
-  "title": "Session: 2.30.2 channel obfuscation",
-  "objective": "2.30.2 (#47) keeps onboarding correct when Discord hides channels from bots (mandatory 2026-11-16): a hidden Community Updates area keeps @everyone's default, a hidden managed channel or saved room makes the pass refuse and name it, and nothing is written from placeholder data. No migration; production (onboarding off) behaves as before.",
+  "title": "Session: 2.30.3 hardened containers",
+  "objective": "2.30.3 (#51) runs the bot with a read-only root, no Linux capabilities and no-new-privileges (the backup job too, with a 1 MB /tmp). Compose-only; no migration; nothing changes for members.",
   "user": [
-    "Approve the 2.30.2 Deploy production run; expect deployed (a restart).",
-    "On DevBot with the obfuscation toggle on: /sync status shows nothing blocked; /channel in a channel TaruBot can't see shows the unavailable card.",
-    "Owed from earlier releases, run or waive: 2.25.0, 2.28.0 and 2.29.0 DevBot checks; the docs site's search, 404 page and edit links."
+    "Go-ahead for DevBot's rehearsal (restart with the new Compose settings), then approve the 2.30.3 Deploy production run only after it passes.",
+    "After the deploy: /version shows 2.30.3; the next nightly backup check is green."
   ],
   "assistant": [
-    "Update DevBot to 2.30.2 with the owner's go-ahead; check the startup channels.access job is secured with the same exclusions.",
-    "On or just after 2026-11-16, read-only: record Discord's real GET answer for a hidden channel and the pass result (docs/DEV_GUILD.md)."
+    "Rehearse on DevBot: settings in force (docker inspect), readiness, no EROFS/EACCES in logs, the #chat plan post, /config validate, /refresh force:true, commands.js list.",
+    "Record the rehearsal and the production run in docs/VERIFICATION.md."
   ],
   "bot": [
-    "Run 2.30.2 on schema 010; nothing changes for members.",
+    "Run 2.30.3 on schema 010 with a read-only root; nothing changes for members.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

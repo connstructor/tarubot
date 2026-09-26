@@ -1,6 +1,29 @@
 # Version history
 
-The current application version is **2.30.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.30.3**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.30.3 — Hardened containers
+
+Issue [#51](https://github.com/deconfined/tarubot/issues/51): @deconfined decided on 2026-09-26 to harden the containers on today's Docker hosts, before the move to AlmaLinux and rootless Podman ([#50](https://github.com/deconfined/tarubot/issues/50)). It changes only the Compose files. There is no migration, and the image is unchanged.
+
+- **The bot** (`tarubot` in `docker-compose.yml`, which DevBot inherits, and in the standalone `docker-compose.production.yml`) now runs with:
+  - `read_only: true` and no tmpfs, because it writes no files;
+  - `cap_drop: [ALL]`;
+  - `security_opt: ["no-new-privileges:true"]`.
+
+  It still runs as the unprivileged `bun` user, under Docker's default AppArmor profile and seccomp filter.
+- **The backup job** (`backup` in the production file) gets the same three settings, plus a 1 MB private `/tmp` tmpfs. The job writes exactly one file there, `/tmp/ca.crt`.
+- **How the write paths were established.** Throwaway containers ran with a disposable PostgreSQL and a fake token, never a second DevBot. `docker diff` showed nothing for every bot path the deploy and the maintenance tools use:
+  - the migrations and the restore check;
+  - a writer-lease wait;
+  - the health check and a readiness probe;
+  - a Lodestone parse in its worker, and a selector check;
+  - `register.js`, `commands.js`, `retry.js` and `preview.js`.
+
+  Every path behaves the same hardened. Inside the container, the capability sets are zero and `NoNewPrivs` is 1. The backup dump comes out the same size and restores.
+- **Two tools write a file.** `preview.js --output` and `snapshot.js --output` need a one-run writable mount. Production runs both from the operator clone. The site's tools page gives the mount.
+- **Tests.** `tests/unit/container-hardening.test.ts` pins the settings on both bot definitions and on the backup job, and keeps the two bot definitions in step. It also checks that the DevBot, build and tools overlays don't loosen anything. Mutations of each setting fail it.
+- **Docs.** HOSTING.md ("Container hardening"), CONFIGURATION.md ("Container settings"), and the site's install, tools and requirements pages. The records include DevBot's rehearsal plan. Production's deploy request waits, unapproved, until that rehearsal passes.
 
 ## 2.30.2 — Keep onboarding correct under Discord's channel obfuscation
 

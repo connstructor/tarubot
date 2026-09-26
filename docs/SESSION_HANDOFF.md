@@ -273,7 +273,17 @@ The handoff's documentation version is not evidence of a deployed image; each ve
 - **Deploy.** A restart through Deploy production once @deconfined approves it; DevBot by hand with their go-ahead, then a command read-back.
 - **Status.** Branch `chore/cleanup-2.30.1` from `853c4f3`. All checks pass locally ([VERIFICATION.md](VERIFICATION.md#automated-suites)): unit 1,419, contract 34, Docker 1,568 with each fixture, the site build and `ci:version`. Merged by @deconfined as [PR #49](https://github.com/deconfined/tarubot/pull/49) (`ea7212e`) on 2026-09-26 at 15:55 UTC.
 
-**Update, 2.30.2 (issue #47; current version):**
+**Update, 2.30.3 (issue #51; current version):**
+- **Why.** @deconfined decided on 2026-09-26 to harden the containers now, before the move to AlmaLinux and rootless Podman ([#50](https://github.com/deconfined/tarubot/issues/50)).
+- **Change.** Compose only:
+  - the bot gets `read_only: true` (no tmpfs), `cap_drop: [ALL]` and `no-new-privileges`;
+  - the backup job gets the same, plus a 1 MB `/tmp`;
+  - `tests/unit/container-hardening.test.ts` pins them.
+
+  The write paths were proven with throwaway containers ([VERIFICATION.md](VERIFICATION.md#automated-suites)).
+- **Deploy.** DevBot rehearses first, with @deconfined's go-ahead ([DEV_GUILD.md](DEV_GUILD.md)). Production's Deploy production request stays unapproved until the rehearsal passes.
+
+**Update, 2.30.2 (issue #47):**
 - **Why.** Discord's Private Channel Obfuscation becomes mandatory on 2026-11-16 ([#47](https://github.com/deconfined/tarubot/issues/47)). For each channel a bot can't view, `GET /guilds/{id}/channels` then leaves it out, and the gateway sends it as `___hidden___`, flagged `CHANNEL_OBFUSCATED` (`1 << 17`), with one fake overwrite denying @everyone View Channel; only its id, type, position and parent are real. Interactions aren't obfuscated. The #47 audit found that the onboarding pass would then block wherever the Community Updates channel is hidden from TaruBot, as it is in DevBot's test guild; that fixing only the channel list would loop on `superseded`; that a managed channel TaruBot can't see would drop out of the pass while it still reported `secured`; and that `/setup` could create a second officer room. Production isn't affected directly while onboarding is off there and Administrator is held.
 - **Decisions.** @deconfined's [answers](https://github.com/deconfined/tarubot/issues/47#issuecomment-5847261822) to the [plan](https://github.com/deconfined/tarubot/issues/47#issuecomment-5846832387), 2026-09-26: (1) fail closed: "Yes, refuse if it means the result is a broken bot. Warnings and then leaving things nonfunctional is a bad admin experience." REQUIREMENTS.md ACCESS-01 now says so; (2) 2.30.1, then 2.30.2, then 2.31.0 (#46, which reuses this release's hidden-channel detection); (3) DevBot's toggle stays on until the date.
 - **Change** (the plan's items):

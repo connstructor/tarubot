@@ -531,6 +531,27 @@ The [plan on #47](https://github.com/deconfined/tarubot/issues/47#issuecomment-5
      2.30.2 refuses a hidden managed channel on 50001; on 10003 while the gateway still holds the entry obfuscated or its cached overwrites deny DevBot View Channel (a channel option clears the flag but keeps the fake deny); and on a 200 that is obfuscated (`flags` includes `131072`) or denies DevBot View Channel. A 10003 for a stale entry DevBot could view is a deleted channel; anything else is rethrown. If Discord answers some other way, open an issue before relying on the refusal.
   6. Record each result as a new dated entry here, in VERIFICATION.md and in OPEN_ITEMS.md. Turning the toggle off, if ever needed, takes a restart.
 
+### 2.30.3 rehearsal (planned) — container hardening
+
+2.30.3 ([#51](https://github.com/deconfined/tarubot/issues/51)) changes only the Compose files. The bot gets `read_only: true`, `cap_drop: [ALL]` and `no-new-privileges` from `docker-compose.yml`; the DevBot overlay adds nothing ([HOSTING.md](HOSTING.md#container-hardening)). There is no migration and no command change. Throwaway containers passed before the merge ([VERIFICATION.md](VERIFICATION.md)), but none of them logged in to Discord, so the gateway, job processing, Discord posts and a parse from a real `/refresh` are left to DevBot. DevBot rehearses them live, with @deconfined's go-ahead. **The "Deploy production" request for 2.30.3 waits, unapproved, until this rehearsal passes.**
+
+The settings are in the Compose file, not in the image. So DevBot can rehearse either before the merge, on the image it already runs, or after 2.30.3 is published:
+
+1. **Checkout.** In the DevBot checkout, take the Compose file that has the settings:
+   - Before the merge, once the pull request's branch is pushed: `git fetch origin`, then `git switch --detach origin/chore/harden-containers-2.30.3`. Set `TARUBOT_IMAGE_TAG` to the release DevBot runs now (`docker inspect tarubot-tarubot-1 --format '{{.Config.Image}}'`).
+   - After publication: `git switch main`, then `git pull --ff-only` up to the 2.30.3 merge. Set `TARUBOT_IMAGE_TAG=2.30.3`. If the checkout isn't updated, 2.30.3 starts with Docker's defaults, and the rehearsal proves nothing.
+
+   Before the restart, `docker compose -f docker-compose.yml -f docker-compose.devbot.yml config --format json | jq -c '.services.tarubot | {read_only, cap_drop, security_opt}'` must print `{"read_only":true,"cap_drop":["ALL"],"security_opt":["no-new-privileges:true"]}`. The filter keeps the values from `.env` off the screen; a plain `config` would print them.
+2. **Restart.** Run the usual backup and `check-restore.js` (no migration). Then run `TARUBOT_IMAGE_TAG=<tag> docker compose -f docker-compose.yml -f docker-compose.devbot.yml up -d --wait --remove-orphans tarubot`, with the tag from step 1. Compose recreates the container, because its settings changed.
+3. **Settings in force.** `docker inspect tarubot-tarubot-1 --format '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}'` shows `true [ALL] [no-new-privileges:true]`. In the container, `/proc/1/status` shows `CapBnd: 0000000000000000` and `NoNewPrivs: 1`.
+4. **Readiness and logs.** Readiness is 200, with the writer lease held. The log has "Modules loaded" and "Database writer lease acquired" at info. Over at least one scheduler cycle with Lodestone work (a roster or profile refresh), it has no warning or error, and no `EROFS`, `EACCES` or "read-only file system".
+5. **Discord.** The startup plan posts in `#chat`. `/config validate` replies as before. `/refresh force:true` from an officer reads the roster, which exercises the parse worker.
+6. **Tools.** `docker compose … exec -T tarubot bun dist/scripts/commands.js list` is clean, as `ops/deploy.sh` runs it.
+
+After a rehearsal before the merge, `git switch main` puts the checkout back. The container keeps the settings until it is next recreated, which does no harm, because its release runs unchanged under them. DevBot moves to 2.30.3 as usual once it is published.
+
+DevBot has no backup service (that is production's `backup`). After the production deploy, the next 04:30 UTC run of `ops/backup.sh` must end `backup ok`, with its success ping, under the new settings.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

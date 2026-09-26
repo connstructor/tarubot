@@ -66,6 +66,12 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *logging
+    # Container hardening (2.30.3, #51), as in docker-compose.yml: the bot writes no file at
+    # runtime, so the root filesystem is read-only with no tmpfs, it keeps no capability, and
+    # nothing in it may gain privileges. docs/HOSTING.md "Container hardening" has the evidence.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # The daily database dump (2.24.0): ops/backup.sh runs it with `docker compose run -T backup`,
   # encrypts its output with age as it streams, and uploads it. The profile keeps `up` from ever
@@ -87,3 +93,12 @@ services:
       - umask 077 && printf '%s\n' "$$DATABASE_CA_CERT" > /tmp/ca.crt && exec pg_dump --format=custom --no-owner --no-privileges "$$DATABASE_URL"
     logging:
       driver: none
+    # Container hardening (2.30.3, #51): /tmp/ca.crt is the only file the job writes (tested), so
+    # the root filesystem is read-only and /tmp is a small tmpfs, private to the image's root user
+    # (who runs pg_dump) and gone when the run ends. The job keeps no capability and gains no
+    # privilege.
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

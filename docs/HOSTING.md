@@ -9,7 +9,7 @@ The cutover first went live on DigitalOcean App Platform, then moved the same ev
 | Piece | Where |
 | --- | --- |
 | Host | Linode `tarubot`: us-iad-2, 1 vCPU / 2 GB, Ubuntu 26.04. Reached as `tarubot@<production host>`. The DNS zone is DNSSEC-signed and carries SSHFP records, so `ssh -o VerifyHostKeyDNS=yes` checks the host key. |
-| Bot | `~/tarubot` on the host: a clone of this repository, run with [`docker-compose.production.yml`](../docker-compose.production.yml). It has only `tarubot`: no bundled PostgreSQL, no parser sidecar (the Lodestone parser runs inside the bot since 2.21.0), the release pinned by `TARUBOT_IMAGE_TAG`, bounded logs. |
+| Bot | `~/tarubot` on the host: a clone of this repository, run with [`docker-compose.production.yml`](../docker-compose.production.yml). It has only `tarubot`: no bundled PostgreSQL, no parser sidecar (the Lodestone parser runs inside the bot since 2.21.0), the release pinned by `TARUBOT_IMAGE_TAG`, bounded logs, and since 2.30.3 a read-only root filesystem with no capabilities ([Container hardening](#container-hardening)). |
 | Settings | `~/tarubot/.env` on the host, mode 600, never committed: `TARUBOT_IMAGE_TAG`, `DATABASE_URL`, `DATABASE_CA_CERT`, `DISCORD_TOKEN`, since 2.18.0 `GITHUB_REPORTS_TOKEN` (the issue reporter's token; empty saves reports without sending them), since 2.22.0 `HEALTHCHECKS_PING_URL` (the heartbeat; see below), and since 2.28.0 `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` (the TaruBot GitHub App behind `/suggest`; the key is a double-quoted multi-line PEM like the CA, and either one empty switches `/suggest` off; see [Public suggestions](#public-suggestions-the-github-app)). Everything else is fixed in the Compose file: the production application ID, `TARUBOT_ENVIRONMENT=production`, effects on, and no test-guild scoping. |
 | Database | Linode managed PostgreSQL `tarubot-pgsql`, PostgreSQL 18, us-iad-2. Use the **direct port 27520**, never the 27521 pool, which can't hold the writer lease. The login and database are `tarubot`, and `tarubot` owns the database. The admin login `akmadmin` is for provisioning only; the tool guard refuses it. The allow list holds the host and the operator's address. |
 | Settings copy | Encrypted with `age` in `~/tarubot-cutover/env-backups/` on the operator machine (2.23.0; see "Settings copy"). |
@@ -35,6 +35,22 @@ Readiness must report `database`, `writerLease`, `discord` and `effects` as true
 - `parsing` and `waiting` count parses running and requests waiting for a parse slot.
 
 **Retrying a job.** After fixing what a failed or blocked job needs, retry it from the operator machine with `prod dist/scripts/retry.js GUILD_ID JOB_ID` (`prod` is [MIGRATION.md](MIGRATION.md#e0-conventions) E0). What the tool retries and refuses is on the documentation site's [monitoring page](../site/src/content/docs/deploy/monitoring.md#jobs-that-need-attention).
+
+## Container hardening
+
+Since 2.30.3 ([#51](https://github.com/deconfined/tarubot/issues/51)), both production containers run with a read-only root filesystem, no Linux capabilities and `no-new-privileges`. @deconfined decided on 2026-09-26 to do this on the current host, before the move to AlmaLinux and rootless Podman ([#50](https://github.com/deconfined/tarubot/issues/50)). The settings are in `docker-compose.production.yml`. DevBot gets the same ones for the bot from `docker-compose.yml`, which its overlay leaves alone.
+
+| Service | Root filesystem | tmpfs | Capabilities | `no-new-privileges` |
+| --- | --- | --- | --- | --- |
+| `tarubot` | read-only | none | all dropped | on |
+| `backup` | read-only | `/tmp`: 1 MiB, mode 0700 | all dropped | on |
+
+- **Why no tmpfs for the bot.** Tests in throwaway containers showed that the bot writes no files ([VERIFICATION.md](VERIFICATION.md)). Its records are in PostgreSQL, its log goes to stdout, and the Lodestone selectors stay in memory. The base image sets `BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`, so Bun keeps no cache on disk. The same holds for the health check, `bun -e`, the Lodestone parse worker, and the tools `ops/deploy.sh` runs in the container.
+- **Why `/tmp` for the backup job.** It writes one file: `/tmp/ca.crt`, the cluster CA that `pg_dump` verifies against. Without the tmpfs, the job fails with `can't create /tmp/ca.crt: Read-only file system`. The tmpfs ends with the run, and Docker mounts it `nosuid,nodev,noexec`.
+- **What stays the same.** The bot still runs as the image's unprivileged `bun` user. Both containers keep Docker's `docker-default` AppArmor profile, its builtin seccomp filter, and its own `/dev/shm` (which the bot doesn't use). `pg_dump` still runs as the PostgreSQL image's root user, but that user now has no capabilities.
+- **For operators.** `docker compose exec` and `run` in the bot's container can't write files. Most tools only print to stdout, so redirect their output on the host. The everyday checks above and the deploy steps work as before. The change takes effect when the container is recreated, which the next deploy does, since the Compose file changed.
+- **The two tools that write a file.** `preview.js --output` (the grandfathering plan) and `snapshot.js --output` fail with `EROFS` in the container, after their Discord and database reads. Production runs them from the operator clone ([MIGRATION.md](MIGRATION.md#e0-conventions) E0), not in the container, so nothing changes there. In a container, give that one run a writable bind mount and point `--output` into it, as the site's [maintenance tools page](../site/src/content/docs/deploy/tools.md#previewjs) shows. The host directory must be writable by uid 1000, the image's `bun` user.
+- **Rolling back.** The Deploy production workflow's rollback checks out the older release's commit (`git reset --keep` in `ops/deploy.sh`), so it brings back that release's Compose file and Docker's defaults. The manual [rollback](#updating-to-a-release) only re-pins `TARUBOT_IMAGE_TAG`, so it keeps these settings. That is safe for every release it can reach on schema 010 (2.29.0 and later): their runtime code makes no file writes, and 2.30.0 ran unchanged under these settings in throwaway containers.
 
 ## Heartbeat
 
