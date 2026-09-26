@@ -697,11 +697,13 @@ already_live() {
 }
 
 # No migration: Compose replaces the container (the old bot stops first and frees the lease).
+# Every `up` names the tarubot service: a profile-gated service added later (such as the v3 web
+# proxy, issue #43) never starts with, or fails, a bot deploy. Today it is equivalent to a bare `up`.
 restart_path() {
   step up
   CHANGED=1
   CLOCK=$SECONDS
-  if TARUBOT_IMAGE_TAG=$V compose 300 up -d --wait --wait-timeout 180 --remove-orphans; then
+  if TARUBOT_IMAGE_TAG=$V compose 300 up -d --wait --wait-timeout 180 --remove-orphans tarubot; then
     DOWNTIME=$((SECONDS - CLOCK))
     verify_started
     commands_then deployed
@@ -745,7 +747,7 @@ migration_path() {
     restore_previous migration-failed migration-may-have-committed
   fi
   step up
-  if compose 300 up -d --wait --wait-timeout 180 --remove-orphans; then
+  if compose 300 up -d --wait --wait-timeout 180 --remove-orphans tarubot; then
     DOWNTIME=$((SECONDS - CLOCK))
     verify_started
     commands_then deployed
@@ -875,7 +877,7 @@ recover_restart() {
   # Count again: the lease may have come between the first count and the stop.
   evidence "$TC_ID"
   if ((!EV_COMPLETE || EV_LEASE > 0)); then
-    TARUBOT_IMAGE_TAG=$V compose 300 up -d || log "could not start $V again"
+    TARUBOT_IMAGE_TAG=$V compose 300 up -d tarubot || log "could not start $V again"
     pin_env "$V" || log "could not pin .env to $V"
     if ((EV_LEASE > 0)); then needs_you new-release-took-lease; fi
     needs_you lease-evidence-incomplete
@@ -890,7 +892,7 @@ restore_previous() {
   local json
   git reset --quiet --keep "$LIVE_C" || log "could not put the clone back at $LIVE_C"
   STAGED=0
-  if compose 300 up -d --wait --wait-timeout 180 --remove-orphans; then
+  if compose 300 up -d --wait --wait-timeout 180 --remove-orphans tarubot; then
     DOWNTIME=$((SECONDS - CLOCK))
     CID=$(compose 60 ps -a -q tarubot) || CID=
     json=$(timeout 60 docker inspect "$CID" 2>/dev/null) || json='[]'

@@ -214,7 +214,7 @@ A host reboot, the OOM killer or a kill ends the worker without a result. The ne
 
 ### Setting it up (owner)
 
-Each step is the owner's, with his go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 5, 6, 12 and 13).
+Each step is the owner's, with the owner's go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 5, 6, 12 and 13).
 
 1. **Before the 2.30.0 pull request merges,** create the environments in Settings → Environments:
    - `production`: required reviewer `deconfined` only; "Prevent self-review" **off**; "Allow administrators to bypass configured protection rules" **off**; deployment branches "Selected branches and tags" with the branch rule `main` only; no wait timer.
