@@ -64,6 +64,13 @@ services:
       retries: 3
     restart: unless-stopped
     stop_grace_period: 30s
+    # Container hardening (2.30.3, #51): the bot writes no file at runtime (tested with its tools
+    # and health check; docs/VERIFICATION.md), so its root filesystem is read-only with no tmpfs.
+    # It binds no privileged port and needs no capability, and nothing in it may gain privileges.
+    # DevBot's overlay inherits these; docker-compose.production.yml repeats them for production.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 volumes:
   # Container recreation preserves this volume; deleting it is an explicit operator action.
   postgres_data:

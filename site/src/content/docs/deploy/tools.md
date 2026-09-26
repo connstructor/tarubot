@@ -11,7 +11,7 @@ TaruBot's maintenance tools are compiled scripts in the bot's image. Run them in
 docker compose run --rm --no-deps -T tarubot bun dist/scripts/<tool>.js [arguments]
 ```
 
-`--no-deps` leaves the running services alone, and `-T` keeps the output plain for scripts and logs. Each tool checks its settings against its deployment profile before it touches Discord or the database; yours is the unmanaged profile (see [Requirements](/tarubot/deploy/requirements/#maintenance-tools-and-profiles)). A tool that refuses exits without changing anything, and names the setting at fault, never its value.
+`--no-deps` leaves the running services alone, and `-T` keeps the output plain for scripts and logs. The container's filesystem is [read-only](/tarubot/deploy/install/#the-bots-container). Most tools only print, so to keep their output, redirect it on the host (`… > output.json`). The two that write a file, `preview.js --output` and `snapshot.js`, need [a writable mount](#previewjs) for that run. Each tool checks its settings against its deployment profile before it touches Discord or the database; yours is the unmanaged profile (see [Requirements](/tarubot/deploy/requirements/#maintenance-tools-and-profiles)). A tool that refuses exits without changing anything, and names the setting at fault, never its value.
 
 ## The tools
 
@@ -86,6 +86,16 @@ docker compose run --rm --no-deps -T tarubot bun dist/scripts/preview.js YOUR_GU
 ```
 
 It needs a recent accepted roster, and it reads the member list from Discord.
+
+`--output PLAN.json` also saves the first-activation grandfathering plan that `activate.js --grandfather-plan-file` confirms. Only a server imported from the previous bot and not yet activated has one; for any other server, the tool saves nothing and exits 1. The container can't write the file, so give that one run a writable mount and point `--output` into it:
+
+```sh
+mkdir -p work
+docker compose run --rm --no-deps -T -v "$PWD/work:/work" tarubot \
+  bun dist/scripts/preview.js YOUR_GUILD_ID --output /work/plan.json
+```
+
+The directory must be writable by uid 1000, the image's `bun` user. Without the mount, the tool fails with `EROFS` after its Discord and database reads, and saves nothing. `snapshot.js` always writes its `--output` file, so it needs the same kind of mount. A tool that only reads a file, such as `activate.js --grandfather-plan-file`, can use a read-only one (`-v "$PWD/work:/work:ro"`).
 
 ## Tools you won't need
 

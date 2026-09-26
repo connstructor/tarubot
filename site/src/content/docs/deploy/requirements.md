@@ -26,7 +26,7 @@ These pages are for people who run TaruBot themselves. A deployment is one bot p
 
 To use an external PostgreSQL instead, such as a managed database:
 
-- Write your own Compose override that sets the bot's `DATABASE_URL`, and `DATABASE_CA_CERT` for verified TLS; the stock file points the bot at its bundled database.
+- Write your own Compose override that sets the bot's `DATABASE_URL`, and `DATABASE_CA_CERT` for verified TLS; the stock file points the bot at its bundled database. Keep [the container's locked-down settings](/tarubot/deploy/install/#the-bots-container): an override that only adds these two settings does.
 - Use PostgreSQL 18, the version the project tests with, over a **direct session connection**. A transaction-mode pool (such as PgBouncer in transaction mode) can't hold the session lock that keeps a single bot writing to the database; see [the single writer](/tarubot/deploy/operations/#single-database-writer).
 - Give the bot its own database and user, which owns the schema: migrations create tables, functions and triggers.
 
