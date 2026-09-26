@@ -645,7 +645,7 @@ Show background work: roster checks, role updates, posts and messages, with thei
 
 ### /channel
 
-Show the current channel's ID, name and type.
+Show the current channel's ID, name and type. In a channel TaruBot can't see, it shows the ID only.
 
 **Who can use it:** anyone.
 

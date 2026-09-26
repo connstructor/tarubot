@@ -18,6 +18,8 @@ import {
   missingPermissions,
   requiredBotPermissions,
   targetReport,
+  unlistedState,
+  unlistedTargets,
 } from "../../src/discord/inspection.js";
 
 const GUILD = "100";
@@ -259,8 +261,60 @@ test("the target report previews channel access with and without Administrator",
   expect(staff?.bot.view).toBe(true);
   expect(staff?.withoutAdministrator.view).toBe(false);
   expect(staff?.imported).toBe(false);
-  expect(missing).toMatchObject({ exists: false, name: null, type: null });
+  expect(missing).toMatchObject({ exists: false, state: "unchecked", name: null, type: null });
   expect(missing?.bot.view).toBe(false);
+  expect(ledger?.state).toBe("listed");
+});
+
+test("a destination missing from the list reads as hidden (or another server's) or deleted, as Discord answered (#47)", () => {
+  // Without Administrator, and from 2026-11-16 in any case, the channel list leaves out every
+  // channel the bot can't view, so a missing destination is not necessarily deleted.
+  const roles = [role(GUILD, 0, P.ViewChannel | P.SendMessages), role("700", 2, P.ManageRoles)];
+  const channels = [{ id: "31", name: "ledger", type: 0, permission_overwrites: [] }];
+  const channelTargets = [
+    { field: "ledger", id: "31", imported: true },
+    { field: "officer_notifications", id: "33", imported: true },
+    { field: "guest_applications", id: "34", imported: false },
+    { field: "changelog", id: "35", imported: null },
+    { field: "status", id: "36", imported: null },
+  ];
+  // Only the unlisted IDs are probed, each once.
+  expect(
+    unlistedTargets(
+      [...channelTargets, { field: "officer_notifications", id: "33", imported: true }],
+      channels,
+    ),
+  ).toEqual(["33", "34", "35", "36"]);
+  expect([
+    unlistedState({ ok: false, code: 50001 }, GUILD),
+    unlistedState({ ok: false, code: 10003 }, GUILD),
+    unlistedState({ ok: true, guildId: "999" }, GUILD),
+    unlistedState({ ok: true, guildId: GUILD }, GUILD),
+    unlistedState({ ok: false, code: 0 }, GUILD),
+    unlistedState({ ok: false }, GUILD),
+  ]).toEqual(["hidden_or_other_server", "deleted", "other_server", null, null, null]);
+  const report = targetReport({
+    guildId: GUILD,
+    roles,
+    channels,
+    bot: { id: BOT, roles: ["700"] },
+    managedRoles: [],
+    channelTargets,
+    unlisted: { "33": "hidden_or_other_server", "34": "deleted", "35": "other_server" },
+  });
+  expect(report.administrator).toBe(false);
+  expect(
+    report.channels.map(({ id, state, exists, name }) => ({ id, state, exists, name })),
+  ).toEqual([
+    { id: "31", state: "listed", exists: true, name: "ledger" },
+    // 50001 can't tell a hidden channel from another server's, so it isn't claimed to exist here.
+    { id: "33", state: "hidden_or_other_server", exists: false, name: null },
+    { id: "34", state: "deleted", exists: false, name: null },
+    { id: "35", state: "other_server", exists: false, name: null },
+    { id: "36", state: "unchecked", exists: false, name: null },
+  ]);
+  // A hidden destination has no readable overwrites, so its access reads as none.
+  expect(report.channels[1]?.bot.view).toBe(false);
 });
 
 test("inventory diffs report both directions, sorted and de-duplicated", () => {

@@ -1,11 +1,20 @@
 /**
  * validateChannel's two refusals: a channel TaruBot can't use (including one Discord hides from it,
- * 50001 Missing Access) gets the permissions refusal with its How to fix step, while a deleted,
- * non-text or other-server channel is "unavailable" with no permissions remedy. The SDK's guild and
- * channel managers are stubbed, so no Discord credentials are needed.
+ * 50001 Missing Access, or a 10003 for a text channel the gateway still holds as hidden) gets the
+ * permissions refusal with its How to fix step, while a deleted, non-text or other-server channel
+ * is "unavailable" with no permissions remedy. The SDK's guild and channel managers are stubbed, so
+ * no Discord credentials are needed.
  */
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { ChannelType, Collection, DiscordAPIError } from "discord.js";
+import {
+  ChannelFlags,
+  ChannelFlagsBitField,
+  ChannelType,
+  Collection,
+  DiscordAPIError,
+  PermissionFlagsBits as P,
+  PermissionsBitField,
+} from "discord.js";
 import { DiscordGateway } from "../../src/discord/gateway.js";
 import { failureReply } from "../../src/discord/presenters/failure.js";
 import { Failure } from "../../src/domain/values.js";
@@ -32,19 +41,45 @@ afterEach(async () => {
   for (const gateway of created.splice(0)) await gateway.client.destroy();
 });
 
+/** The bot member fetchMe returns; a cached entry's permissionsFor must be asked about it. */
+const BOT = { id: "900" };
+
+/**
+ * A cached (gateway) text channel entry: `obfuscated` sets CHANNEL_OBFUSCATED, and `botView` is
+ * whether its cached overwrites leave TaruBot View Channel. An entry a slash-command option
+ * un-flagged is `{ obfuscated: false, botView: false }`: real flags over the synthetic deny.
+ */
+const cachedText = (obfuscated: boolean, botView: boolean) => ({
+  type: ChannelType.GuildText,
+  flags: new ChannelFlagsBitField(obfuscated ? ChannelFlags.ChannelObfuscated : 0),
+  permissionsFor: (member: unknown) => {
+    if (member !== BOT) throw new Error("permissionsFor must be asked about TaruBot's member");
+    return new PermissionsBitField(botView ? P.ViewChannel : 0n);
+  },
+});
+
 /**
  * A gateway whose guild 100 lists `listed` channels in its cache (Discord sends hidden channels
- * there too), and whose channel fetch answers with `fetched` or rejects with it.
+ * there too), each a bare channel type or a fuller entry such as cachedText's, and whose channel
+ * fetch answers with `fetched` or rejects with it.
  */
-function gatewayWith(listed: Record<string, ChannelType>, fetched: unknown): DiscordGateway {
+function gatewayWith(
+  listed: Record<string, ChannelType | ReturnType<typeof cachedText>>,
+  fetched: unknown,
+): DiscordGateway {
   const gateway = new DiscordGateway();
   created.push(gateway);
   const guild = {
     id: "100",
     roles: { fetch: async () => new Collection() },
-    members: { fetchMe: async () => ({ id: "900" }) },
+    members: { fetchMe: async () => BOT },
     channels: {
-      cache: new Collection(Object.entries(listed).map(([id, type]) => [id, { id, type }])),
+      cache: new Collection(
+        Object.entries(listed).map(([id, entry]) => [
+          id,
+          typeof entry === "object" ? { id, ...entry } : { id, type: entry },
+        ]),
+      ),
     },
   };
   spyOn(gateway.client.guilds, "fetch").mockImplementation(async () => guild as never);
@@ -93,10 +128,39 @@ test("a text channel TaruBot can't view (50001 Missing Access) is a permissions 
   expect(officerFields(error)).toEqual(["Affected", "How to fix", "Then"]);
 });
 
-test("a deleted channel (10003) is unavailable, with no permissions remedy", async () => {
+test("a deleted channel (10003) the gateway no longer holds is unavailable, with no permissions remedy", async () => {
   const error = await refusal(gatewayWith({}, discordError(10003, 404)));
   expect(error).toMatchObject(UNAVAILABLE);
   expect(Reflect.get(Reflect.get(error as object, "detail") as object, "fix")).toBeUndefined();
+  expect(officerFields(error)).toEqual(["Affected", "Then"]);
+});
+
+test("a 10003 for a text channel the gateway still holds as hidden is a permissions problem (#47)", async () => {
+  // Discord doesn't document its single-channel answer for a hidden channel from 2026-11-16. An
+  // obfuscated entry, or one a channel option un-flagged over the synthetic deny, is hidden.
+  for (const [obfuscated, botView] of [
+    [true, false],
+    [true, true],
+    [false, false],
+  ] as const) {
+    const error = await refusal(
+      gatewayWith({ [CHANNEL]: cachedText(obfuscated, botView) }, discordError(10003, 404)),
+    );
+    expect({ obfuscated, botView, error }).toMatchObject({
+      obfuscated,
+      botView,
+      error: PERMISSIONS,
+    });
+    expect(officerFields(error)).toEqual(["Affected", "How to fix", "Then"]);
+  }
+});
+
+test("a 10003 for a stale entry TaruBot could view is a deleted channel, so unavailable", async () => {
+  // Deleted after the gateway sent it, with its CHANNEL_DELETE not yet applied.
+  const error = await refusal(
+    gatewayWith({ [CHANNEL]: cachedText(false, true) }, discordError(10003, 404)),
+  );
+  expect(error).toMatchObject(UNAVAILABLE);
   expect(officerFields(error)).toEqual(["Affected", "Then"]);
 });
 

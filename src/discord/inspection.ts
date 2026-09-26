@@ -6,6 +6,7 @@
 import { PermissionFlagsBits, PermissionsBitField } from "discord.js";
 import { rolePositionChanges } from "../domain/role-layout.js";
 import { Failure } from "../domain/values.js";
+import { MISSING_ACCESS, UNKNOWN_CHANNEL } from "./obfuscation.js";
 
 /** The structural subset of a command option that decides its invocable paths. */
 export interface CommandOption {
@@ -70,7 +71,10 @@ export interface ApiOverwrite {
   deny: string;
 }
 
-/** A guild channel as GET /guilds/{id}/channels returns it. */
+/**
+ * A guild channel as GET /guilds/{id}/channels returns it. From 2026-11-16 that list leaves out
+ * every channel the bot can't view (#47), so a channel missing from it may be hidden, not deleted.
+ */
 export interface ApiChannel {
   id: string;
   name?: string | undefined;
@@ -288,16 +292,61 @@ export interface ChannelTarget {
   imported: boolean | null;
 }
 
+/**
+ * What GET /channels/{id} said about a destination the guild's channel list left out:
+ * - hidden_or_other_server: 50001 Missing Access. Either TaruBot can't view it in this server, or
+ *   it belongs to a server TaruBot isn't in; Discord answers both the same way;
+ * - deleted: 10003 Unknown Channel;
+ * - other_server: TaruBot can read it, but it belongs to another server.
+ */
+export type UnlistedState = "hidden_or_other_server" | "deleted" | "other_server";
+
+/**
+ * Where a destination stands: `listed` in the guild's channel list (its access is computed),
+ * one of the UnlistedState answers, or `unchecked` when it isn't listed and no answer is known.
+ */
+export type ChannelState = "listed" | UnlistedState | "unchecked";
+
 /** Destination access with and without Administrator, as the bot would use the channel. */
 export interface ChannelEntry {
   field: string;
   id: string;
   name: string | null;
+  /**
+   * In this server's channel list. A destination that isn't may still exist (from 2026-11-16 the
+   * list leaves out every channel TaruBot can't view), so `state` says what Discord answered.
+   */
   exists: boolean;
+  state: ChannelState;
   type: number | null;
   imported: boolean | null;
   bot: Access;
   withoutAdministrator: Access;
+}
+
+/** The destination IDs the channel list left out, which the inspection asks about one by one. */
+export function unlistedTargets(
+  targets: readonly ChannelTarget[],
+  channels: readonly ApiChannel[],
+): string[] {
+  const listed = new Set(channels.map((channel) => channel.id));
+  return [...new Set(targets.map((target) => target.id))].filter((id) => !listed.has(id));
+}
+
+/**
+ * Classify one GET /channels/{id} answer for an unlisted destination by Discord's JSON error code
+ * (not the HTTP status), or, when it succeeded, by the server the channel belongs to. A
+ * successful read of a channel in this server (created after the list was read) or any other
+ * answer is null, which the report shows as `unchecked`.
+ */
+export function unlistedState(
+  answer: { ok: boolean; code?: number | undefined; guildId?: string | null | undefined },
+  guildId: string,
+): UnlistedState | null {
+  if (answer.ok) return answer.guildId && answer.guildId !== guildId ? "other_server" : null;
+  if (answer.code === MISSING_ACCESS) return "hidden_or_other_server";
+  if (answer.code === UNKNOWN_CHANNEL) return "deleted";
+  return null;
 }
 
 /** The channel permissions a destination depends on, as booleans. */
@@ -332,6 +381,8 @@ export function targetReport(input: {
   bot: { id: string; roles: readonly string[] };
   managedRoles: readonly ManagedRoleTarget[];
   channelTargets: readonly ChannelTarget[];
+  /** Answers for the destinations the list left out (unlistedTargets), keyed by channel ID. */
+  unlisted?: Readonly<Record<string, UnlistedState>>;
 }) {
   const { guildId, roles, bot } = input;
   const withAdmin = guildPermissions(guildId, roles, bot.roles);
@@ -340,11 +391,14 @@ export function targetReport(input: {
   const channels = input.channelTargets.map(({ field, id, imported }): ChannelEntry => {
     const channel = input.channels.find((candidate) => candidate.id === id);
     const overwrites = channel?.permission_overwrites ?? [];
+    // A destination missing from the list is `unchecked` unless Discord answered for it.
+    const state: ChannelState = channel ? "listed" : (input.unlisted?.[id] ?? "unchecked");
     return {
       field,
       id,
       name: channel?.name ?? null,
-      exists: channel !== undefined,
+      exists: state === "listed",
+      state,
       type: channel?.type ?? null,
       imported,
       bot: access(channel ? channelPermissions(guildId, withAdmin, overwrites, bot) : 0n),
