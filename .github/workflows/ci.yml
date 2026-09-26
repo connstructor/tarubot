@@ -60,6 +60,13 @@ jobs:
         run: bun run lint
       - name: Check formatting
         run: bun run format:check
+      - name: Check the host scripts with ShellCheck
+        run: |
+          # ops/ runs on the production host (backup.sh, and deploy.sh as the deploy key's forced
+          # command). The ubuntu-24.04 image ships ShellCheck; install it if an image ever drops it.
+          command -v shellcheck > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck --version | sed -n 2p
+          shellcheck -S warning ops/*.sh
       - name: Compile the application
         run: bun run build
       - name: Generate synthetic integration input
@@ -85,7 +92,7 @@ jobs:
 
   images:
     name: Container build (${{ matrix.target }})
-    # Main/tag publication builds its own multi-platform images after the reusable checks pass.
+    # Main publication builds its own multi-platform images after the reusable checks pass.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: checks
     runs-on: ubuntu-24.04

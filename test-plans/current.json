@@ -1,17 +1,19 @@
 {
-  "title": "Session: 2.29.2 generic production host references",
-  "objective": "2.29.2 stops naming the production host in the docs and the settings-copy tool, which now requires --host. The bot is unchanged: no migration, no command change, and nothing to deploy.",
+  "title": "Session: 2.30.0 approved production deploys over SSH",
+  "objective": "2.30.0 adds the Deploy production workflow and ops/deploy.sh: production deploys run from GitHub after the owner approves them, over one restricted SSH key. The bot is unchanged: no migration, no command change. Deploys stay off until DEPLOY_ENABLED is set.",
   "user": [
-    "When you next refresh the settings copy, name the host: bun run host:env-backup -- --host tarubot@<production host> --identity ~/tarubot-cutover/age/tarubot.key.",
-    "Still open from 2.29.1: on the next pull request the agent opens, don't close and reopen it; the Claude review should start and post by itself.",
-    "Still open from 2.29.0's plan: /officer revoke, then /officer reset on a rank officer, each gives one 'Member status changes' post; /guest grant, revoke and reset within a minute on a visitor with no linked character posts nothing."
+    "Done 2026-09-26: the production and notify environments, the deploy key secret, DEPLOY_HOST, DEPLOY_KNOWN_HOSTS, Pushover, the firewall and the agent guards.",
+    "Before the merge: confirm the agent-rule clauses listed in the PR, and decide on signed build provenance (docs/CI_CD.md).",
+    "After the merge: deploy 2.30.0 by hand (a restart), install jq, add the key's restricted authorized_keys line and run the probes, then set DEPLOY_ENABLED=true.",
+    "First run: dispatch Deploy production with version=2.30.0 and approve it; expect already live, commands registered and one Pushover message.",
+    "Still open from 2.29.0: /officer revoke, then /officer reset on a rank officer, each gives one 'Member status changes' post; /guest grant, revoke and reset on a visitor with no linked character posts nothing."
   ],
   "assistant": [
-    "Read-only: DevBot and production still report 2.29.0 ready with the writer lease held; nothing to deploy.",
-    "Record the first agent-opened pull request's Claude review run in docs/VERIFICATION.md."
+    "Prepare the owner's setup commands (docs/HOSTING.md, Automated deploys); follow the agent rule in AGENTS.md: never approve, reject, cancel or re-run a deployment, and never hold the deploy key.",
+    "Record the first automated runs in docs/VERIFICATION.md."
   ],
   "bot": [
-    "Keep running 2.29.0 on schema 010; 2.29.2 changes no running code.",
+    "Keep running 2.29.0 on schema 010 until the owner deploys 2.30.0; it changes no running code.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }

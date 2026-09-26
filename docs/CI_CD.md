@@ -6,10 +6,83 @@
 2. Open a PR against `main`. **CI** runs version/changelog validation, type checking, lint/format checks, compilation, all unit/contract/PostgreSQL integration tests, and both runtime image builds for `linux/amd64` and `linux/arm64`.
 3. Merge after the required **CI result** check and the **CodeQL** code-scanning gate pass. The **Protect Main** ruleset requires `CI result` from GitHub Actions on an up-to-date branch, signed commits, and no new high-severity security alerts or error-level CodeQL results. CodeQL analyzes both JavaScript/TypeScript and GitHub Actions workflows on PRs, main updates, and a weekly schedule with the `security-extended` query suite, plus the `code-quality` suite for JavaScript/TypeScript (the Actions query pack has no quality queries); it excludes upstream/generated dependencies. GitHub's separate Code Quality product is not available for this repository, so quality results report through code scanning.
 4. **Publish containers** revalidates the merged commit, builds both image targets, and pushes them to GHCR. Pull requests have read-only repository permissions; only publication jobs receive `packages: write`.
+5. **Deploy production** plans the published release and, once the owner approves it in GitHub, deploys it to the production host over SSH (2.30.0; [below](#deploy-production)). Documentation-, test- and CI-only merges ask for no approval.
 
 Actions are pinned to full commits, and the repository's Actions settings require full-SHA pins. Dependabot proposes updates to those pins and their version comments. No checkout needs submodules since 2.20.0, which replaced Nodestone with a first-party parser; since 2.21.0 there is one image, because that parser runs inside the bot. No checkout persists its credentials. Registry login uses the workflow's `GITHUB_TOKEN`; no stored publishing PAT or Discord/database production credentials are needed by CI.
 
 The **Validate version and changelog** step runs last in the checks job. A PR without a version increment still fails, but only after every other step of that job has reported; the container builds depend on that job, so they run once the version commit is pushed.
+
+## Deploy production
+
+Since 2.30.0 (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"), `.github/workflows/deploy.yml` deploys published releases to the production host over SSH after @deconfined approves them. [HOSTING.md](HOSTING.md#automated-deploys-2300) has the host side: what the host checks and does, the outcomes, its logs and the owner's setup.
+
+**Triggers.** `workflow_run` of "Publish containers" (it must have succeeded, for a push to `main`, from `publish.yml` in this repository), and `workflow_dispatch` from `main` with `version`, `rollback` and `from`. The run's title names the target (`Deploy <commit>` for an automatic run; `Deploy <version>` or `Deploy <version> rollback from <live version>` for a dispatch), and the host requires that title, so an approval covers only that target.
+
+**Jobs.** None uses an action or checks out the repository, and every `${{ }}` reaches a script through `env:`.
+
+| Job | Environment | Token | What it does |
+| --- | --- | --- | --- |
+| `plan` | none | `contents: read`, `actions: read` | Checks both environments' protection (below), resolves the version, commit and image index digest (the version tag and `sha-<commit>` must be the same image, and the commit must be on `main`), decides whether the merge changed anything that runs in production, refuses an edited applied migration, a rollback across a migration, or a compare GitHub may have cut at 300 files, and writes the plan to the run summary. |
+| `deploy` | `production` | none | Waits for the approval; then writes the key to a mode-600 file under `RUNNER_TEMP` and unsets its variable, pins the host key, and sends one command to the host. Only connection failures are retried, with the same command, for up to 80 minutes (the host's longest run is about 68); a changed host key or a rejected key stops it at once. It reports `unreachable` only when every attempt failed before sshd answered, and `outcome-unknown` otherwise, since the host may have started. It removes the key file in an `always()` step. |
+| `notify` | `notify` | none | Sends one Pushover message; the credentials reach `curl` on stdin. A failed send never changes the outcome. |
+
+**What counts as a runtime change** (automatic runs only; a dispatch always proceeds): every changed path except `docs/`, `site/`, `tests/`, `test-plans/`, `.github/` (but `publish.yml` counts), top-level `*.md`, the development Compose files (`docker-compose.yml`, `.devbot`, `.tools`, `.build`), `.env.example`, `production.env.example` and `biome.json`, plus `package.json` when only its version line changed. A merge of 300 files or more is refused as `compare-too-large`, as is a rollback across that many: GitHub's compare API lists at most 300 files, so the plan could neither show the host-side changes nor check the migrations (deploy such a release by hand). Without a runtime change the run ends with `deploy=false` and a quiet message: no approval request.
+
+**Settings.**
+
+| Name | Kind | Where | Holds |
+| --- | --- | --- | --- |
+| `DEPLOY_ENABLED` | variable | repository | `true` turns the workflow on; unset, nothing runs and no environment is touched. The rollout and pause switch. |
+| `DEPLOY_HOST` | variable | `production` | The production host's DNS name. It isn't secret, but the repository names no host (`deploy-workflow.test.ts` checks the workflow and `ops/deploy.sh`). Every deploy run's public log shows it (below). |
+| `DEPLOY_KNOWN_HOSTS` | variable | `production` | One line: `DEPLOY_HOST`, then `ssh-ed25519` and the host's key, checked against its SSHFP records; no trailing comment. The public log shows it too. |
+| `DEPLOY_SSH_KEY` | secret | `production` | The deploy key, forced on the host to `ops/deploy.sh`. |
+| `PUSHOVER_TOKEN`, `PUSHOVER_USER` | secrets | `notify` | The "TaruBot deploys" Pushover application and the owner's user key. |
+
+**Environment protection** (the plan refuses with `gate` otherwise): `production` has exactly one required reviewer, the user `deconfined`, with "Prevent self-review" off, no administrator bypass, and deployment branches limited to the one branch rule `main`; `notify` is limited to `main`. An environment a typo auto-created has none of that, and the host checks the approval itself anyway.
+
+**Rules.**
+- **Re-runs are refused:** every job requires `run_attempt == 1`, and the host refuses a later attempt. Start a new run instead.
+- **No concurrency group:** several approval requests may wait; an older one approved after a newer release is live ends as `superseded`, and the host's lock runs one deploy at a time.
+- **Public data only:** the plan summary, the run log and approval comments are public. The host prints only fixed `step`, `warning` and `result` lines; ssh's own messages stay in a private file on the runner. GitHub prints a step's `env:` values in its log and masks only secrets, so the deploy job's log shows `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`: the host's name is public in every deploy run. The owner considers the name not secret; to hide it, both would have to become `production` secrets, and the workflow and its test would read `secrets.` instead of `vars.`.
+- **Publication stays separate:** `publish.yml` never deploys. Since 2.30.0 it publishes from `main` only (the `v*` tag trigger was dropped), so every tag a deploy trusts was built from `main`.
+
+The first `publish.yml` run after the merge completes a run of this workflow that does nothing until `DEPLOY_ENABLED` is set.
+
+### Agent access to deployments
+
+The agent rule is REQUIREMENTS.md's "Agent rule" in "Approved SSH-deploy amendments (2026-09-26)", verbatim in AGENTS.md. Confirmed by the owner (question 1): the owner's approval in GitHub is the go-ahead for a production deploy, and Claude sessions never approve one. Proposed in PR #44, pending @deconfined's confirmation, and followed in the meantime (they only restrict agents): agents never approve, reject or bypass a deployment; never create, read or hold the deploy key; never change the `production` or `notify` environments, their secrets or variables, or `DEPLOY_ENABLED`; never enable, disable, cancel or re-run Deploy production; and dispatch it only when the owner asks in that session. The owner's answer to question 10 added guards. They have been in place since 2026-09-26, as the agent's [token comment](https://github.com/deconfined/tarubot/issues/41#issuecomment-5843540619) proposed (its option A):
+
+- **Deny rules.** The owner's user-level Claude Code settings on the dev VM refuse any shell command that mentions the REST pending-deployments endpoint or the GraphQL approve and reject mutations: three rules, `Bash(*pending_deployments*)`, `Bash(*approveDeployments*)` and `Bash(*rejectDeployments*)`. They catch the obvious commands, not every way to send a request. Worth adding: `Bash(gh workflow enable *)`, `Bash(gh workflow disable *)`, `Bash(gh run cancel *)`, `Bash(gh run rerun *)`, `Bash(gh secret *)` and `Bash(gh variable *)`.
+- **A read-only token.** The dev VM's `gh` uses a fine-grained token with access to `deconfined/tarubot` only (optionally `deconfined/tarubot-reports`, to read issue reports), all read-only:
+
+  | Permission | Access | Used for |
+  | --- | --- | --- |
+  | Metadata | read | Required for every fine-grained token. |
+  | Contents | read | Fetching over HTTPS, reading files, compares and diffs. |
+  | Pull requests | read | `gh pr view`, `list`, `diff` and `checks`, and review comments. |
+  | Issues | read | Issues and their comments. |
+  | Actions | read | Workflow runs, jobs and logs, and the environments' settings. |
+  | Commit statuses | read | The status part of `gh pr checks`. |
+  | Pages | read | The documentation site's deploy status. |
+  | Code scanning alerts | read | CodeQL results. |
+  | Administration | read (optional) | Rulesets and branch protection. |
+  | Dependabot alerts | read (optional) | Dependabot alerts. |
+
+  Never granted: **Deployments** (write approves or rejects pending deployments), **Environments**, **Secrets** and **Variables** write, **Actions** write (dispatching, re-running or cancelling runs) and **Administration** write. Fine-grained tokens have no "Checks" permission; check runs on this public repository are readable without one. The earlier classic token (`repo`, `workflow`, `read:org`, `gist`) and the GitHub MCP server's all-scopes token are revoked.
+- **Pushes over SSH.** The checkout's push URL is `git@github.com:deconfined/tarubot.git`, with the owner's account key on the dev VM; fetches stay on HTTPS.
+- **Writes through the agent's app.** Pull requests, and issue comments and closes, go through `tarubot-agent[bot]` (Issues and Pull requests write, Metadata read).
+
+By the rule (its confirmed and proposed parts) and AGENTS.md, merging, approving, dispatching and every environment, secret and variable change are the owner's alone. Technically one path remains. The SSH key pushes as the owner, so it can push any branch but `main`, including one whose workflow asks for write permissions on its own `GITHUB_TOKEN`: the repository's default is read, and a same-repository workflow may raise it. Such a workflow can:
+- dispatch, cancel and re-run runs, including Deploy production on `main` (which still waits for the approval);
+- push release and `sha-` tags to `ghcr.io/deconfined/tarubot`, with any labels;
+- read repository secrets such as `CLAUDE_CODE_OAUTH_TOKEN`;
+- merge a pull request whose required checks pass (the ruleset asks for no review).
+
+It can't reach the `production` or `notify` environments, which accept only `main`. So the owner's approval and the written rule are what stop a deploy. The plan resolves the digest from the version tag (and checks that `sha-<commit>` is the same image), and the host checks only that digest and the image's labels. An approval of a normal-looking plan, with the real version and commit and an opaque digest, could therefore deploy an image a branch pushed.
+
+**Open decisions for the owner.** The 2.30.0 design declined signed build-provenance attestation because only the owner could publish images. That doesn't hold while an agent-held key can push branch workflows. Two options, either or both:
+- Sign build provenance in `publish.yml` (`actions/attest-build-provenance`, with `id-token: write` and `attestations: write`), and have the plan verify the digest before it asks for approval: `gh attestation verify oci://ghcr.io/deconfined/tarubot@<digest> --repo deconfined/tarubot --signer-workflow deconfined/tarubot/.github/workflows/publish.yml --source-ref refs/heads/main`. The BuildKit provenance `publish.yml` attaches today is unsigned, so a branch could forge it.
+- Give the agent a push credential that can't change `.github/workflows/`, so that the owner pushes workflow edits. The token comment's option B (Contents write without Workflows write) is one such credential, but it would also let the token merge, which a deny rule would then have to catch.
 
 ## Claude review and assistant
 
@@ -73,7 +146,7 @@ The required gate for page content is `tests/unit/docs-site.test.ts`, in CI's ch
 
 `.github/SECURITY.md` routes vulnerability reports to GitHub private vulnerability reporting. Secret scanning with push protection and the GitGuardian PR check cover credentials. Dependabot alerts cover published advisories for the direct `package.json` dependencies in the dependency graph, and the **Dependency audit** workflow covers every locked Bun package. SHA-pinned actions receive no alerts, so review action advisories when the monthly Actions update arrives. Dismiss a code-scanning false positive individually with a written justification rather than disabling its query, so the query still protects future code.
 
-The workflows also support manual dispatch. A matching `vMAJOR.MINOR.PATCH` tag can publish a release snapshot. Only `main` advances `latest`, so publishing an older tag cannot move that tag backward. Version tags must match the manifest; PR/main changes must advance the base version. Published versions omit SemVer build metadata (`+...`) and fit Docker's 128-character tag limit so their registry tag is exactly the manifest version.
+The workflows also support manual dispatch. Since 2.30.0 only `main` publishes (the `v*` tag trigger was dropped), and only `main` advances `latest`. PR/main changes must advance the base version. Published versions omit SemVer build metadata (`+...`) and fit Docker's 128-character tag limit so their registry tag is exactly the manifest version.
 
 Distinct source commits have independent, non-cancelling publication and reusable-CI concurrency groups. This avoids discarding an older version when merges arrive during a build. Only latest-tag promotion is serialized, after version/SHA images have completed; its current-main check prevents stale runs from moving latest backward.
 
@@ -95,7 +168,7 @@ After the first publication, make both packages public in GitHub Packages if dep
 
 ## Deploy without a source checkout
 
-A host needs only `docker-compose.yml` and an `.env` based on `.env.example`: the published image carries the compiled bot, its migrations and its tools. Installing, pinning a release, migrating, registering commands and updating are on the documentation site's [install](../site/src/content/docs/deploy/install.md) and [operations](../site/src/content/docs/deploy/operations.md) pages; production's own procedure is [HOSTING.md](HOSTING.md). Image publication never restarts a deployment or changes its database by itself.
+A host needs only `docker-compose.yml` and an `.env` based on `.env.example`: the published image carries the compiled bot, its migrations and its tools. Installing, pinning a release, migrating, registering commands and updating are on the documentation site's [install](../site/src/content/docs/deploy/install.md) and [operations](../site/src/content/docs/deploy/operations.md) pages; production's own procedure is [HOSTING.md](HOSTING.md). Image publication never restarts a deployment or changes its database by itself: production changes only through [Deploy production](#deploy-production) after the owner's approval, or by hand.
 
 ## Local source builds
 

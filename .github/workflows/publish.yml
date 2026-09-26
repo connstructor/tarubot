@@ -4,7 +4,6 @@ name: Publish containers
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -23,7 +22,9 @@ jobs:
   publish:
     name: Publish ${{ matrix.target }}
     needs: verify
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # Only main publishes (2.30.0 dropped the v* tag trigger): the deploy workflow trusts that
+    # every published version and sha- tag was built from a commit on main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:

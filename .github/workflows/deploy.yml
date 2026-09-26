@@ -1,0 +1,540 @@
+# Owner-approved production deploys to the Linode host over SSH (2.30.0, issue #41). The owner's
+# decisions are REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)"; docs/HOSTING.md
+# "Automated deploys" has the flow and the outcomes, and docs/CI_CD.md "Deploy production" the
+# settings.
+#
+#   plan    Public data only (no secret, no environment): the release, its image digest, the diff
+#           and whether anything that runs in production changed. It writes the plan to the run
+#           summary. Docs-, test- and CI-only merges end here, with a quiet Pushover message.
+#   deploy  The `production` environment: it waits for @deconfined's approval, and only then do the
+#           deploy key and the host settings load. It opens one SSH connection, whose forced
+#           command is ops/deploy.sh on the host; the host checks the approval with GitHub itself.
+#   notify  One Pushover message from the `notify` environment.
+#
+# No job checks out the repository or uses an action, and every ${{ }} reaches a script through
+# env:. Re-runs are refused (every job requires the first attempt): start a new run instead. There
+# is no concurrency group: several approval requests may wait, an older one approved later ends as
+# superseded, and the host's lock serializes runs. The repository names no host: DEPLOY_HOST and
+# DEPLOY_KNOWN_HOSTS are variables of the production environment.
+name: Deploy production
+# The title names the target; ops/deploy.sh requires the same title before it acts.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Deploy {0}{1}', inputs.version, inputs.rollback && format(' rollback from {0}', inputs.from) || '')
+      || format('Deploy {0}', github.event.workflow_run.head_sha) }}
+
+on:
+  workflow_run:
+    # publish.yml's name (tests/unit/deploy-workflow.test.ts keeps them in step).
+    workflows: ["Publish containers"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release X.Y.Z (the live one is re-verified and its commands registered again)"
+        required: true
+        type: string
+      rollback:
+        description: "Go back to an older release on the same schema"
+        type: boolean
+        default: false
+      from:
+        description: "Rollback only: the live version you are leaving"
+        type: string
+        default: ""
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan
+    # DEPLOY_ENABLED is the rollout and pause switch: unset, nothing runs and no secret loads.
+    if: >-
+      github.run_attempt == '1' && vars.DEPLOY_ENABLED == 'true' && (
+        (github.event_name == 'workflow_run'
+         && github.event.workflow_run.conclusion == 'success'
+         && github.event.workflow_run.event == 'push'
+         && github.event.workflow_run.head_branch == 'main'
+         && github.event.workflow_run.path == '.github/workflows/publish.yml'
+         && github.event.workflow_run.head_repository.full_name == github.repository)
+        || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # package.json, CHANGELOG.md, migrations/ and the compare API
+      actions: read # the environments' protection rules and branch policies
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
+      commit: ${{ steps.plan.outputs.commit }}
+      digest: ${{ steps.plan.outputs.digest }}
+      from: ${{ steps.plan.outputs.from }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - name: Plan the deploy
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ROLLBACK: ${{ inputs.rollback }}
+          INPUT_FROM: ${{ inputs.from }}
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          R=$GITHUB_REPOSITORY
+          IMAGE=ghcr.io/deconfined/tarubot
+          VER='^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$'
+          # Paths that never change what runs in production; every other path is a runtime change.
+          NON_RUNTIME='^(docs/|site/|tests/|test-plans/|\.github/|[^/]+\.md$|docker-compose(\.devbot|\.tools|\.build)?\.yml$|\.env\.example$|production\.env\.example$|biome\.json$)'
+          ALWAYS_RUNTIME='^\.github/workflows/publish\.yml$'
+          # Files that run on the host as a docker-group user, or shape its .env.
+          HOST_SIDE='^(ops/|docker-compose\.production\.yml$|production\.env\.example$)'
+          out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          fail() { out reason "$1"; echo "::error::$2"; exit 1; }
+          summary() { printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"; }
+          # The image index digest behind a tag, and the commit its amd64 image was built from.
+          digest_of() { docker buildx imagetools inspect "$IMAGE:$1" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))'; }
+          revision_of() { docker buildx imagetools inspect "$IMAGE:$1" --format '{{json .Image}}' | jq -er '."linux/amd64".config.Labels["org.opencontainers.image.revision"] | select(test("^[0-9a-f]{40}$"))'; }
+          raw() { gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/$1?ref=$2"; }
+          older() { local -a a b; local i; IFS=. read -r -a a <<< "$1"; IFS=. read -r -a b <<< "$2"; for i in 0 1 2; do (( a[i] == b[i] )) && continue; (( a[i] < b[i] )); return; done; return 1; }
+          is_runtime() { [[ $1 =~ $ALWAYS_RUNTIME ]] || ! [[ $1 =~ $NON_RUNTIME ]]; }
+          # GitHub's compare API lists at most 300 files and can't page past them, so a list of
+          # 300 may be cut short. The plan claims nothing from such a list: it refuses, since the
+          # approver couldn't see the host-side changes (the host would still decide migrations).
+          listed() {
+            local n
+            n=$(jq -e '.files | arrays | length' <<< "$1") || fail compare "The compare API's answer has no file list."
+            (( n < 300 )) || fail compare-too-large "$2 changes 300 files or more, more than GitHub's compare API lists, so the plan can't show the host-side changes or check the migrations. Deploy by hand per docs/HOSTING.md."
+          }
+
+          # 1. The gate is real: production needs @deconfined alone, admins can't bypass it, and
+          #    both environments accept only main (an environment a typo auto-created has none).
+          gate() {
+            local json
+            json=$(gh api "repos/$R/environments/$1") || return 1
+            jq -e '.deployment_branch_policy == {protected_branches: false, custom_branch_policies: true}' <<< "$json" > /dev/null || return 1
+            [[ $(gh api "repos/$R/environments/$1/deployment-branch-policies" | jq -c '[.branch_policies[] | {name, type}]') == '[{"name":"main","type":"branch"}]' ]] || return 1
+            [[ $1 == production ]] || return 0
+            jq -e '.can_admins_bypass == false
+              and ([.protection_rules[] | select(.type == "required_reviewers")]
+                | length == 1
+                  and .[0].prevent_self_review == false
+                  and ([.[0].reviewers[] | {type, login: .reviewer.login}] == [{type: "User", login: "deconfined"}]))' <<< "$json" > /dev/null
+          }
+          gate production || fail gate "The production environment must require @deconfined alone (self-review allowed), refuse admin bypass and accept only main."
+          gate notify || fail gate "The notify environment must accept only main."
+
+          # 2. The target: version V, commit C and image digest D.
+          ACTION=deploy FROM=- C_FROM=
+          if [[ $EVENT == workflow_run ]]; then
+            [[ $HEAD_SHA =~ ^[0-9a-f]{40}$ ]] || fail target "The publish run names no commit."
+            C=$HEAD_SHA
+            V=$(raw package.json "$C" | jq -er .version) || fail target "package.json can't be read at $C."
+            [[ $V =~ $VER ]] || fail version "package.json at $C doesn't hold a plain X.Y.Z version."
+            out version "$V"
+            D=$(digest_of "$V") || fail image "$IMAGE:$V isn't published."
+          else
+            V=$INPUT_VERSION
+            [[ $V =~ $VER ]] || fail version "The version must be X.Y.Z, with no pre-release."
+            out version "$V"
+            D=$(digest_of "$V") || fail image "$IMAGE:$V isn't published."
+            C=$(revision_of "$V") || fail image "$IMAGE:$V carries no revision label."
+            [[ $(raw package.json "$C" | jq -r .version || true) == "$V" ]] || fail version-mismatch "package.json at $C doesn't say $V."
+            if [[ $INPUT_ROLLBACK == true ]]; then
+              ACTION=rollback FROM=$INPUT_FROM
+              [[ $FROM =~ $VER ]] || fail from "A rollback names the live version it leaves in 'from'."
+              older "$V" "$FROM" || fail rollback-not-older "A rollback goes to an older release than $FROM."
+              C_FROM=$(revision_of "$FROM") || fail image "$IMAGE:$FROM carries no revision label."
+              back=$(gh api "repos/$R/compare/$C...$C_FROM") || fail compare "The compare API didn't answer."
+              listed "$back" "The way back from $FROM to $V"
+              across=$(jq '[.files[] | select((.filename | startswith("migrations/")) or ((.previous_filename // "") | startswith("migrations/")))] | length' <<< "$back")
+              [[ $across == 0 ]] || fail rollback-across-migration "Migrations lie between $V and $FROM; the way back is a fix release or a restore."
+            else
+              [[ -z $INPUT_FROM ]] || fail from "'from' is only for a rollback."
+            fi
+          fi
+
+          # 3. Binding: the version tag and the commit tag are the same image, and C is on main.
+          [[ $(digest_of "sha-$C" || true) == "$D" ]] || fail digest-mismatch "The tags $V and sha-$C point at different images."
+          status=$(gh api "repos/$R/compare/$C...main" --jq .status) || fail not-on-main "The compare API didn't answer."
+          [[ $status == identical || $status == ahead ]] || fail not-on-main "$C isn't on main."
+          out action "$ACTION"
+          out commit "$C"
+          out digest "$D"
+          out from "$FROM"
+
+          # 4. Automatic runs: did anything that runs in production change in this merge?
+          host_files=() added=() previous=
+          if [[ $EVENT == workflow_run ]]; then
+            P=$(gh api "repos/$R/commits/$C" --jq '.parents[0].sha') || fail compare "The commits API didn't answer."
+            [[ $P =~ ^[0-9a-f]{40}$ ]] || fail compare "$C has no parent to compare with."
+            previous=$(raw package.json "$P" | jq -r .version || true)
+            cmp=$(gh api "repos/$R/compare/$P...$C") || fail compare "The compare API didn't answer."
+            listed "$cmp" "This merge"
+            runtime=false
+            while IFS= read -r f; do
+              [[ -n $f ]] || continue
+              if [[ $f == package.json ]]; then
+                # Only the version line may change for package.json to count as non-runtime. A
+                # missing patch (too large to show) reads as "?", which counts as a runtime change.
+                patch=$(jq -r '.files[] | select(.filename == "package.json") | .patch // "?"' <<< "$cmp")
+                if grep -E '^[-+?]' <<< "$patch" | grep -vqE '^[-+][[:space:]]*"version":'; then runtime=true; fi
+              elif is_runtime "$f"; then
+                runtime=true
+              fi
+              if [[ $f =~ $HOST_SIDE ]]; then host_files+=("$f"); fi
+            done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$cmp")
+            # 5. An applied migration never changes; added files are listed.
+            changed=$(jq -r '.files[] | select((.filename | startswith("migrations/")) or ((.previous_filename // "") | startswith("migrations/"))) | select(.status != "added") | .filename' <<< "$cmp")
+            [[ -z $changed ]] || fail applied-migration-changed "This merge edits, renames or removes an applied migration: $(tr -c 'A-Za-z0-9._/-' ' ' <<< "$changed")"
+            mapfile -t added < <(jq -r '.files[] | select(.status == "added" and (.filename | startswith("migrations/"))) | .filename' <<< "$cmp")
+            if [[ $runtime == false ]]; then
+              out deploy false
+              out reason no-runtime-change
+              summary "## Deploy $V: nothing to deploy" "" \
+                "This merge ([$P...$C](https://github.com/$R/compare/$P...$C)) changes nothing that runs in production (documentation, tests, CI or the version only), so no approval is requested." \
+                "If an earlier release wasn't deployed, run **Deploy production** with the newest version."
+              exit 0
+            fi
+          elif [[ $ACTION == rollback ]]; then
+            mapfile -t host_files < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$back" | grep -E "$HOST_SIDE" || true)
+          fi
+          newest=$(gh api "repos/$R/contents/migrations?ref=$C" --jq '[.[].name | select(test("^[0-9]{3}_[a-z0-9_]+\\.sql$"))] | sort | last // "none"') || newest=unknown
+
+          # 6. The plan, public data only.
+          if [[ $ACTION == rollback ]]; then
+            summary "## Roll back from $FROM to $V" ""
+          else
+            summary "## Deploy $V" ""
+          fi
+          summary "| | |" "| --- | --- |" \
+            "| Version | \`$V\` |" \
+            "| Commit | [\`${C:0:12}\`](https://github.com/$R/commit/$C) |" \
+            "| Image | \`$IMAGE@$D\` |"
+          if [[ -n $previous ]]; then summary "| Previous release on main | \`$previous\` |"; fi
+          summary "| Newest migration at this commit | \`$newest\` |" ""
+          if [[ $EVENT == workflow_run ]]; then
+            if (( ${#added[@]} )); then
+              summary "**Migration files added in this merge:** ${added[*]}"
+            else
+              summary "**Migration files added in this merge:** none"
+            fi
+          fi
+          summary "If production is older than the previous release, earlier migrations are included too; the host decides from what is live." ""
+          # Host-side files run on the host as a docker-group user, which is root-equivalent there.
+          # An automatic run can only list this merge's changes, and a dispatch none: the host
+          # deploys from whatever is live, so both point at the files' history up to C.
+          history="[\`ops/\`](https://github.com/$R/commits/$C/ops), [\`docker-compose.production.yml\`](https://github.com/$R/commits/$C/docker-compose.production.yml) and [\`production.env.example\`](https://github.com/$R/commits/$C/production.env.example)"
+          label=
+          if [[ $ACTION == rollback ]]; then
+            label="**Host-side differences between $V and $FROM**"
+          elif [[ $EVENT == workflow_run ]]; then
+            label="**Host-side changes in this merge**"
+          fi
+          if [[ -n $label ]] && (( ${#host_files[@]} )); then
+            summary "$label (they run on the host as a docker-group user, which is root-equivalent there):"
+            for f in "${host_files[@]}"; do summary "- \`$f\`"; done
+            if printf '%s\n' "${host_files[@]}" | grep -qE '^(docker-compose\.production\.yml|production\.env\.example)$'; then
+              summary "" "The Compose file or the settings template changed: **check the host's .env first.**"
+            fi
+            summary ""
+          elif [[ -n $label ]]; then
+            summary "$label: no file under \`ops/\`, \`docker-compose.production.yml\` or \`production.env.example\` changed." ""
+          fi
+          if [[ $EVENT == workflow_run ]]; then
+            summary "If production is older than the previous release, the host-side changes of the releases in between run too: check the history of $history up to this commit." ""
+          elif [[ $ACTION == deploy ]]; then
+            summary "**Host-side changes:** the host deploys from the live release to this commit. Before approving, check the history of $history up to this commit since the live release." ""
+          fi
+          day=$(date -u +%u) hm=$(date -u +%H%M)
+          if [[ $day == 2 ]] && (( 10#$hm >= 1800 && 10#$hm < 2300 )); then
+            echo "::warning::The database cluster's weekly maintenance runs Tuesdays 19:00-23:00 UTC; a migration deploy now may meet a restart."
+            summary "> [!WARNING]" "> The database cluster's weekly maintenance runs Tuesdays 19:00-23:00 UTC. A migration deploy in that window may meet a cluster restart; the host warns again if it runs one then." ""
+          fi
+          if (( 10#$hm >= 415 && 10#$hm < 445 )); then
+            echo "::warning::The daily backup runs around now; the host waits up to 5 minutes for it."
+            summary "> [!WARNING]" "> The daily backup runs around now. The host waits up to 5 minutes for it, and a migration that meets it rolls back safely." ""
+          fi
+          summary "**Tried on DevBot?** Check before approving." ""
+          if [[ $ACTION == rollback ]]; then
+            summary "**Approving** rolls production back from $FROM to $V (\`${C:0:12}\`, \`$D\`), on the same schema: the host restarts onto $V, puts $FROM back automatically if $V never took the writer lease, then registers $V's commands globally and reads them back. Work only $FROM understands then fails as \`invalid_job\`: check \`/sync status\` and requeue it with \`retry.js\`." ""
+          else
+            summary "**Approving** runs Deploy $V (\`${C:0:12}\`, \`$D\`) on production. The host restarts onto $V; or, if $V carries migration files the live release lacks, it stops the bot, takes an encrypted \`ops/backup.sh\` dump, runs \`migrate.js\` in $V's image and starts $V. It puts the previous release back automatically if $V never took the writer lease or the migration did not commit. It registers $V's commands globally and reads them back. It puts this commit's host-side files in place, where they run as a docker-group user (root-equivalent): the Compose file at once, \`ops/backup.sh\` for a migration's dump, and \`ops/deploy.sh\` from the next deploy on, including changes from releases production hasn't had yet. Approval comments are public." ""
+          fi
+          notes=$(raw CHANGELOG.md "$C" | awk -v v="$V" 'index($0, "## " v " ") == 1 { on = 1 } on && /^## / && index($0, "## " v " ") != 1 { exit } on { print }' || true)
+          if [[ -n $notes ]]; then
+            summary "<details><summary>Changelog</summary>" "" "$notes" "" "</details>"
+          fi
+
+          # 7. Outputs for the deploy job.
+          out deploy true
+          out reason -
+
+  deploy:
+    name: Deploy
+    needs: plan
+    if: github.run_attempt == '1' && needs.plan.outputs.deploy == 'true'
+    runs-on: ubuntu-24.04
+    # Longer than the reconnect deadline below, which covers the host's longest run (its waits and
+    # timeouts add up to about 68 minutes).
+    timeout-minutes: 90
+    # @deconfined approves here; DEPLOY_SSH_KEY, DEPLOY_HOST and DEPLOY_KNOWN_HOSTS exist only then.
+    environment: production
+    permissions: {}
+    outputs:
+      started: ${{ steps.start.outputs.started }}
+      outcome: ${{ steps.ssh.outputs.outcome || steps.start.outputs.outcome }}
+      reason: ${{ steps.ssh.outputs.reason || steps.start.outputs.reason }}
+      previous: ${{ steps.ssh.outputs.previous }}
+      path: ${{ steps.ssh.outputs.path }}
+      downtime: ${{ steps.ssh.outputs.downtime }}
+      commands: ${{ steps.ssh.outputs.commands }}
+      backup: ${{ steps.ssh.outputs.backup }}
+      restore_point: ${{ steps.ssh.outputs.restore_point }}
+      connected: ${{ steps.ssh.outputs.connected }}
+      warnings: ${{ steps.ssh.outputs.warnings }}
+    steps:
+      - name: Check that deploys are still enabled
+        id: start
+        env:
+          DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
+        run: |
+          echo started=true >> "$GITHUB_OUTPUT"
+          if [ "$DEPLOY_ENABLED" != true ]; then
+            printf 'outcome=refused\nreason=paused\n' >> "$GITHUB_OUTPUT"
+            echo "::error::Deploys were paused after this request; nothing changed."
+            exit 1
+          fi
+      - name: Run the deploy on the host
+        id: ssh
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          ACTION: ${{ needs.plan.outputs.action }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          COMMIT: ${{ needs.plan.outputs.commit }}
+          DIGEST: ${{ needs.plan.outputs.digest }}
+          FROM: ${{ needs.plan.outputs.from }}
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          umask 077
+          dir=$RUNNER_TEMP/ssh
+          mkdir "$dir"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key"
+          unset DEPLOY_SSH_KEY
+          out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          stop() { out reason "$1"; echo "::error::$2"; exit 1; }
+          grep -q 'PRIVATE KEY' "$dir/key" || stop no-key "DEPLOY_SSH_KEY isn't set in the production environment."
+
+          # The host and its pinned key come from the production environment's variables.
+          HOST_NAME='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+          KNOWN_HOST='^([^ ]+) ssh-ed25519 [A-Za-z0-9+/]+={0,2}$'
+          [[ $DEPLOY_HOST =~ $HOST_NAME ]] || stop known-hosts "DEPLOY_HOST must be the production host's DNS name."
+          kh=${DEPLOY_KNOWN_HOSTS%$'\n'}
+          kh=${kh%$'\r'}
+          if [[ $kh == *$'\n'* ]] || ! [[ $kh =~ $KNOWN_HOST ]] || [[ ${BASH_REMATCH[1]} != "$DEPLOY_HOST" ]]; then
+            stop known-hosts "DEPLOY_KNOWN_HOSTS must be one line: DEPLOY_HOST, then ssh-ed25519 and the host's key."
+          fi
+          printf '%s\n' "$kh" > "$dir/kh"
+
+          # The v1 command contract, the same patterns as ops/deploy.sh.
+          DEPLOY_FORM='^deploy ((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})) ([0-9a-f]{40}) (sha256:[0-9a-f]{64}) ([1-9][0-9]{0,19})$'
+          ROLLBACK_FORM='^rollback ((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})) ([0-9a-f]{40}) (sha256:[0-9a-f]{64}) ([1-9][0-9]{0,19}) ((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3}))$'
+          RESULT_FORM='^result outcome=(deployed|already-live|superseded|refused|recovered|needs-you) version=(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3}) previous=((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})|-) path=(plain|migration|rollback|none) downtime=([0-9]{1,5}|-) commands=(registered|failed|skipped) backup=(daily/tarubot-[0-9]{8}T[0-9]{6}Z\.dump\.age|-) restore_point=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z|-) reason=([a-z0-9-]{1,40}|-)$'
+          STEP_LINE='^step [a-z-]{1,20}$'
+          WARNING_LINE='^warning [a-z0-9-]{1,40}$'
+          if [[ $ACTION == rollback ]]; then
+            CMD="rollback $VERSION $COMMIT $DIGEST $GITHUB_RUN_ID $FROM"
+          else
+            CMD="deploy $VERSION $COMMIT $DIGEST $GITHUB_RUN_ID"
+          fi
+          [[ $CMD =~ $DEPLOY_FORM || $CMD =~ $ROLLBACK_FORM ]] || stop bad-request "The plan's fields don't fit the command contract."
+
+          # One connection; only connection failures are retried, with the same command, which
+          # attaches to the same run on the host, for up to 80 minutes. ssh's own messages stay in
+          # a private file. `reached` stays false only while every attempt failed before sshd
+          # answered, which is the only case where nothing can have started on the host.
+          NO_CONNECTION='connect to host .* port [0-9]+: |Could not resolve hostname|Connection timed out during banner exchange|kex_exchange_identification'
+          : > "$dir/lines"
+          reason='' rc=0 reached=false
+          deadline=$((SECONDS + 4800))
+          while :; do
+            set +e
+            ssh -F /dev/null -T -4 -i "$dir/key" -o IdentitiesOnly=yes -o IdentityAgent=none \
+              -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$dir/kh" \
+              -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no -o CheckHostIP=no \
+              -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=4 -o LogLevel=ERROR \
+              "tarubot@$DEPLOY_HOST" "$CMD" < /dev/null 2> "$dir/err" |
+              while IFS= read -r line; do
+                printf '%s\n' "$line" >> "$dir/lines"
+                if [[ $line =~ $STEP_LINE || $line =~ $RESULT_FORM ]]; then
+                  printf '%s\n' "$line"
+                elif [[ $line =~ $WARNING_LINE ]]; then
+                  echo "::warning::The host reports: ${line#warning }"
+                fi
+              done
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [[ -s $dir/lines ]] || ! grep -qE "$NO_CONNECTION" "$dir/err"; then reached=true; fi
+            if grep -qE "$RESULT_FORM" "$dir/lines"; then break; fi
+            if grep -qE 'Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED' "$dir/err"; then reason=host-key; break; fi
+            if grep -qF 'Permission denied (publickey' "$dir/err"; then reason=key-rejected; break; fi
+            if (( rc != 255 )) || (( SECONDS >= deadline )); then break; fi
+            sleep 20
+          done
+
+          out connected "$reached"
+          warnings=$(grep -E "$WARNING_LINE" "$dir/lines" | sed 's/^warning //' | sort -u | tr '\n' ' ' || true)
+          out warnings "${warnings% }"
+          result=$(grep -E "$RESULT_FORM" "$dir/lines" | tail -n 1 || true)
+          if [[ -z $result ]]; then
+            if [[ -z $reason ]]; then
+              if (( rc == 64 )); then reason=bad-request
+              elif [[ $reached == true ]]; then reason=outcome-unknown
+              else reason=unreachable
+              fi
+            fi
+            stop "$reason" "No result from the host ($reason)."
+          fi
+          read -r -a fields <<< "${result#result }"
+          for field in "${fields[@]}"; do out "${field%%=*}" "${field#*=}"; done
+          case $result in
+            "result outcome=deployed "* | "result outcome=already-live "* | "result outcome=superseded "*) ;;
+            *) echo "::error::The deploy did not complete: ${result#result }"; exit 1 ;;
+          esac
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
+
+  notify:
+    name: Notify
+    needs: [plan, deploy]
+    if: github.run_attempt == '1' && always() && needs.plan.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: notify
+    permissions: {}
+    steps:
+      - name: Send one Pushover message
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_DEPLOY: ${{ needs.plan.outputs.deploy }}
+          PLAN_VERSION: ${{ needs.plan.outputs.version }}
+          PLAN_REASON: ${{ needs.plan.outputs.reason }}
+          PLAN_ACTION: ${{ needs.plan.outputs.action }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          STARTED: ${{ needs.deploy.outputs.started }}
+          OUTCOME: ${{ needs.deploy.outputs.outcome }}
+          REASON: ${{ needs.deploy.outputs.reason }}
+          PREVIOUS: ${{ needs.deploy.outputs.previous }}
+          DEPLOY_PATH: ${{ needs.deploy.outputs.path }}
+          DOWNTIME: ${{ needs.deploy.outputs.downtime }}
+          COMMANDS: ${{ needs.deploy.outputs.commands }}
+          BACKUP: ${{ needs.deploy.outputs.backup }}
+          RESTORE_POINT: ${{ needs.deploy.outputs.restore_point }}
+          WARNINGS: ${{ needs.deploy.outputs.warnings }}
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          # Every value is checked against its token pattern before it reaches the message.
+          tok() { if [[ $2 =~ $1 ]]; then printf '%s' "$2"; else printf '?'; fi; }
+          VER='^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$'
+          WORD='^[a-z0-9-]{1,40}$'
+          V=$(tok "$VER" "$PLAN_VERSION")
+          prev=$(tok "$VER" "$PREVIOUS")
+          reason=$(tok "$WORD" "$REASON")
+          down=$(tok '^[0-9]{1,5}$' "$DOWNTIME")
+          backup=$(tok '^daily/tarubot-[0-9]{8}T[0-9]{6}Z\.dump\.age$' "$BACKUP")
+          point=$(tok '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{15}Z$' "$RESTORE_POINT")
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          priority=0
+          if [[ $PLAN_RESULT != success ]]; then
+            msg="$V not deployable: $(tok "$WORD" "$PLAN_REASON") (see the run)"
+          elif [[ $PLAN_DEPLOY != true ]]; then
+            msg="$V: no runtime change in this merge. If an earlier release wasn't deployed, run Deploy production with the newest version."
+            priority=-1
+          elif [[ $STARTED != true ]]; then
+            if [[ $DEPLOY_RESULT == cancelled ]]; then msg="$V: the run was cancelled before the deploy started"; else msg="$V not approved (rejected or expired)"; fi
+            priority=-1
+          else
+            case $OUTCOME in
+              deployed)
+                kind=$(tok '^(plain|migration|rollback)$' "$DEPLOY_PATH")
+                if [[ $kind == plain ]]; then kind=restart; fi
+                msg="$V deployed ($kind, down ${down}s; commands registered)"
+                if [[ $PLAN_ACTION == rollback ]]; then
+                  msg+=". Work only $prev understood fails as invalid_job: check /sync status and requeue it with retry.js."
+                fi
+                ;;
+              already-live) msg="$V is live and verified; commands registered"; priority=-1 ;;
+              superseded) msg="$V skipped: newer release $prev is live"; priority=-1 ;;
+              refused)
+                if [[ $reason == paused ]]; then
+                  msg="$V not deployed: deploys were paused after the request (nothing changed)"
+                  priority=-1
+                else
+                  msg="$V not deployed, nothing changed: $reason"
+                fi
+                ;;
+              recovered) msg="$V not deployed; $prev is back (down ${down}s): $reason"; priority=1 ;;
+              needs-you)
+                priority=1
+                if [[ $reason == commands-failed ]]; then
+                  msg="$V is live, but command registration failed; run Deploy production with $V to retry"
+                else
+                  msg="NEEDS YOU: $V $reason"
+                  if [[ $RESTORE_POINT != - && -n $RESTORE_POINT ]]; then msg+="; restore point $point"; fi
+                  if [[ $BACKUP != - && -n $BACKUP ]]; then msg+="; backup $backup"; fi
+                  # The way back depends on the path: a restart can roll back, a rollback goes
+                  # forward again with an ordinary deploy, and a committed migration can't be undone.
+                  case $reason in
+                    new-release-took-lease | lease-evidence-incomplete | unstable | image-mismatch)
+                      case $DEPLOY_PATH in
+                        plain) msg+=". To go back, run Deploy production with version=$prev rollback=true from=$V." ;;
+                        rollback) msg+=". To return to $prev, run Deploy production with version=$prev." ;;
+                        migration) msg+=". The migration committed: the way back is a fix release or a point-in-time fork (HOSTING.md)." ;;
+                      esac
+                      ;;
+                  esac
+                fi
+                ;;
+              *)
+                priority=1
+                case $reason in
+                  host-key) msg="$V not deployed: the host key changed. Check the host before updating DEPLOY_KNOWN_HOSTS." ;;
+                  key-rejected) msg="$V not deployed: the host refused the deploy key" ;;
+                  known-hosts | no-key) msg="$V not deployed: DEPLOY_HOST, DEPLOY_KNOWN_HOSTS or DEPLOY_SSH_KEY isn't set up in the production environment" ;;
+                  unreachable) msg="$V not deployed: host unreachable, nothing started" ;;
+                  bad-request) msg="$V not deployed: the host refused the request format, nothing started" ;;
+                  *) msg="$V: outcome unknown; the host continues on its own (run $GITHUB_RUN_ID)" ;;
+                esac
+                ;;
+            esac
+            if [[ $WARNINGS == *db-maintenance-window* ]]; then msg+=" The migration ran during the database maintenance window."; fi
+          fi
+          echo "Message (priority $priority): $msg"
+          if [[ -z $PUSHOVER_TOKEN || -z $PUSHOVER_USER ]]; then
+            echo "::notice::Pushover isn't set up in the notify environment; nothing was sent."
+            exit 0
+          fi
+          # The credentials reach curl on stdin, never in its arguments.
+          printf 'form-string = "token=%s"\nform-string = "user=%s"\n' "$PUSHOVER_TOKEN" "$PUSHOVER_USER" |
+            curl --config - --silent --show-error --fail --max-time 20 --retry 3 \
+              --form-string "title=TaruBot deploy" --form-string "message=$msg" \
+              --form-string "priority=$priority" --form-string "url=$run_url" \
+              --form-string "url_title=Deploy production run" --output /dev/null \
+              https://api.pushover.net/1/messages.json ||
+            echo "::warning::The Pushover message could not be sent; the outcome is unchanged."
