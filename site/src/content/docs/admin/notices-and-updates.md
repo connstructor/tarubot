@@ -15,7 +15,7 @@ Choose a staff-only text channel with [`/config officer_notifications`](/tarubot
 - **Recovery.** "Lodestone synchronization recovered: the FC roster was accepted again." It follows only an outage that officers were told about.
 - **Characters unlinked automatically.** One notice per link TaruBot ended because the character's Lodestone page was gone on two checks at least an hour apart. See [Links TaruBot ends by itself](/tarubot/admin/member-links/#links-tarubot-ends-by-itself).
 
-Routine roster reads post nothing.
+Routine roster reads post no notice here; departures they confirm appear in the [member status post](#member-status-changes).
 
 ### How often Lodestone notices post
 
@@ -64,12 +64,12 @@ Second Alt @ Diabolos (@Casey)
 
 ### When it posts
 
-- **About 2 minutes after the first change,** one post covers everything that changed in that window. A change undone inside it cancels out: a `/guest grant` followed by `/guest revoke` a minute later posts nothing.
+- **About 2 minutes after the first change,** one post covers everything that changed in that window. A change undone inside it cancels out: a `/guest grant` to a visitor with no linked character, followed by `/guest revoke` a minute later, posts nothing (`/guest reset` then clears the revocation). For a visitor who already has Guest through a registered character, the grant changes nothing, so the revoke alone posts "Guest → No access · guest access revoked".
 - **Large changes** are split: a post names at most 100 members, fewer when their lines are long, and the rest follow straight away. Nobody is left out.
 - **Without a channel,** changes aren't saved for later. Setting the officer notifications channel afterwards, even within 2 minutes, posts none of what happened before it.
 - **While Discord changes are paused,** the post waits and goes out once they're back on.
 
-While a post waits, the officer view of [`/sync status`](/tarubot/reference/commands/#sync-status) lists it as a waiting `officer.status` job; members never see it.
+While a post waits, the officer view of [`/sync status`](/tarubot/reference/commands/#sync-status) lists it as a queued `officer.status` job (`… QUEUED`); members never see it.
 
 ### What isn't announced
 

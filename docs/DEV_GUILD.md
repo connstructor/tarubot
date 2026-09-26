@@ -448,7 +448,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 
 ### 2.28.0 rollout plan (`/suggest`; not yet run)
 
-Planned only: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 and 2.27.0 merged in; numbered 2.26.0 until the documentation site merged first) merged into `main` as `c0a4f98` on 2026-09-25 and is not deployed. 2.24.3 and 2.25.0, which come before it in the release order, are deployed, so DevBot and production run 2.25.0 on schema 009, and 2.27.0 changed no running code; 2.28.0 adds no migration. Each step below needs the owner's go-ahead.
+The plan as written before the rollout: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 and 2.27.0 merged in; numbered 2.26.0 until the documentation site merged first) merged into `main` as `c0a4f98` on 2026-09-25 and was published by run 36202103980. Its rollout was under way when #38 last merged `main` (DevBot ran the 2.28.0 image from 23:49 UTC, still on schema 009, as expected with no migration); its results belong here. 2.24.3 and 2.25.0, which come before it in the release order, are deployed, so DevBot and production ran 2.25.0 on schema 009 before it, and 2.27.0 changed no running code; 2.28.0 adds no migration. Each step below needs the owner's go-ahead.
 
 - **Registration.** Both DevBot and production need the commands registered after the deploy: 21 roots / 46 paths (2.25.0's 20 roots / 45 paths plus `/suggest`).
 - **Update post.** 2.28.0 has a member note. A server with a changelog channel gets one post, "TaruBot updated to v2.28.0", with that note when it starts on 2.28.0; production had no changelog channel at the 2.25.0 rollout, so it posts nothing unless one is set by then.
@@ -463,7 +463,7 @@ Planned only: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/
 
 ### 2.29.0 rollout plan (member status posts; not yet run)
 
-2.29.0 (#31, [PR #38](https://github.com/deconfined/tarubot/pull/38); built as 2.27.0) adds migration `010_status_notices.sql` (three nullable `guild_users` columns) and no command change. It follows 2.25.0 (migration 009), 2.27.0 (the documentation site, no running code) and 2.28.0 (#32, `/suggest`, no migration) in the agreed release order; deploy 2.28.0 first, or register its commands with this deploy. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+2.29.0 (#31, [PR #38](https://github.com/deconfined/tarubot/pull/38); built as 2.27.0) adds migration `010_status_notices.sql` (three nullable `guild_users` columns) and no command change. It follows 2.25.0 (migration 009), 2.27.0 (the documentation site, no running code) and 2.28.0 (#32, `/suggest`, no migration) in the agreed release order. 2.28.0's rollout was under way when this branch last merged `main` (DevBot ran its image from 23:49 UTC): before this deploy, confirm from its record that it finished, including its registration (21 roots / 46 paths), or register those commands with this deploy. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
 
 1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.29.0-<sha>.dump`; record its size and sha256.
 2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version 009_changelog_channel.sql`.
