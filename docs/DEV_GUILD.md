@@ -476,6 +476,20 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 - **Rollback** across migration 010 is a fix release, a restore, or the manual reversal on the site's monitoring page ("Status notices", `site/src/content/docs/deploy/monitoring.md`): an older image refuses to start on schema 010.
 - **Update post:** none, as designed: 2.29.0 has no member note, so its startup moved `changelog_version` to 2.29.0 without posting (`nothing for members`).
 
+### 2.29.1 and 2.29.2 — nothing to deploy
+
+2.29.1 (the Claude review for the agent's pull requests, [PR #40](https://github.com/deconfined/tarubot/pull/40)) and 2.29.2 (generic production host references, [PR #42](https://github.com/deconfined/tarubot/pull/42), `4f3b377`) change CI, tooling and documentation only; DevBot and production stay on 2.29.0.
+
+### 2.30.0 — planned rollout (production deploys over SSH)
+
+2.30.0 (issue #41) adds the Deploy production workflow and `ops/deploy.sh`, with no bot change, no migration and no command change. Nothing below has happened yet; each step waits for the owner.
+
+- **DevBot:** nothing to deploy. GitHub's runners can't reach the dev VM, so DevBot stays manual, and 2.30.0 changes no running code. Deploy it to DevBot only with the next release that does.
+- **Before the merge (owner):** the `production` environment (reviewer `deconfined` only, self-review allowed, no admin bypass, `main` only) and `notify` (`main` only), with `DEPLOY_ENABLED` unset, so the first "Deploy production" run after the merge does nothing.
+- **Production, by hand once:** the restart procedure (`git pull --ff-only`, the pin, `pull`, `up -d --wait --remove-orphans`) puts `ops/deploy.sh` on the host at 2.30.0, its floor. No registration is needed: the commands are unchanged.
+- **Then the owner's setup** ([HOSTING.md](HOSTING.md#setting-it-up-owner)): `jq` and the `KillUserProcesses` check, the deploy key generated into `production` with its restricted `authorized_keys` line and the probes, `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`, the Pushover secrets in `notify`, the firewall, `DEPLOY_ENABLED=true`.
+- **First run:** Deploy production with `version=2.30.0`, approved by the owner: expect `already-live`, no restart, `commands=registered` with a clean read-back, and one Pushover message. Record the run here and in VERIFICATION.md.
+
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.

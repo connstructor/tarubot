@@ -1,6 +1,6 @@
 # Proposal: automated, owner-approved App Platform deploys
 
-> **Historical (2026-09-25).** App Platform was retired in 2.21.0, and the Nodestone sidecar image it names is gone. Releases B and C are to be re-planned for the Linode Compose host over SSH; this proposal remains as the record of the approved principles.
+> **Historical (2026-09-25).** App Platform was retired in 2.21.0, and the Nodestone sidecar image it names is gone. Releases B and C were re-planned for the Linode Compose host: Release C became 2.24.0's daily encrypted dumps, and Release B became 2.30.0's Deploy production workflow over SSH (issue #41; REQUIREMENTS.md "Approved SSH-deploy amendments (2026-09-26)", docs/HOSTING.md "Automated deploys"). This proposal remains as the record of the approved principles.
 
 **Status:** approved by the owner on 2026-09-24 (draft 3). Its recommendations are the answers to its decisions. Release A shipped as 2.16.0, with `commands.js declared`/`check` and the `app-spec.ts` image rules moved to Release B, which uses them. Releases B and C come after the cutover. No DigitalOcean resource, token, bucket, database login, GitHub environment, variable or secret has been created for them yet.
 
