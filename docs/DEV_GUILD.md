@@ -476,7 +476,6 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 - **Rollback** across migration 010 is a fix release, a restore, or the manual reversal on the site's monitoring page ("Status notices", `site/src/content/docs/deploy/monitoring.md`): an older image refuses to start on schema 010.
 - **Update post:** none, as designed: 2.29.0 has no member note, so its startup moved `changelog_version` to 2.29.0 without posting (`nothing for members`).
 
-
 ### Remaining unverified-visitor form checks (on hold until after launch)
 
 The user selected manual form review **only for unverified visitors**. Verified non-FC users keep automatic Guest eligibility and FC members keep Member eligibility. PR #6 merged at `db062bdbb9fc502d62a214f8a56692e418b8875b` on 2026-09-23 at 05:46:39 UTC with all checks passed. [Publication run 35823822742](https://github.com/deconfined/tarubot/actions/runs/35823822742) succeeded, so the 2.12.0 images are available. Migration 004 is deployed; the remaining `/apply` scenarios still require live testing. From 2.15.0, `/apply` also needs the guest-application switch on (`/config guest_applications enabled:true`); migration 006 turns it on for DevBot because a review channel is set.
