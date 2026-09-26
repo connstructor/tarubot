@@ -1,6 +1,6 @@
 ---
 title: Monitoring
-description: Health probes, logs, background jobs, Lodestone refreshes, officer notices, update posts, issue reports, public suggestions and the optional heartbeat.
+description: Health probes, logs, background jobs, Lodestone refreshes, officer notices, member status posts, update posts, issue reports, public suggestions and the optional heartbeat.
 sidebar:
   order: 6
 ---
@@ -125,6 +125,42 @@ Accepted edge cases and assumptions:
 - **Clocks.** The outage boundary is the accepted roster's observation time from the bot's clock, compared with job times from PostgreSQL's clock. They must agree to within a few seconds (one roster fetch); NTP on the host keeps them far closer.
 
 The rate limit reads these job rows, so don't prune `officer.notify` jobs ([persistence conventions](https://github.com/deconfined/tarubot/blob/main/docs/PERSISTENCE.md)).
+
+## Status notices
+
+Member status posts ([what officers see](/tarubot/admin/notices-and-updates/#member-status-changes)) come from one `officer.status` job per server, key `officer:<guild>:status`, with an empty payload. Each recorded change queues it (or merges into the one waiting), due about 2 minutes later.
+
+- **What is recorded.** After each successful role update, TaruBot records the member's Member, Guest, Officer and FC Leader, but only decisions that don't depend on the roles the member already holds, so a rebind, an out-of-date roster, an unchecked new link, an unknown rank or a kept hand edit records nothing. A member's first recorded value is a silent baseline. The accepted roster records confirmed departures of linked characters on their owners' rows in the same transaction. All of it lives in three `guild_users` columns: `status_state` (what was last announced, what was last decided, the reasons and unposted departures), `status_since` (when something first waited; NULL when nothing does) and `status_posting` (a member's lines in a post being sent).
+- **Waiting.** While the window runs, officers' `/sync status` lists `… QUEUED officer.status 1a2b3c4d …`. If a run starts before the oldest change is 2 minutes old (a change arrived during a run, or `retry.js` released the job), it waits as `↻ WAITING` with the `ordered` diagnostic, logged at debug. Members never see the job, since it has no member.
+- **Outcomes.** A post succeeds with its message. A run with nothing left to post completes as `{"skipped": "nothing to post"}`; `/sync status` lists no succeeded job, so read it in `jobs.result`. With no officer notifications channel nothing is saved for a channel set later. Unsetting the channel with `/config officer_notifications unset_channel:true` clears everything the server still has waiting in the same save, lines frozen in a post included, for every member (those who have left the server too), even with Discord changes off, so a job that failed before the unset leaves nothing to post. A job that runs with no channel completes as `{"skipped": "officer notifications unconfigured"}` and clears whatever it still finds, and while the channel stays unset each member's next successful role update clears anything left for that member. With a channel and Discord changes paused, it parks as `‖ PAUSED` and posts on resume.
+- **Settings changed mid-run.** If the officer notifications channel is unset or moved, Discord changes are paused, or the bot leaves the server while a run is posting, the run stops before its next post (`superseded`, a wait), and the rerun drops, parks or posts to the new channel.
+- **Missing permissions.** The job is `! BLOCKED` and its batch stays frozen. It retries like other [blocked work](#jobs-that-need-attention), and the retry resends the same batch under the same nonce (`status:<batch>`), so a retry within Discord's window returns the first message.
+- **Delivery records.** Each send records a `started` delivery attempt, then `failed` or `delivered`. `delivered` holds the message ID and, in `diagnostic`, the nonce key, and is written before the batch is marked as posted. If marking then fails (a database error after Discord took the post), the job retries as usual and the retry only marks the batch, however late, so it never posts twice.
+- **A failed job** keeps what waits while the channel is set: [`retry.js`](/tarubot/deploy/tools/#retryjs), or the next change in that server, posts it.
+
+To see what waits, or is being sent, in a server:
+
+```sh
+docker compose exec -T postgres psql -U tarubot -d tarubot -c "
+SELECT user_id, status_since, status_posting IS NOT NULL AS sending
+FROM guild_users
+WHERE guild_id = 'YOUR_GUILD_ID' AND (status_since IS NOT NULL OR status_posting IS NOT NULL)
+ORDER BY status_since NULLS LAST;"
+```
+
+**Lock order.** Status recording, the roster and the job lock a server's rows in one order: its `guilds` row (shared), then its `guild_users` rows in `(guild_id, user_id)` order, then `jobs` rows. `/config` role adoption, `/setup` and activation take the `guilds` row for update first, so they queue behind a status write instead of deadlocking; unsetting the officer notifications channel likewise locks the waiting `guild_users` rows in user order after its `guilds` row, before it queues any job. Member rows are locked `FOR NO KEY UPDATE`, which never blocks the foreign-key checks of inserts that reference a member. A hand-written transaction that changes these rows should take them in the same order, or run with the bot stopped.
+
+**Manual reversal,** to run a release from before status posts, whose schema ends at `009_changelog_channel.sql`. An older release refuses to start on schema `010_status_notices.sql`, and that migration only adds the three columns, so nothing else is lost. Stop the bot, run the [writer gate](/tarubot/deploy/operations/#single-database-writer), then run the three statements together (psql runs one `-c` string as one transaction):
+
+```sh
+docker compose exec -T postgres psql -U tarubot -d tarubot -v ON_ERROR_STOP=1 -c "
+ALTER TABLE guild_users DROP COLUMN status_state, DROP COLUMN status_since, DROP COLUMN status_posting;
+UPDATE jobs SET status = 'succeeded', completed_at = now(), lease_until = NULL, result = '{\"skipped\":\"reverted\"}'
+WHERE kind = 'officer.status' AND status IN ('queued','running','blocked','disabled');
+DELETE FROM schema_migrations WHERE version = '010_status_notices.sql';"
+```
+
+Then pin the older `TARUBOT_IMAGE_TAG` and start it as in [Rollback](/tarubot/deploy/operations/#rollback). The `UPDATE` matters: an older release would fail those jobs as `invalid_job`.
 
 ## Update posts
 

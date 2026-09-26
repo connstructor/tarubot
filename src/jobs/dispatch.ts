@@ -8,6 +8,7 @@ import type { Service } from "../application/service.js";
 import type { Synchronization } from "../application/synchronization.js";
 import type { GuildAccess } from "../application/guild-access.js";
 import type { IssueReports } from "../application/issue-reports.js";
+import { deliverStatus, dropStatus } from "../application/status-notices.js";
 import { project } from "../config/project.js";
 import { changelogStep } from "../domain/changelog.js";
 import { effectsPaused } from "../domain/failures.js";
@@ -151,8 +152,18 @@ export function dispatcher(
       await app.advanceChangelog(guild.id, changelog.from, project.version, null);
       return { skipped: "nothing for members", version: project.version };
     }
+    // Status posts (2.29.0): with no officer notifications channel nothing is saved for later
+    // (owner decision 5), and the drop completes here, before the effects gate, so no job parks
+    // just because the channel is unset. The lease fence comes first, as before every write.
+    if (job.kind === "officer.status" && !guild.officer_notifications_channel_id) {
+      await guard();
+      return dropStatus(app, guild.id);
+    }
     if (!app.config.ENABLE_EFFECTS || !guild.effects_enabled)
       throw effectsPaused(app.config.ENABLE_EFFECTS);
+    // The status post has its own resume, window, freeze, send and mark (status-notices.ts), and
+    // records its own delivery attempts, so it bypasses the shared single-send tail below.
+    if (job.kind === "officer.status") return deliverStatus(app, guild, job, guard);
     if (job.kind === "roles.layout") {
       // Setup and layout share a session lock, keeping network operations outside transactions.
       const client = await app.db.pool.connect();

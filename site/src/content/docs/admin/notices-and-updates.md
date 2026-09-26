@@ -1,11 +1,11 @@
 ---
 title: Officer notices and update posts
-description: What TaruBot tells officers about Lodestone trouble and unlinked characters, and the update posts it shares with members.
+description: What TaruBot tells officers about Lodestone trouble, unlinked characters and members' status changes, and the update posts it shares with members.
 sidebar:
   order: 9
 ---
 
-TaruBot posts in two channels besides the ledger: officer notices in a staff channel, and, if you choose one, short update posts for members. Both are sent with mentions turned off, so they never ping anyone.
+TaruBot posts in two channels besides the ledger: officer notices and member status changes in a staff channel, and, if you choose one, short update posts for members. All are sent with mentions turned off, so they never ping anyone.
 
 ## Officer notices
 
@@ -15,7 +15,7 @@ Choose a staff-only text channel with [`/config officer_notifications`](/tarubot
 - **Recovery.** "Lodestone synchronization recovered: the FC roster was accepted again." It follows only an outage that officers were told about.
 - **Characters unlinked automatically.** One notice per link TaruBot ended because the character's Lodestone page was gone on two checks at least an hour apart. See [Links TaruBot ends by itself](/tarubot/admin/member-links/#links-tarubot-ends-by-itself).
 
-Routine roster reads post nothing.
+Routine roster reads post no notice here; departures they confirm appear in the [member status post](#member-status-changes).
 
 ### How often Lodestone notices post
 
@@ -29,6 +29,64 @@ The trouble notice waits before it posts, and repeats slowly, so a short blip do
 - **Unlinking the FC** with `/config fc unlink` cancels a trouble notice that hasn't posted yet, so nothing posts later about an FC the server no longer uses.
 
 While a notice waits to post, the officer view of [`/sync status`](/tarubot/reference/commands/#sync-status) lists it as an `officer.notify` job. A notice cancelled before it posted simply leaves the list; that's expected.
+
+## Member status changes
+
+The same officer notifications channel gets one post, "Member status changes", listing what changed about your members. There is nothing else to set up and no separate switch: while the channel is set, the posts are on.
+
+### What the post shows
+
+- **Access and officer changes.** Members who gained or lost Member, Guest, Officer or FC Leader, grouped by the change and the reason TaruBot decided it: "Member → Guest · no linked character is in the FC", "No access → Guest · guest grant", "Officer added · officer override", "FC Leader removed · no linked character leads the FC". Access changes come first, largest group first, then Officer and FC Leader, added before removed.
+- **Left the FC.** Each linked character that left the FC (missing from the roster, then still absent a minute later), with its owner's mention. Departures are listed even when nobody's access changes: an alt whose owner keeps Member through another character, or an owner who already left the server.
+- **Mentions only.** Members appear as mentions, which never ping; character names appear only on departure lines. The footer counts the members, and the time is when the post was put together.
+- **Officers' own changes** (grants, revocations, overrides, approvals) read like automatic ones, with no "by @officer". TaruBot's audit keeps who made each change.
+
+For example:
+
+```text
+Member status changes
+
+Member → Guest · no linked character is in the FC
+@Alex, @Sam
+
+No access → Guest · guest grant
+@Robin
+
+Officer removed · officer access revoked
+@Jordan
+
+Left the FC
+Example Alt @ Diabolos (@Alex)
+Second Alt @ Diabolos (@Casey)
+
+5 members
+```
+
+### When it posts
+
+- **About 2 minutes after the first change,** one post covers everything that changed in that window. A change undone inside it cancels out: a `/guest grant` to a visitor with no linked character, followed by `/guest revoke` a minute later, posts nothing (`/guest reset` then clears the revocation). For a visitor who already has Guest through a registered character, the grant changes nothing, so the revoke alone posts "Guest → No access · guest access revoked".
+- **Large changes** are split: a post names at most 100 members, fewer when their lines are long, and the rest follow straight away. Nobody is left out.
+- **Without a channel,** changes aren't saved for later. Setting the officer notifications channel afterwards, even within 2 minutes, posts none of what happened before it. Unsetting the channel also drops anything still waiting to be posted.
+- **While Discord changes are paused,** the post waits and goes out once they're back on.
+
+While a post waits, the officer view of [`/sync status`](/tarubot/reference/commands/#sync-status) lists it as a queued `officer.status` job (`… QUEUED`); members never see it.
+
+### What isn't announced
+
+These stay quiet on purpose:
+
+- Role changes that follow a role binding change with [`/config roles`](/tarubot/admin/roles/) or `/setup` (setting up, replacing or removing a role). The exception: when a new Officer role replaces one already set, officers adopted with `adopt_holders` show as "Officer added".
+- Decisions TaruBot makes while its evidence is unconfirmed (an out-of-date roster, a new link it hasn't checked yet, an unknown rank), and hand edits of roles it keeps in those times. Once a fresh roster confirms them, anything that still differs from the last post is announced.
+- Roles given on joining or rejoining the server, people who left it, nicknames, FC rank changes that change neither Officer nor FC Leader, characters nobody linked, and FC joins that change no access.
+- Each member's first check, which only records where they stand: after TaruBot is installed or updated to a release with these posts, after a server is activated, or when a member first appears.
+
+Linking an FC to a server whose roles are already set up lists its confirmed members as "Guest → Member" after the first roster check, or about 2 minutes after the relink when the same FC is linked again while its last roster is still fresh ([`/config fc unlink`](/tarubot/reference/commands/#config-fc-unlink) keeps what the roster showed). Unlinking lists the reverse.
+
+### If a status post doesn't arrive
+
+- **`! BLOCKED`** on the `officer.status` job in `/sync status`: TaruBot can't post in the officer notifications channel. Fix its permissions there. The same post is retried, so nothing is lost or repeated; see [Jobs that need attention](/tarubot/deploy/monitoring/#jobs-that-need-attention) for when it retries.
+- **`‖ PAUSED`**: Discord changes are paused for the server or the deployment. The post goes out once they're back on.
+- **Nothing in `/sync status`**: nothing changed that is announced, or the channel was unset when the change happened.
 
 ## Update posts
 

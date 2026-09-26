@@ -2,7 +2,7 @@
 
 - **Status:** Draft for owner review
 - **Prepared:** 2026-09-21
-- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment"); 2026-09-25 (owner officer-notice decisions on issue #29; see "Approved officer-notice amendments"); 2026-09-25 (owner changelog decisions; see "Approved changelog amendments"); 2026-09-25 (owner documentation-site decisions; see "Approved documentation-site amendments"); 2026-09-25 (owner public-suggestion decisions; see "Approved public-suggestion amendments")
+- **Amended:** 2026-09-23 (owner launch decisions; see "Approved launch amendments"); 2026-09-24 (owner reply-session decisions; see "Approved reply-session amendments"); 2026-09-24 (owner hosting decision; see "Approved hosting amendment"); 2026-09-24 (owner Lodestone decisions; see "Approved Lodestone amendments"); 2026-09-24 (owner issue-reporting decisions; see "Approved issue-reporting amendments"); 2026-09-25 (hosting follow-up; see "Approved hosting amendment"); 2026-09-25 (owner officer-notice decisions on issue #29; see "Approved officer-notice amendments"); 2026-09-25 (owner changelog decisions; see "Approved changelog amendments"); 2026-09-25 (owner documentation-site decisions; see "Approved documentation-site amendments"); 2026-09-25 (owner public-suggestion decisions; see "Approved public-suggestion amendments"); 2026-09-25 (owner status-notice decisions on issue #31; see "Approved status-notice amendments")
 - **Deliverable:** A TypeScript Discord bot for Final Fantasy XIV Free Companies
 
 ### Approved implementation amendments (2026-09-21)
@@ -244,6 +244,34 @@ Issue [#32](https://github.com/deconfined/tarubot/issues/32) asked for a command
 **Accepted risks.** A public post is permanent once GitHub's events, archives and notification emails copy it. Anyone who verifies a character gets Guest, so a few alternate accounts could use up the deployment's daily limit; the owner accepts this and moderates after posting. Names typed freely, IDs deliberately split with visible separators, and IPv6 addresses deliberately disguised (with look-alike colons, or a letter run onto them) can't be recognised. Non-global IPv6 addresses (link-local, unique-local, loopback) are left, since they don't identify a connection publicly, and so is the start of a global one written without `::` (`2001:db8:1234`), which reads like a date or a score. Three forms are left deliberately, because catching them would garble ordinary text ([accepted 2026-09-25](https://github.com/deconfined/tarubot/issues/32#issuecomment-5839799636): "You're never going to catch **everything**."): Chinese and Japanese hosts written with `。`, which reads like a sentence break; look-alike dots such as `·` or `ꓸ`, which browsers send to a different host and which are real punctuation in some languages; and IPv4 written as one to three decimal numbers (`127.1`, `2130706433`), which reads like a rating, time or version. The IPv6 rule (first hex digit 2 or 3, a four-digit first group, at least two colons) is the owner's ([issue comment](https://github.com/deconfined/tarubot/issues/32#issuecomment-5839754397)).
 
 **Command surface.** `/suggest` brings the command surface to 21 roots and 46 paths (AC-23), after 2.25.0's `/config changelog`. It must be registered after the deployment. Release order (revised 2026-09-25; see the changelog amendments): #29 as 2.24.3, #30 as 2.25.0, #33 as 2.27.0, #32 as 2.28.0 (2.26.0 skipped), then #31 as 2.29.0.
+
+### Approved status-notice amendments (2026-09-25)
+
+Issue #31 asked that officers see material membership changes in the officer notifications channel (OPS-11). The owner approved the [plan](https://github.com/deconfined/tarubot/issues/31#issuecomment-5836583557) and accepted all seven of its recommendations in the [decision comment](https://github.com/deconfined/tarubot/issues/31#issuecomment-5836910305): "Accept all recommendations. We'll tweak if needed." Release 2.29.0 implements them with migration `010_status_notices.sql`, and no command change (it was built as 2.27.0 and renumbered when the documentation site and `/suggest` merged first). Together with "Approved officer-notice amendments" (#29), this covers OPS-11's material membership changes and recovery notices; its summaries of repeated delivery failures stay open.
+
+**Scope (decision 1).** A post lists members who gained or lost Member, Guest, Officer or FC Leader, with the reason the bot decided it, and the confirmed FC departures of linked characters, including departures that change nobody's access (the owner's answer on #29: "Let #31 handle" departures). Nothing else.
+
+**Officer-made changes (decision 2).** Grants, revocations, overrides and approvals are announced like automatic changes, without "by @officer". The audit keeps who made them.
+
+**Timing (decision 3).** One post about 2 minutes after the first change, covering every change in that window. A change undone within it cancels out.
+
+**Size (decision 4).** Each post names every member it covers: at most 100, fewer when their lines wouldn't fit one message. Further posts follow straight away.
+
+**Switch (decision 5).** Always on while the officer notifications channel is set, with no separate setting. Changes made while it is unset aren't saved for later. While Discord changes are paused, posts wait until they resume.
+
+**Names (decision 6).** Mentions only; character names appear only on departure lines.
+
+**Silent changes (decision 7).** These stay unannounced:
+- role changes that follow a role binding change with `/config roles` or `/setup` (setting up, replacing or removing a role). The exception: when a new Officer role replaces one already set, officers adopted through `adopt_holders` show as Officer added;
+- hand edits of roles that the bot keeps while evidence is unconfirmed (an out-of-date roster, an unchecked new link, an unknown rank). Changes decided in those times post once a fresh roster confirms them, if they still differ from what was last announced.
+
+The plan also leaves out roles given on joining or rejoining the server, people who left it, the first check after the deploy or activation (which only records everyone's status), nicknames, FC rank changes that change neither Officer nor FC Leader, characters nobody linked, and FC joins that change no access.
+
+**Implementation notes (2.29.0; not owner decisions).**
+- Linking an FC to a server whose roles are already set up lists its confirmed members as Guest → Member after the first roster check, or about 2 minutes after the relink when the same FC is relinked while its last roster is still fresh (`/config fc unlink` keeps the membership rows); unlinking lists the reverse.
+- A failed or interrupted post is resent with identical content under the same Discord nonce, and each send is recorded as a delivery attempt. A post Discord accepted is recorded as delivered before it is marked, so a retry after a failed mark only marks it and never posts it twice. After a terminal failure, `retry.js` or the next change in that server posts what waits.
+- Decision 5 is applied when a change is recorded: while the channel is unset, a change counts as announced at once and a departure isn't recorded, so setting the channel afterwards posts none of it. Unsetting the channel also drops whatever still waits, so nothing from before the unset posts later either. A post in progress stops before its next message if the channel is unset or moved, or Discord changes are paused.
+- The departures count stays in DevBot's "FC roster accepted" line only (#29).
 
 ## 1. Purpose and interpretation
 
@@ -733,7 +761,7 @@ The physical schema may use different names, but it must represent these logical
 
 **OPS-10.** Use structured logs with operation/run IDs, guild/FC context where appropriate, durations, result categories, retry information, and actionable permission/configuration errors. Track successful refresh age, failures, queue depth/age, reconciliation outcomes, and blocked notification work. Apply redaction to credentials, proof tokens, and profile bodies.
 
-**OPS-11.** Use the officer notification channel for operational summaries, material membership changes, repeated synchronization/delivery failures, and recovery notices. Aggregate and rate-limit messages per guild/run, including during large roster changes and prolonged outages. (Refined on 2026-09-25 for the roster notices: see "Approved officer-notice amendments". The roster line is DevBot-only, and the Lodestone degraded notice is held, rate-limited and followed by a recovery line.)
+**OPS-11.** Use the officer notification channel for operational summaries, material membership changes, repeated synchronization/delivery failures, and recovery notices. Aggregate and rate-limit messages per guild/run, including during large roster changes and prolonged outages. (Refined on 2026-09-25 for the roster notices: see "Approved officer-notice amendments". The roster line is DevBot-only, and the Lodestone degraded notice is held, rate-limited and followed by a recovery line. Refined again on 2026-09-25 for material membership changes: see "Approved status-notice amendments". One post about 2 minutes after the first change lists gained or lost Member, Guest, Officer and FC Leader, with reasons, and confirmed FC departures. Repeated delivery-failure summaries stay open.)
 
 **OPS-12.** Document Discord setup using the `Guilds` and privileged `GuildMembers` intents, application command installation, and explicit channel/role permissions. Require `ManageRoles`, `ManageNicknames` for enabled nickname management, and the channel viewing/sending/embedding/history permissions needed by configured destinations. Use this explicit permission set with bot `Administrator` permission disabled.
 

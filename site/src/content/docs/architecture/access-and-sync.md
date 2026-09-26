@@ -61,6 +61,8 @@ A pass compares desired roles and nicknames with Discord's current state and sen
 
 Other passes: **channel access** (`channels.access`) keeps onboarding's visibility policy, and **role layout** (`roles.layout`) keeps the managed roles' display and order while the switch is on.
 
+After a pass writes a member's roles, TaruBot records their Member, Guest, Officer and FC Leader for the officers' [status posts](/tarubot/admin/notices-and-updates/#member-status-changes), but only decisions that don't depend on the roles the member already holds: a decision kept on unconfirmed evidence, such as an out-of-date roster, waits until a fresh roster confirms it. The accepted roster records confirmed departures in the same transaction, and one job per server posts what changed about 2 minutes after the first change.
+
 ## Nicknames
 
 With nickname sync on, a member's nickname is their main character's name, cut to 32 characters, and follows a confirmed rename. TaruBot records the nickname it replaced and restores it when sync is turned off or the main link ends, unless the member changed it in the meantime. A nickname changed by anyone else suspends sync instead of being overwritten. Discord never lets a bot change the server owner's nickname, so TaruBot doesn't try.

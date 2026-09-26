@@ -83,7 +83,7 @@ Replies describe saved and background work with text markers, so color is never 
 
 Two more markers describe the request itself: `• SAVED` (committed to the database) and `= NO CHANGE` (it was already that way, so nothing was saved or queued).
 
-Members see labels: Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice. Officers see the raw job kind (such as `reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored diagnostic, cut to 150 characters.
+Members see labels: Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice, Status notice. Officers see the raw job kind (such as `reconcile.user`), the first 8 characters of the job ID, the attempt, the next time and the stored diagnostic, cut to 150 characters.
 
 An immediate reply never uses completion words. `… QUEUED` or `‖ PAUSED` there means the work was saved; only a view that reads stored jobs back (`/sync status`, `/guest status`, `/ledger balance` and `/ledger history`) can show `✓ DONE`.
 
@@ -123,6 +123,7 @@ Every click is authorized again for the person who clicked.
 - **The guest review message** in the review channel holds the applicant, the submission time, both answers, and **Approve** and **Deny**. Once decided, its title reads approved, denied, cancelled or no longer needed, and the buttons are disabled.
 - **The decision DM** tells the applicant whether they were approved. A denial includes the officers' reason, if one was given, and when they may apply again.
 - **Officer notices** in the officer notifications channel are plain text: Lodestone trouble, its recovery, and characters unlinked automatically. See [Officer notices](/tarubot/admin/notices-and-updates/#officer-notices).
+- **Status notices** in the officer notifications channel read "Member status changes": members grouped by change and reason ("Member → Guest · no linked character is in the FC"), then "Left the FC" with each departed character and its owner's mention. The footer counts the members. See [Member status changes](/tarubot/admin/notices-and-updates/#member-status-changes).
 - **Update posts** in the changelog channel read "TaruBot updated to vX.Y.Z", linking the changelog, with "What's new since" the last version announced and one field per release with a member note, newest first. At most ten are listed; the footer counts the rest. See [Update posts](/tarubot/admin/notices-and-updates/#update-posts).
 
 Every message is sent with mentions turned off, so no reply or post pings anyone.

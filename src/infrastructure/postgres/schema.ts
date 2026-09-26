@@ -126,6 +126,16 @@ export const guildUsers = pgTable(
     nickname_restore: boolean("nickname_restore").notNull().default(false),
     nickname_suspended: boolean("nickname_suspended").notNull().default(false),
     local_member_loss: boolean("local_member_loss").notNull().default(false),
+    /**
+     * Officer status notices (migration 010, issue #31): the member's last announced and last
+     * decisive access, and confirmed FC departures not yet posted. NULL until first observed;
+     * src/domain/status.ts validates it on every read, and an unreadable value counts as NULL.
+     */
+    status_state: payload("status_state"),
+    /** When something first waited to be announced (database clock); NULL when nothing waits. */
+    status_since: instant("status_since"),
+    /** The member's frozen lines in the status post being sent; NULL outside a post in flight. */
+    status_posting: payload("status_posting"),
   },
   (table) => [primaryKey({ columns: [table.guild_id, table.user_id] })],
 );

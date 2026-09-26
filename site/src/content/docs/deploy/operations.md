@@ -52,7 +52,7 @@ A new image never touches your database or restarts your bot by itself: updates 
 
 To go back, pin the previous `TARUBOT_IMAGE_TAG`, put back the Compose file that went with it (`mv docker-compose.yml.previous docker-compose.yml`, or fetch the older release's file as in step 1 of the update), and run `docker compose up -d --wait --remove-orphans` again. Going back past a release that changed the Compose file needs that older file: the newer one may lack a service or setting the older release expects.
 
-That only works when no migration lies between the two releases: an older release refuses to start on a newer schema. After a migration, the way back is a fix release, or restoring the backup you took before migrating.
+That only works when no migration lies between the two releases: an older release refuses to start on a newer schema. After a migration, the way back is a fix release, or restoring the backup you took before migrating. The status-post migration, `010_status_notices.sql`, also has a [manual reversal](/tarubot/deploy/monitoring/#status-notices).
 
 ## Single database writer
 

@@ -621,6 +621,11 @@ export class Queue {
         .update(t.jobs)
         .set({
           status: sql`CASE WHEN ${t.jobs.generation}=${job.generation} THEN 'succeeded' ELSE 'queued' END`,
+          // A run requeued for newer input gets a fresh attempt budget, as requeueParked and
+          // retryJob give (2.29.0): otherwise a busy guild's status post, requeued once per
+          // change, would spend one attempt per run and fail on the first transient error after
+          // about seven.
+          attempts: sql`CASE WHEN ${t.jobs.generation}=${job.generation} THEN ${t.jobs.attempts} ELSE 0 END`,
           completed_at: sql`now()`,
           lease_until: null,
           result: sql`CASE WHEN jsonb_typeof(${value}::jsonb)='object' THEN ${value}::jsonb || jsonb_strip_nulls(jsonb_build_object('applied',${t.jobs.result}->'applied')) ELSE ${value}::jsonb END`,

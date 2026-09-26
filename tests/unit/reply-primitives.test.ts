@@ -196,6 +196,32 @@ describe("formatting", () => {
     expect(splitFields("Runs", ["one"])).toEqual([{ name: "Runs", value: "one" }]);
   });
 
+  test("splitFields() joins with a given separator and counts it against the budget (2.29.0)", () => {
+    // The status post's mention groups: 21-character mentions joined with ', ' fill a 1,024
+    // field with 44 each ((1,024 + 2) / 23), so 100 of them take three fields.
+    const mentions = Array.from(
+      { length: 100 },
+      (_, index) => `<@${100_000_000_000_000_000n + BigInt(index)}>`,
+    );
+    const fields = splitFields("Member → Guest", mentions, 1_024, ", ");
+    expect(fields.map((field) => field.name)).toEqual([
+      "Member → Guest (1/3)",
+      "Member → Guest (2/3)",
+      "Member → Guest (3/3)",
+    ]);
+    expect(fields.map((field) => field.value.split(", ").length)).toEqual([44, 44, 12]);
+    for (const field of fields) expect(field.value.length).toBeLessThanOrEqual(1_024);
+    expect(fields.flatMap((field) => field.value.split(", "))).toEqual(mentions);
+    // Exactly at the budget still fits; one more character moves the line to a new field.
+    expect(splitFields("Pair", ["a".repeat(5), "b".repeat(5)], 12, ", ")).toEqual([
+      { name: "Pair", value: "aaaaa, bbbbb" },
+    ]);
+    expect(splitFields("Pair", ["a".repeat(5), "b".repeat(6)], 12, ", ")).toEqual([
+      { name: "Pair (1/2)", value: "aaaaa" },
+      { name: "Pair (2/2)", value: "bbbbbb" },
+    ]);
+  });
+
   test("code() rejects backticks and line breaks; cmd() and member() build inline code", () => {
     expect(code("1a2b3c4d")).toBe("`1a2b3c4d`");
     expect(() => code("a`b")).toThrow();

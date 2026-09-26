@@ -448,7 +448,7 @@ Production cut over with 2.16.0 that evening ([MIGRATION.md](MIGRATION.md#record
 
 ### 2.28.0 rollout plan (`/suggest`; not yet run)
 
-Planned only: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 and 2.27.0 merged in; numbered 2.26.0 until the documentation site merged first) is not merged or deployed. 2.24.3 and 2.25.0, which come before it in the release order, are deployed, so DevBot and production run 2.25.0 on schema 009, and 2.27.0 changed no running code; 2.28.0 adds no migration. Each step below needs the owner's go-ahead.
+The plan as written before the rollout: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/pull/36), with 2.25.0 and 2.27.0 merged in; numbered 2.26.0 until the documentation site merged first) merged into `main` as `c0a4f98` on 2026-09-25 and was published by run 36202103980. Its rollout was under way when #38 last merged `main` (DevBot ran the 2.28.0 image from 23:49 UTC, still on schema 009, as expected with no migration); its results belong here. 2.24.3 and 2.25.0, which come before it in the release order, are deployed, so DevBot and production ran 2.25.0 on schema 009 before it, and 2.27.0 changed no running code; 2.28.0 adds no migration. Each step below needs the owner's go-ahead.
 
 - **Registration.** Both DevBot and production need the commands registered after the deploy: 21 roots / 46 paths (2.25.0's 20 roots / 45 paths plus `/suggest`).
 - **Update post.** 2.28.0 has a member note. A server with a changelog channel gets one post, "TaruBot updated to v2.28.0", with that note when it starts on 2.28.0; production had no changelog channel at the 2.25.0 rollout, so it posts nothing unless one is set by then.
@@ -460,6 +460,20 @@ Planned only: 2.28.0 (issue #32, [PR #36](https://github.com/deconfined/tarubot/
   - an account without the Member or Guest role gets "FC membership needed" with the steps to either role (PigeonMuffin, with his roles removed for the test, or a fresh account).
 - **Production:** put `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the host's `.env` over SSH stdin (temporary file and rename, mode 600, the PEM double-quoted and multi-line like the CA, checksum matched), refresh the settings copy, then the no-migration procedure (pull, pin `TARUBOT_IMAGE_TAG=2.28.0`, `up -d --wait`). Probe the app without creating an issue (expect 422; [HOSTING.md](HOSTING.md#public-suggestions-the-github-app)), then `register.js --global` from the operator clone (21 roots / 46 paths) and `commands.js list` (21 global).
 - **Owner test:** one `/suggest` in Woven Souls. Check that the author is the app's bot account, both labels are applied, `＠` replaces `@`, no IDs appear, and no Claude run starts in Actions. Then close or delete the test issue and record the result here and in VERIFICATION.md.
+
+### 2.29.0 rollout plan (member status posts; not yet run)
+
+2.29.0 (#31, [PR #38](https://github.com/deconfined/tarubot/pull/38); built as 2.27.0) adds migration `010_status_notices.sql` (three nullable `guild_users` columns) and no command change. It follows 2.25.0 (migration 009), 2.27.0 (the documentation site, no running code) and 2.28.0 (#32, `/suggest`, no migration) in the agreed release order. 2.28.0's rollout was under way when this branch last merged `main` (DevBot ran its image from 23:49 UTC): before this deploy, confirm from its record that it finished, including its registration (21 roots / 46 paths), or register those commands with this deploy. Nothing below has run yet; each step that stops the bot, migrates or writes to Discord needs the owner's go-ahead.
+
+1. Stop `tarubot`, confirm no writer-lease holders, and `pg_dump` to `.cache/backups/tarubot_dev-before-2.29.0-<sha>.dump`; record its size and sha256.
+2. Restore the dump into `tarubot_dev_restore_test` and run `check-restore.js` with the deployed build, or the new one with `--schema-version 009_changelog_channel.sql`.
+3. Rehearse the migration on the copy (`migrate.js --restore-rehearsal` must print `Schema ready.`, and the three `status_*` columns are NULL), then run `migrate.js` against `tarubot_dev`.
+4. `up -d --wait --remove-orphans tarubot` with `TARUBOT_IMAGE_TAG=2.29.0`. Posts need `ENABLE_EFFECTS=true` and the test guild's effects on. Nothing to register.
+5. After the startup repair pass, nothing waits and nothing posted: `SELECT count(*) FROM guild_users WHERE status_since IS NOT NULL OR status_posting IS NOT NULL` is 0, and no `officer.status` job sent a message.
+6. The owner's checks from `test-plans/current.json`: `/officer revoke` on a rank officer gives one "Member status changes" post with "Officer removed · officer access revoked" within about 3 minutes, and `/officer reset` then gives "Officer added · FC officer rank" (after `/refresh` if the roster is older than 6 hours); on a visitor with no Guest role (no linked character, so no Guest basis), `/guest grant`, then `/guest revoke` within a minute, then `/guest reset` posts nothing (on a registered visitor the revoke alone would post "Guest → No access · guest access revoked" and leave the account revoked). Afterwards `status_since` is clear again.
+7. Check readiness (including `writerLease`), the logs and the plan posted in #chat, then record the results here and in VERIFICATION.md.
+
+**Production** follows HOSTING.md's migration procedure, unless the SSH deploy workflow ships first and handles a pending migration: pin and pull, stop, the writer-lease gate, an off-provider `pg_dump` with its checksum, `migrate.js` in the new image (its restore-point line names 010, then `Schema ready.`), then `up -d --wait`. The first pass posts nothing. An older image refuses schema 010: the ways back are a fix release, a restore, or the manual reversal on the site's monitoring page ("Status notices", `site/src/content/docs/deploy/monitoring.md`).
 
 ### Remaining unverified-visitor form checks (on hold until after launch)
 

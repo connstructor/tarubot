@@ -13,7 +13,7 @@ Everything TaruBot knows lives in one PostgreSQL database per deployment, run by
 | --- | --- | --- |
 | Lodestone cache | `free_companies`, `characters` | Public facts read from the Lodestone: IDs, names, worlds, FC tags, the FC a profile shows, and when each was last read. |
 | Rosters | `roster_snapshots`, `roster_members`, `membership`, `membership_history` | Accepted roster observations (members, ranks, leadership), each member character's current membership state, and when membership was observed for a link. |
-| People and servers | `users`, `guilds`, `guild_users` | Discord user IDs; each server's settings and revision, and the newest version its update posts announced; per-member presence, join time, main character and nickname state. |
+| People and servers | `users`, `guilds`, `guild_users` | Discord user IDs; each server's settings and revision, and the newest version its update posts announced; per-member presence, join time, main character and nickname state, and what officers' status posts last said about the member, with departed characters' names and worlds until they are posted. |
 | Links | `links`, `challenges` | Character links with their provenance, who made them and why, and when they ended; pending claims, as token hashes. |
 | Access decisions | `guest_state`, `guest_grants`, `guest_applications`, `officer_overrides` | Guest revocations, grants with provenance (ended grants kept), applications with their answers and outcomes, and officer grants and revocations. |
 | Ledger | `ledger_accounts`, `ledger_entries` | One account per server and FC; numbered, immutable entries with their note, amount, resulting balance and who recorded them. |

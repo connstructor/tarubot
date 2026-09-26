@@ -18,7 +18,7 @@ The approved mockups are authoritative. Where this document and an approved card
 | `presenters/labels.ts` | Link and grant provenance, application states |
 | `presenters/controls.ts` | Every approved button, built through the custom-ID codec in `src/discord/custom-ids.ts` |
 | `presenters/failure.ts` | The one failure presenter |
-| `presenters/<group>.ts` | `characters`, `ledger`, `configuration`, `guests`, `synchronization`, `utility`, `version`, `changelog` (the update post, 2.25.0) |
+| `presenters/<group>.ts` | `characters`, `ledger`, `configuration`, `guests`, `synchronization`, `utility`, `version`, `changelog` (the update post, 2.25.0), `officer` (the status post, 2.29.0) |
 
 Commands parse options, call one service method and return that method's presenter reply. They never format text, catch failures, set `flags` or set `allowedMentions`. `Command.execute` and `Component.execute` are typed to return only a `Presented` (and `beforeModal` a `Presented` or `null`), and the router refuses anything else at runtime as an unexpected failure, so no JSON dump or raw option object can reach Discord. Presenters import application results as types only and never touch persistence (`reply-guard.test.ts`).
 
@@ -97,7 +97,7 @@ Completion words (applied, posted, sent, secured) belong only to `✓ DONE`, and
 
 The approved job line (errors-and-style#28) is shared by `/guest status`, `/sync status` and `/ledger balance`:
 
-- **Members** see the marker, a label and plain words: `` `↻ WAITING` Ledger post (retrying in 7 minutes) ``. They never see job IDs, attempts or diagnostics. The labels are in `JOB_KIND` (`jobs.ts`): Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice.
+- **Members** see the marker, a label and plain words: `` `↻ WAITING` Ledger post (retrying in 7 minutes) ``. They never see job IDs, attempts or diagnostics. The labels are in `JOB_KIND` (`jobs.ts`): Role update, Server-wide role check, FC roster check, Departure confirmation, Character profile refresh, Channel access, Role layout, Update post, Ledger post, Guest review message, Decision DM, Officer notice, Status notice.
 - **Officers** see the marker, the raw job kind and the 8-character job ID, then the attempt and the next time, with the stored diagnostic quoted underneath and cut to 150 characters: `` `↻ WAITING` reconcile.user `1a2b3c4d` · attempt 3 · next in 7 minutes ``.
 - At most 10 lines are shown, then "…and N more". Long officer lists split across fields named "Needs attention (1/2)", each sized to the 1,024-character budget (C7).
 
@@ -336,6 +336,7 @@ Channel posts and DMs are built with `post()` from stored data by the gateway, s
 - The **guest review message** is one embed, "Guest application", then "Guest application · approved", "· denied", "· cancelled" or "· no longer needed" once decided, with Approve and Deny disabled. Its first edit clears the pre-2.14.0 text.
 - The **decision DM** speaks to the applicant: approved, or not approved with the officers' reason and when they may apply again.
 - The **update post** (2.25.0) is info: "TaruBot updated to v<version>", linking CHANGELOG.md on GitHub (its only link), "What's new since v<previous>.", then one field per release with a member note, named `v<version>`, newest first. Notes are escaped like user text and fit the 300-character field limit, so none is cut. At most ten releases are listed; the footer counts the rest ("…and 2 more in the full changelog"). It has no button and no timestamp, so a retry under the `changelog:<guild>:<version>` nonce sends the same message.
+- The **status post** (2.29.0, officer notifications channel) is info: "Member status changes", with mention groups named by change and reason ("Member → Guest · no linked character is in the FC", "No access → Guest · guest grant", "Officer added · officer override", "FC Leader removed · no linked character leads the FC"), access changes first (largest group first), then Officer and FC Leader (added before removed), then "Left the FC", one line per departure: `<character> @ <world> (<mention>)`. Mentions are joined with ", " and never ping, and a group that outgrows a field continues as "Name (2/3)". The footer counts the members ("5 members"), and the timestamp is when the batch was frozen. A post fits in nine fields and 5,800 characters (`statusFits`), and the job sizes each batch to fit (at most 100 members), so nothing is cut; a last "Not listed" field with an exact count is only a guard for one member whose own lines exceed that. The post renders only from the frozen entries, so a resend under `status:<batch>` sends the same message.
 
 Two messages are documented exclusions from the presenters:
 

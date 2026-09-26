@@ -289,14 +289,14 @@ Choose the channel where ledger entries are posted.
 
 ### /config officer_notifications
 
-Choose the channel for officer notices: Lodestone trouble and its recovery, and characters unlinked automatically. See [Officer notices](/tarubot/admin/notices-and-updates/#officer-notices).
+Choose the channel for officer notices: Lodestone trouble and its recovery, characters unlinked automatically, and the "Member status changes" posts about members who gained or lost access, Officer or FC Leader and characters that left the FC. See [Officer notices](/tarubot/admin/notices-and-updates/#officer-notices) and [Member status changes](/tarubot/admin/notices-and-updates/#member-status-changes).
 
 **Who can use it:** officers.
 
 | Option | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `channel` | Channel | No | A staff-only text channel TaruBot can post in. |
-| `unset_channel` | True or false | No | Stop posting officer notices. |
+| `unset_channel` | True or false | No | Stop posting officer notices and status changes. Changes made while it is unset aren't posted later. |
 
 ```text
 /config officer_notifications channel:#officer-chat
