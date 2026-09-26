@@ -7899,7 +7899,7 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
 
   /**
    * Officer status notices (2.29.0, issue #31). Used by these tests: guilds
-   * 666666666666666740-767, FCs 9232097761132950100-115, users 9310xxxx-9335xxxx (and the 18-digit
+   * 666666666666666740-768, FCs 9232097761132950100-115, users 9310xxxx-9336xxxx (and the 18-digit
    * 9318…), characters 883xxxxx-887xxxxx and role and channel IDs 824xx. Each test builds its own
    * guild with the four roles bound, the officer notifications channel set and effects on, reads
    * `sent` by guild, and stands in for the two-minute window by moving `status_since` back.
@@ -9222,6 +9222,79 @@ describe.skipIf(!url)("PostgreSQL invariants and selected migration fixture", ()
         probe.release();
         discord.members = enumerate;
       }
+    });
+
+    test("with no channel, an unchanged pass clears what a failed job left; a later channel posts only new changes", async () => {
+      const guildId = reserved(28);
+      const [frozenUser, waitingUser, later] = ["93360001", "93360002", "93360003"];
+      await statusGuild(guildId, null);
+      for (const user of [frozenUser, waitingUser, later]) {
+        await statusMember(guildId, user);
+        await reconcileIn(guildId, user);
+      }
+      await grant(guildId, frozenUser);
+      await elapse(guildId);
+      // The job's last attempt freezes the first change, then meets an outage (a plain error, so
+      // an ordinary retry) with its budget spent: it ends failed with the batch still frozen. A
+      // second change lands during that send and merges into the same job, which nothing revives
+      // (requeueParked never takes failed jobs).
+      const [job] = await statusJobs(guildId);
+      await db.query("UPDATE jobs SET attempts=7 WHERE id=$1", [job?.id]);
+      const send = discord.send;
+      discord.send = async () => {
+        discord.send = send;
+        await grant(guildId, waitingUser);
+        throw new Error("Test Discord outage.");
+      };
+      try {
+        expect(await runStatus(guildId)).toMatchObject({
+          status: "failed",
+          last_error: "transient",
+        });
+      } finally {
+        discord.send = send;
+      }
+      expect((await statusJobs(guildId)).map((row) => row.status)).toEqual(["failed"]);
+      const frozen = await statusOf(guildId, frozenUser);
+      expect(frozen?.posting?.batch).toMatch(/^[0-9a-f-]{36}$/);
+      expect(frozen?.since).not.toBeNull();
+      expect(frozen?.state).toMatchObject({
+        announced: { guest: false },
+        current: { guest: true },
+      });
+      expect(await waiting(guildId)).toEqual([frozenUser, waitingUser]);
+      // With the channel unset, each member's next pass changes nothing, yet clears what waits
+      // and the frozen entry, exactly as the job's own drop would have: nothing is saved for later.
+      await service.configure(officerOf(guildId), "officer_notifications_channel_id", null);
+      for (const user of [frozenUser, waitingUser]) {
+        await reconcileIn(guildId, user);
+        const dropped = await statusOf(guildId, user);
+        expect(dropped).toMatchObject({ since: null, posting: null });
+        expect(dropped?.state).toMatchObject({
+          announced: { guest: true },
+          current: { guest: true },
+          reasons: {},
+          departed: [],
+        });
+        // With nothing left to clear, the next pass writes nothing again.
+        await reconcileIn(guildId, user);
+        expect((await statusOf(guildId, user))?.xmin).toBe(dropped?.xmin ?? "");
+      }
+      expect(await waiting(guildId)).toEqual([]);
+      // Setting the channel again posts only a change made after it, with no stale lines and no
+      // resent batch.
+      await service.configure(officerOf(guildId), "officer_notifications_channel_id", CHANNEL);
+      await grant(guildId, later);
+      expect(await waiting(guildId)).toEqual([later]);
+      await elapse(guildId);
+      expect(await runStatus(guildId)).toMatchObject({
+        status: "succeeded",
+        result: { status: "delivered", posts: 1, members: 1 },
+      });
+      expect(statusPosts(guildId).map(shown)).toEqual([
+        [{ name: "No access → Guest · guest grant", value: mention(later) }],
+      ]);
+      expect((await statusJobs(guildId)).map((row) => row.status)).toEqual(["failed", "succeeded"]);
     });
   });
 });

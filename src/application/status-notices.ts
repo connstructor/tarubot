@@ -9,7 +9,8 @@
  * accepted roster records confirmed departures in its own transaction (lockDepartingOwners, then
  * recordDepartures). Either queues the guild's one `officer.status` job, key officer:<guild>:status.
  * With no officer notifications channel nothing is saved for later (owner decision 5): a pass takes
- * its change as announced at once, the roster records no departure, and neither queues the job.
+ * its change as announced at once and clears whatever the member still had waiting or frozen from
+ * before the unset, the roster records no departure, and neither queues the job.
  *
  * Delivery (deliverStatus): a batch frozen earlier is resent first, unchanged and with no waits
  * (or only marked, when its `delivered` attempt shows Discord already took it); then the job waits
@@ -112,7 +113,9 @@ async function lockGuild(db: Orm, guildId: string): Promise<LockedGuild | null> 
  * baseline silently, as nickname() waits too. An unchanged pass writes nothing. With no officer
  * notifications channel the change is taken as announced at once and nothing is queued (owner
  * decision 5: changes made while it is unset aren't saved for later); what waited from before the
- * unset is dropped by the job its change queued. Returns whether a post was queued.
+ * unset, and the member's entry in a frozen batch, are cleared too, changed pass or not, as the job
+ * its change queued clears them (dropStatus), since that job may have ended failed. Returns
+ * whether a post was queued.
  */
 export async function recordStatus(
   app: Service,
@@ -127,20 +130,35 @@ export async function recordStatus(
     if (!guild) return false;
     const scope = and(eq(t.guildUsers.guild_id, guildId), eq(t.guildUsers.user_id, userId));
     const [row] = await db
-      .select({ state: t.guildUsers.status_state })
+      .select({
+        state: t.guildUsers.status_state,
+        since: t.guildUsers.status_since,
+        posting: t.guildUsers.status_posting,
+      })
       .from(t.guildUsers)
       .where(scope)
       .for("no key update");
     if (!row) return false;
     const recorded = observe(readState(row.state), observation, joinedAt.toISOString());
-    if (!recorded.changed) return false;
     if (!guild.channel) {
+      // With no channel, every pass clears what the member has waiting, a frozen batch entry
+      // included, exactly as dropStatus does, whether or not the pass changed anything: a change
+      // recorded before the unset may belong to a job that ended failed, which nothing revives to
+      // drop it, so it would otherwise post when a channel is set later. (Unchanged, `pending` is
+      // the stored state's.) A pass with nothing to clear still writes nothing.
+      if (!recorded.changed && !recorded.pending && row.since === null && row.posting === null)
+        return false;
       await db
         .update(t.guildUsers)
-        .set({ status_state: dropPending(recorded.next), status_since: null })
+        .set({
+          status_state: dropPending(recorded.next),
+          status_since: null,
+          status_posting: null,
+        })
         .where(scope);
       return false;
     }
+    if (!recorded.changed) return false;
     await db
       .update(t.guildUsers)
       .set({
