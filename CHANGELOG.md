@@ -1,6 +1,15 @@
 # Version history
 
-The current application version is **2.29.0**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.29.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.29.1 — Claude reviews the agent's pull requests
+
+The owner asked for the Claude review to start on its own for the pull requests TaruBot's GitHub App opens ("Let's handle the Claude review trigger, since that's an easy win."). CI and records only: no bot change, no migration (it requires `010_status_notices.sql`, as 2.29.0 does), no command change, and nothing to deploy.
+
+- **CI.** The advisory Claude review (`claude-code-review.yml`) now runs for pull requests that TaruBot's own GitHub App, `tarubot-agent[bot]`, opens, reopens, updates or marks ready, exactly as for a person. The job used to skip every bot, so the agent's pull requests were closed and reopened by hand to get a review (#35 and #38, for example). The job condition admits that one login next to `User` senders, and the review step passes `allowed_bots: "tarubot-agent[bot]"`, since the action otherwise fails a bot actor with "Workflow initiated by non-human actor". The action checks no repository permission for a `[bot]` actor, so the list names that account alone, never `*`. Every other bot, Dependabot included, stays skipped, and so do drafts and fork pull requests. The action pins and the rest of the workflow are unchanged.
+- **Verification.** This release's pull request changes the workflow, so the action skips its review (it runs only a workflow identical to `main`'s copy). The first pull request the app opens after the merge is the check: its run should log "Actor tarubot-agent[bot] is in allowed_bots list, skipping human actor check" and then review. If Anthropic's token exchange refused an app actor, the step would fail visibly ("App token exchange failed"), and a close and reopen would still start a review.
+- **Records.** The 2.28.0 rollout (2026-09-25: the app settings on the production host, both deploys, 21 roots / 46 paths registered, the app probe and the owner's test `/suggest`, issue #39) and the 2.29.0 rollout (2026-09-26: migration 010 on DevBot and production, a silent first pass, no registration) in DEV_GUILD.md, VERIFICATION.md, OPEN_ITEMS.md and SESSION_HANDOFF.md. 2.27.0 changed only documentation, so nothing was deployed for it.
+- **Docs.** CI_CD.md describes the exception and its two gates. No member note: members notice nothing.
 
 ## 2.29.0 — Member status changes in the officer channel
 

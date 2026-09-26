@@ -1,21 +1,17 @@
 {
-  "title": "Session: 2.29.0 member status posts",
-  "objective": "2.29.0 posts member status changes (Member, Guest, Officer, FC Leader, and confirmed FC departures) in the officer notifications channel, one post about 2 minutes after the first change. Migration 010 and no command change. The first pass after the deploy only records everyone's status and posts nothing. It follows 2.28.0 (/suggest).",
+  "title": "Session: 2.29.1 Claude review for the agent's pull requests",
+  "objective": "2.29.1 lets pull requests that TaruBot's own GitHub App (tarubot-agent) opens or updates start the advisory Claude review, as a person's do; every other bot stays skipped. It also records the 2.28.0 and 2.29.0 rollouts. The bot is unchanged: no migration, no command change, and nothing to deploy.",
   "user": [
-    "After the deploy: nothing posts in the officer notifications channel.",
-    "/officer revoke on a rank officer: within about 3 minutes, one 'Member status changes' post with 'Officer removed · officer access revoked'. Then /officer reset: 'Officer added · FC officer rank' (run /refresh first if the roster is older than 6 hours).",
-    "On a visitor with no Guest role (no linked character): /guest grant, then /guest revoke within a minute, then /guest reset: no post. A /refresh that changes nothing posts nothing.",
-    "After the merge, read the site's 'Member status changes' section (Run a server → Officer notices and update posts) and flag anything unclear."
+    "On the next pull request the agent opens after the merge, don't close and reopen it: the Claude review should start and post by itself.",
+    "If that run fails instead (for example 'App token exchange failed'), say so; a close and reopen still starts a review.",
+    "Still open from 2.29.0's plan: /officer revoke, then /officer reset on a rank officer, each gives one 'Member status changes' post; /guest grant, revoke and reset within a minute on a visitor with no linked character posts nothing."
   ],
   "assistant": [
-    "With the owner's go-ahead: stop, back up, restore-check at 009, rehearse migration 010 on the copy (the three guild_users columns NULL), migrate tarubot_dev, then up (ENABLE_EFFECTS=true). No command registration.",
-    "After the startup pass: every member's status_since is NULL and no officer.status job ran. After the user's posts: status_since is clear again.",
-    "After the merge, confirm the Documentation site workflow published the status-post sections.",
-    "Record the rollout in docs/DEV_GUILD.md and docs/VERIFICATION.md."
+    "After the merge, read the first agent-opened pull request's review run: its log names tarubot-agent[bot] as an allowed bot, then the review posts. Record it in docs/VERIFICATION.md.",
+    "Read-only: DevBot and production still report 2.29.0 ready with the writer lease held; nothing to deploy."
   ],
   "bot": [
-    "Run compiled 2.29.0 on schema 010.",
-    "Record each member's status silently on its first pass, then post what changed about 2 minutes after the first change.",
+    "Keep running 2.29.0 on schema 010; 2.29.1 changes no running code.",
     "Post this responsibility-separated session plan in #chat."
   ]
 }
