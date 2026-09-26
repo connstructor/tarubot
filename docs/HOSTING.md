@@ -214,7 +214,7 @@ A host reboot, the OOM killer or a kill ends the worker without a result. The ne
 
 ### Setting it up (owner)
 
-Each step is the owner's, with the owner's go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 5, 6, 12 and 13).
+Each step is the owner's, with the owner's go-ahead; Claude prepares the commands only. **Status (2026-09-26):** steps 1, 4, 5 (the line names `/opt/tarubot/tarubot/ops/deploy.sh`, and `authorized_keys` is mode 600), 7, 8, 9, 10 and 11 are done; [OPEN_ITEMS.md](OPEN_ITEMS.md#production-after-the-cutover) tracks the rest (2, 3, 6, 12 and 13). Since step 11 the dev VM's `gh` token is read-only, so the `gh secret set` and `gh variable set` commands below need a token with write access; the same settings can be made in the web UI (Settings → Environments → the environment, or Settings → Secrets and variables → Actions for `DEPLOY_ENABLED`).
 
 1. **Before the 2.30.0 pull request merges,** create the environments in Settings → Environments:
    - `production`: required reviewer `deconfined` only; "Prevent self-review" **off**; "Allow administrators to bypass configured protection rules" **off**; deployment branches "Selected branches and tags" with the branch rule `main` only; no wait timer.
