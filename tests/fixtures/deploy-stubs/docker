@@ -11,8 +11,11 @@
 # State: $SIM/current (the tarubot service's container id), $SIM/c/<id>.json and .logs (inspect
 # output and logs), $SIM/versions/<version> ("<commit> <digest> <image id>") and knobs in
 # $SIM/knob/<name>: up.<version> (healthy, unstable, fail-before-lease, fail-after-lease,
-# fail-no-modules, fail-no-container), pull, config, migrate (ok, none, fail), register, list
-# (fail), backup_running (a count of polls), oneoff, lease_after_stop, digest.<version> (wrong).
+# fail-no-modules, fail-no-container), pull, config, stop, migrate (ok, none, fail), register,
+# list (fail), backup_running (a count of polls), oneoff, lease_after_stop, digest.<version>
+# (wrong). Two knobs act from the first `up` on and are used up by it: ps_after_up (fail: ps
+# fails; two: ps lists a second container; none: ps lists nothing, until the next `up`) and
+# inspect_after_up (fail: the container that `up` created can't be inspected).
 set -euo pipefail
 S=$SIM
 
@@ -52,7 +55,7 @@ next_id() {
 case $1 in
   info) exit 0 ;;
   inspect)
-    [[ -f $S/c/$2.json ]] || exit 1
+    [[ -f $S/c/$2.json && ! -f $S/c/$2.noinspect ]] || exit 1
     n=$(($(cat "$S/c/$2.inspects" 2>/dev/null || printf 0) + 1))
     printf '%s\n' "$n" >"$S/c/$2.inspects"
     # An unstable container shows a restart from its second inspection on.
@@ -95,7 +98,14 @@ case $1 in
     shift
     tag=${TARUBOT_IMAGE_TAG:--}
     case $sub in
-      ps) if [[ -s $S/current ]]; then cat "$S/current"; fi ;;
+      ps)
+        case $(cat "$S/ps_mode" 2>/dev/null || true) in
+          fail) exit 1 ;;
+          two) printf '%s\n' "$(cat "$S/current")" c0ffee999999 ;;
+          none) ;;
+          *) if [[ -s $S/current ]]; then cat "$S/current"; fi ;;
+        esac
+        ;;
       pull)
         record "compose pull tag=$tag"
         [[ $(knob pull) != fail ]]
@@ -106,6 +116,7 @@ case $1 in
         ;;
       stop)
         record "compose stop"
+        if [[ $(knob stop) == fail ]]; then exit 1; fi
         id=$(cat "$S/current")
         jq '.[0].State.Status = "exited"' "$S/c/$id.json" >"$S/tmp.json"
         mv "$S/tmp.json" "$S/c/$id.json"
@@ -120,8 +131,15 @@ case $1 in
         version=${TARUBOT_IMAGE_TAG:-$(pin_of "$project")}
         mode=$(knob "up.$version")
         mode=${mode:-healthy}
+        # A ps mode lasts until the next up; the first up takes the knob.
+        rm -f "$S/ps_mode"
+        if [[ -f $S/knob/ps_after_up ]]; then mv "$S/knob/ps_after_up" "$S/ps_mode"; fi
         if [[ $mode == fail-no-container ]]; then exit 1; fi
         id=$(next_id)
+        if [[ -f $S/knob/inspect_after_up ]]; then
+          rm -f "$S/knob/inspect_after_up"
+          : >"$S/c/$id.noinspect"
+        fi
         case $mode in
           healthy) container "$id" "$version" running healthy lease ;;
           unstable)

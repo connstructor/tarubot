@@ -6,14 +6,18 @@
  *   locale, no eval or tracing, stdout only through `say`, and a clean environment for the worker.
  * - The parser table runs the real script with hostile SSH_ORIGINAL_COMMAND values: each prints
  *   the usage line and exits 64 before any run directory, lock, git or Docker call.
+ * - The log-contract tests pin the two bot log messages the recovery rule reads, in the bot's own
+ *   source: an older copy of the script judges a newer release by them.
  * - The scenarios run the real worker against a throwaway git repository (a bare "origin" with
- *   one commit per release) and simulated `docker`, `curl` and `df` commands on PATH
+ *   one commit per release) and simulated `docker`, `curl`, `df` and `mktemp` commands on PATH
  *   (tests/fixtures/deploy-stubs), asserting the order of the calls that change something, the
  *   `.env` pin, the clone's commit and the result line: restart, migration, failed migration,
- *   failed health before and after the writer lease, rollback, superseded, the maintenance-window
- *   warning, already-live, and every refusal before anything changes.
- * - The entry tests cover replay, following a busy run, a dead worker, a conflicting request, the
- *   committed v1 run directory and the detached launch.
+ *   failed health before and after the writer lease, what Compose shows after a failed start,
+ *   rollback, superseded, the maintenance-window warning, already-live, the approval checked
+ *   twice, host-lock contention, and every refusal before anything changes.
+ * - The entry tests cover replay, starting over after a refusal before the approval, the worker
+ *   cap, pruning, following a busy run, a dead worker, a conflicting request, the committed v1 run
+ *   directory, the detached launch, and one request through main into the real worker.
  *
  * Scenarios need git and jq; the image build (oven/bun, which has neither) skips them, and CI's
  * checks job and the dev VM run them.
@@ -30,10 +34,11 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** A repository path, resolved relative to this test. */
@@ -42,6 +47,10 @@ const SCRIPT = root("ops/deploy.sh");
 const STUBS = root("tests/fixtures/deploy-stubs");
 const hasGit = Bun.which("git") !== null;
 const hasJq = Bun.which("jq") !== null;
+/** The end-to-end entry test runs the real worker on its fixed PATH, which needs these there. */
+const endToEnd = ["jq", "curl", "setsid", "flock"].every(
+  (tool) => Bun.which(tool, { PATH: "/usr/local/bin:/usr/bin:/bin" }) !== null,
+);
 const RUN_ID = "36300000042";
 const USAGE =
   "usage: deploy <version> <commit> <digest> <run> | rollback <version> <commit> <digest> <run> <from>";
@@ -70,7 +79,7 @@ function sandbox(): Sandbox {
   const bin = join(dir, "bin");
   for (const path of [home, join(sim, "c"), join(sim, "versions"), join(sim, "knob"), bin])
     mkdirSync(path, { recursive: true });
-  for (const name of ["docker", "curl", "df"]) {
+  for (const name of ["docker", "curl", "df", "mktemp"]) {
     cpSync(join(STUBS, name), join(bin, name));
     chmodSync(join(bin, name), 0o755);
   }
@@ -99,6 +108,21 @@ function run(argv: string[], env: Record<string, string>, cwd = scratch) {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
+}
+
+/**
+ * Hold a lock file from another process until killed, as a running deploy or worker holds it.
+ * `flock -o` keeps the lock in flock itself, so killing it frees the lock at once.
+ */
+function holdLock(path: string) {
+  mkdirSync(dirname(path), { recursive: true });
+  const held = `${path}.held`;
+  const holder = Bun.spawn(
+    ["flock", "-o", path, "bash", "-c", 'touch "$1"; exec sleep 10', "holder", held],
+    { env: { PATH: "/usr/bin:/bin" }, stdin: "ignore" },
+  );
+  for (let i = 0; i < 300 && !existsSync(held); i++) Bun.sleepSync(10);
+  return holder;
 }
 
 /** Run git with an isolated configuration, failing the test on an error. */
@@ -173,6 +197,16 @@ describe("the script's shape", () => {
     ]);
   });
 
+  test("bounds every docker call with timeout(1), so a hung daemon can't hold the locks", () => {
+    const calls = lines.filter((line) => !/^\s*#/u.test(line) && /\bdocker [a-z]/u.test(line));
+    expect(calls.length).toBeGreaterThanOrEqual(10);
+    for (const line of calls)
+      expect({ line, bounded: /timeout (?:60|"\$limit") docker [a-z]/u.test(line) }).toEqual({
+        line,
+        bounded: true,
+      });
+  });
+
   test("never evaluates text, traces, or prints Compose's resolved configuration", () => {
     expect(text).not.toMatch(/\beval\b/u);
     expect(text).not.toMatch(/set -[a-zA-Z]*x/u);
@@ -186,7 +220,19 @@ describe("the script's shape", () => {
   });
 
   test("the entry writes the client's stdout only through say", () => {
-    for (const name of ["entry", "emit_new", "replay", "follow", "worker_died", "prune"])
+    for (const name of [
+      "entry",
+      "conflict",
+      "too_many_workers",
+      "refuse_unstarted",
+      "retryable",
+      "start_over",
+      "emit_new",
+      "replay",
+      "follow",
+      "worker_died",
+      "prune",
+    ])
       for (const line of body(name).split("\n"))
         if (/\bprintf\b/u.test(line))
           expect({ name, line, private: /\$\(printf|>/u.test(line) }).toEqual({
@@ -199,6 +245,56 @@ describe("the script's shape", () => {
     expect(launch).toContain('env -i HOME="$HOME" PATH="$SAFE_PATH" LC_ALL=C');
     expect(launch).toContain('setsid -f "$SELF" __worker');
     expect(launch).toContain('</dev/null >>"$RUN/worker.log" 2>&1');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The bot's log messages the recovery rule reads
+// ---------------------------------------------------------------------------------------------
+
+describe("the log messages the recovery rule reads", () => {
+  const script = readFileSync(SCRIPT, "utf8");
+  /** The message text of a `readonly NAME='"msg":"…"'` constant. */
+  const message = (name: string) => {
+    const found = new RegExp(`readonly ${name}='"msg":"([^"]+)"'`, "u").exec(script)?.[1];
+    if (!found) throw new Error(`no ${name}`);
+    return found;
+  };
+  const lease = message("LEASE_LINE");
+  const modules = message("MODULES_LINE");
+  const lifecycle = readFileSync(root("src/application/lifecycle.ts"), "utf8");
+  const main = readFileSync(root("src/main.ts"), "utf8");
+  /** How often a string literal with exactly this text appears anywhere in src/. */
+  const inSource = (text: string) => {
+    let count = 0;
+    for (const file of new Bun.Glob("src/**/*.ts").scanSync({ cwd: root("") }))
+      count += readFileSync(root(file), "utf8").split(`"${text}"`).length - 1;
+    return count;
+  };
+  /** A pino info call on `receiver` whose message is exactly `text`. */
+  const infoCall = (receiver: string, text: string) =>
+    new RegExp(`${receiver}\\.info\\(\\s*\\{[^}]*\\},\\s*"${text}",?\\s*\\)`, "u");
+
+  test("the lifecycle logs the lease message at info, on its one lease path", () => {
+    expect(lease).toBe("Database writer lease acquired");
+    expect(inSource(lease)).toBe(1);
+    // The lifecycle takes one session lock, and the info call follows it before the return.
+    expect(lifecycle.split("pg_try_advisory_lock").length - 1).toBe(1);
+    const lock = lifecycle.indexOf('"SELECT pg_try_advisory_lock($1::bigint) AS locked"');
+    const call = infoCall("this\\.log", lease).exec(lifecycle);
+    expect(lock).toBeGreaterThan(0);
+    expect(call?.index ?? -1).toBeGreaterThan(lock);
+    expect(lifecycle.slice(lock, call?.index)).not.toContain("return");
+  });
+
+  test("main logs 'Modules loaded' at info before it asks for the lease", () => {
+    expect(modules).toBe("Modules loaded");
+    expect(inSource(modules)).toBe(1);
+    const call = infoCall("\\blog", modules).exec(main);
+    const prepare = main.indexOf("await lifecycle.prepare()");
+    expect(call).not.toBeNull();
+    expect(prepare).toBeGreaterThan(0);
+    expect(call?.index ?? Number.POSITIVE_INFINITY).toBeLessThan(prepare);
   });
 });
 
@@ -410,6 +506,12 @@ interface Scenario {
   readonly liveHealth?: string;
   readonly run?: Record<string, unknown>;
   readonly approvals?: unknown;
+  /** The run's jobs answer (a string is written as it is); by default Deploy is in progress. */
+  readonly jobs?: unknown;
+  /** How GitHub answers for the run from its second request on (a change while it waited). */
+  readonly runLater?: Record<string, unknown>;
+  /** Another process holds the host lock while the worker runs. */
+  readonly holdHostLock?: boolean;
   readonly now?: string;
   readonly dirty?: boolean;
 }
@@ -468,19 +570,33 @@ function scenario(s: Scenario) {
   const digest = target?.digest ?? `sha256:${hex(`digest ${version}`)}`;
   const request = `${action} ${version} ${commit} ${digest} ${RUN_ID}${from ? ` ${from}` : ""}`;
   const title = from ? `Deploy ${version} rollback from ${from}` : `Deploy ${version}`;
+  const runAnswer = {
+    id: Number(RUN_ID),
+    path: ".github/workflows/deploy.yml",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_repository: { full_name: "deconfined/tarubot" },
+    status: "in_progress",
+    run_attempt: 1,
+    display_title: title,
+    ...s.run,
+  };
+  writeFileSync(join(box.sim, "run.json"), JSON.stringify(runAnswer));
+  if (s.runLater)
+    writeFileSync(join(box.sim, "run.later.json"), JSON.stringify({ ...runAnswer, ...s.runLater }));
   writeFileSync(
-    join(box.sim, "run.json"),
-    JSON.stringify({
-      id: Number(RUN_ID),
-      path: ".github/workflows/deploy.yml",
-      event: "workflow_dispatch",
-      head_branch: "main",
-      head_repository: { full_name: "deconfined/tarubot" },
-      status: "in_progress",
-      run_attempt: 1,
-      display_title: title,
-      ...s.run,
-    }),
+    join(box.sim, "jobs.json"),
+    typeof s.jobs === "string"
+      ? s.jobs
+      : JSON.stringify(
+          s.jobs ?? {
+            total_count: 3,
+            jobs: [
+              { name: "Plan", status: "completed", conclusion: "success", run_attempt: 1 },
+              { name: "Deploy", status: "in_progress", conclusion: null, run_attempt: 1 },
+            ],
+          },
+        ),
   );
   // A string is written as it is (an answer that isn't JSON).
   writeFileSync(
@@ -492,16 +608,18 @@ function scenario(s: Scenario) {
             {
               state: "approved",
               comment: "",
-              user: { login: "deconfined" },
+              user: { login: "deconfined", id: 71469756 },
               environments: [{ name: "production" }],
             },
           ],
         ),
   );
+  const holder = s.holdHostLock ? holdLock(join(box.state, "lock")) : undefined;
   const outcome = run(
     ["bash", join(STUBS, "run-worker.sh")],
     environment(box, { DEPLOY_ROOT: repo, REQUEST: request, SIM_NOW: s.now ?? "4 12" }),
   );
+  holder?.kill();
   const runDir = join(box.state, "runs", RUN_ID);
   const publicLines = readFileSync(join(runDir, "public.log"), "utf8").trim().split("\n");
   const resultLine = publicLines.at(-1) ?? "";
@@ -585,11 +703,10 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
       expect(s.envFile).toContain("MIIBCgKCAQEAinsideAquotedValue=\n-----END CERTIFICATE-----");
       expect(s.head).toBe(commitOf("2.30.1"));
       expect(s.branch).toBe("main");
-      // Only two anonymous API calls: the run and its approvals.
-      expect(s.apiCalls).toEqual([
-        `https://api.github.com/repos/deconfined/tarubot/actions/runs/${RUN_ID}`,
-        `https://api.github.com/repos/deconfined/tarubot/actions/runs/${RUN_ID}/approvals`,
-      ]);
+      // Anonymous API calls only: the run, its jobs and its approvals, then the run and its jobs
+      // again just before the restart.
+      const api = `https://api.github.com/repos/deconfined/tarubot/actions/runs/${RUN_ID}`;
+      expect(s.apiCalls).toEqual([api, `${api}/jobs`, `${api}/approvals`, api, `${api}/jobs`]);
     },
     slow,
   );
@@ -679,7 +796,7 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
         "compose config tag=2.31.0",
         "compose stop",
         "backup",
-        "compose up tag=- pin=2.30.1",
+        "compose up tag=- pin=2.30.1 orphans",
       ]);
       expect(s.pin).toBe("2.30.1");
       expect(s.head).toBe(commitOf("2.30.1"));
@@ -708,7 +825,7 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
         "backup",
         "compose run tag=2.31.0 pin=2.30.1",
         "stop-oneoff",
-        "compose up tag=- pin=2.30.1",
+        "compose up tag=- pin=2.30.1 orphans",
       ]);
       expect(s.pin).toBe("2.30.1");
       expect(s.head).toBe(commitOf("2.30.1"));
@@ -773,7 +890,7 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
         "compose config tag=2.30.1",
         "compose up tag=2.30.1 pin=2.30.0 orphans",
         "compose stop",
-        "compose up tag=- pin=2.30.0",
+        "compose up tag=- pin=2.30.0 orphans",
       ]);
       expect(s.pin).toBe("2.30.0");
       expect(s.head).toBe(commitOf("2.30.0"));
@@ -968,6 +1085,184 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
     slow,
   );
 
+  test(
+    "no single container of either release after a failed start: nothing restored or pinned",
+    () => {
+      for (const [what, knobs] of [
+        ["ps fails", { ps_after_up: "fail" }],
+        ["two containers", { ps_after_up: "two" }],
+        ["an unreadable container", { inspect_after_up: "fail" }],
+      ] as const) {
+        const s = scenario({
+          live: "2.30.0",
+          request: "deploy 2.30.1",
+          knobs: { "up.2.30.1": "fail-before-lease", ...knobs },
+        });
+        expect({
+          what,
+          outcome: s.result.outcome,
+          reason: s.result.reason,
+          calls: s.calls,
+          pin: s.pin,
+          head: s.head,
+        }).toEqual({
+          what,
+          outcome: "needs-you",
+          reason: "lease-evidence-incomplete",
+          calls: [
+            "compose pull tag=2.30.1",
+            "compose config tag=2.30.1",
+            "compose up tag=2.30.1 pin=2.30.0 orphans",
+          ],
+          pin: "2.30.0",
+          head: commitOf("2.30.1"),
+        });
+      }
+      // Compose listing no container at all means the target never ran: the previous release
+      // returns.
+      const none = scenario({
+        live: "2.30.0",
+        request: "deploy 2.30.1",
+        knobs: { "up.2.30.1": "fail-before-lease", ps_after_up: "none" },
+      });
+      expect(none.result).toMatchObject({ outcome: "recovered", reason: "did-not-start" });
+      expect(none.calls.at(-1)).toBe("compose up tag=- pin=2.30.0 orphans");
+      expect(none.pin).toBe("2.30.0");
+    },
+    slow,
+  );
+
+  test(
+    "a stop that fails on the migration path puts the previous release back",
+    () => {
+      const s = scenario({ live: "2.30.1", request: "deploy 2.31.0", knobs: { stop: "fail" } });
+      expect(s.result).toMatchObject({
+        outcome: "recovered",
+        path: "migration",
+        backup: "-",
+        reason: "stop-failed",
+      });
+      expect(s.calls).toEqual([
+        "compose pull tag=2.31.0",
+        "compose config tag=2.31.0",
+        "compose stop",
+        "compose up tag=- pin=2.30.1 orphans",
+      ]);
+      expect(s.pin).toBe("2.30.1");
+      expect(s.head).toBe(commitOf("2.30.1"));
+    },
+    slow,
+  );
+
+  test(
+    "a previous release that won't come back after a failed restart asks for the owner",
+    () => {
+      const s = scenario({
+        live: "2.30.0",
+        request: "deploy 2.30.1",
+        knobs: { "up.2.30.1": "fail-before-lease", "up.2.30.0": "fail-before-lease" },
+      });
+      expect(s.result).toMatchObject({
+        outcome: "needs-you",
+        path: "plain",
+        reason: "previous-failed",
+      });
+      expect(s.calls.slice(-2)).toEqual(["compose stop", "compose up tag=- pin=2.30.0 orphans"]);
+      expect(s.pin).toBe("2.30.0");
+      expect(s.head).toBe(commitOf("2.30.0"));
+    },
+    slow,
+  );
+
+  test(
+    "a rollback target that fails before the lease puts the newer release back",
+    () => {
+      const s = scenario({
+        live: "2.30.1",
+        request: "rollback 2.30.0 from 2.30.1",
+        knobs: { "up.2.30.0": "fail-before-lease" },
+      });
+      expect(s.result).toMatchObject({
+        outcome: "recovered",
+        version: "2.30.0",
+        previous: "2.30.1",
+        path: "rollback",
+        reason: "did-not-start",
+      });
+      expect(s.calls.slice(-3)).toEqual([
+        "compose up tag=2.30.0 pin=2.30.1 orphans",
+        "compose stop",
+        "compose up tag=- pin=2.30.1 orphans",
+      ]);
+      expect(s.pin).toBe("2.30.1");
+      expect(s.head).toBe(commitOf("2.30.1"));
+    },
+    slow,
+  );
+
+  test(
+    "a pin that can't be written leaves the started release for the owner",
+    () => {
+      const s = scenario({ live: "2.30.0", request: "deploy 2.30.1", knobs: { pin: "fail" } });
+      expect(s.result).toMatchObject({
+        outcome: "needs-you",
+        reason: "pin-failed",
+        commands: "skipped",
+      });
+      expect(s.calls.at(-1)).toBe("compose up tag=2.30.1 pin=2.30.0 orphans");
+      expect(s.pin).toBe("2.30.0");
+    },
+    slow,
+  );
+
+  test(
+    "a migration run that applies nothing reports no restore point and still deploys",
+    () => {
+      const s = scenario({ live: "2.30.1", request: "deploy 2.31.0", knobs: { migrate: "none" } });
+      expect(s.result).toMatchObject({
+        outcome: "deployed",
+        path: "migration",
+        backup: "daily/tarubot-20260929T193000Z.dump.age",
+        restore_point: "-",
+      });
+      expect(s.pin).toBe("2.31.0");
+    },
+    slow,
+  );
+
+  test(
+    "another deploy holding the host lock past the wait is refused busy, with nothing changed",
+    () => {
+      const s = scenario({ live: "2.30.0", request: "deploy 2.30.1", holdHostLock: true });
+      expect(s.result).toMatchObject({ outcome: "refused", reason: "busy" });
+      expect(s.calls).toEqual([]);
+      expect(s.head).toBe(commitOf("2.30.0"));
+      expect(s.pin).toBe("2.30.0");
+    },
+    slow,
+  );
+
+  test(
+    "a run cancelled while the worker waited stops it before the first change",
+    () => {
+      const later = { status: "completed", conclusion: "cancelled" };
+      const s = scenario({ live: "2.30.0", request: "deploy 2.30.1", runLater: later });
+      expect(s.result).toMatchObject({ outcome: "refused", reason: "not-approved" });
+      expect(s.calls).toEqual(["compose pull tag=2.30.1", "compose config tag=2.30.1"]);
+      expect(s.head).toBe(commitOf("2.30.0"));
+      expect(s.pin).toBe("2.30.0");
+      // The migration path and the already-live check ask again too.
+      const migration = scenario({ live: "2.30.1", request: "deploy 2.31.0", runLater: later });
+      expect(migration.result.reason).toBe("not-approved");
+      expect(migration.calls).not.toContain("compose stop");
+      expect(migration.head).toBe(commitOf("2.30.1"));
+      const live = scenario({ live: "2.30.1", request: "deploy 2.30.1", runLater: later });
+      expect(live.result.reason).toBe("not-approved");
+      expect(live.calls).toEqual([]);
+    },
+    slow,
+  );
+
   test("refusals before anything changes leave the pin, the clone and the containers alone", () => {
     const cases: [string, Scenario, string][] = [
       [
@@ -1087,7 +1382,7 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
   test("the host checks the approval with GitHub and fails closed", () => {
     const approved = {
       state: "approved",
-      user: { login: "deconfined" },
+      user: { login: "deconfined", id: 71469756 },
       environments: [{ name: "production" }],
     };
     const cases: [string, Partial<Scenario>, string][] = [
@@ -1096,7 +1391,31 @@ describe.skipIf(!hasGit || !hasJq)("worker scenarios", () => {
         { approvals: [{ ...approved, user: { login: "someone" } }] },
         "not-approved",
       ],
+      [
+        "the owner's login on another account id",
+        { approvals: [{ ...approved, user: { login: "deconfined", id: 1 } }] },
+        "not-approved",
+      ],
       ["a rejection", { approvals: [{ ...approved, state: "rejected" }] }, "not-approved"],
+      [
+        "a Deploy job that isn't running (it failed; notify runs)",
+        {
+          jobs: {
+            total_count: 3,
+            jobs: [
+              { name: "Plan", status: "completed", conclusion: "success" },
+              { name: "Deploy", status: "completed", conclusion: "failure" },
+              { name: "Notify", status: "in_progress", conclusion: null },
+            ],
+          },
+        },
+        "not-approved",
+      ],
+      [
+        "a jobs answer that isn't JSON",
+        { jobs: "<html>rate limited</html>" },
+        "approval-unverified",
+      ],
       [
         "another environment",
         { approvals: [{ ...approved, environments: [{ name: "notify" }] }] },
@@ -1265,6 +1584,133 @@ describe("the entry", () => {
     expect(attempt.stdout).toBe(`${line}\n`);
     expect(readFileSync(join(box.state, "runs", RUN_ID, "request"), "utf8")).toBe(`${request}\n`);
   }, 20_000);
+
+  /** A refusal's result line, as the worker or the entry writes it for this request. */
+  const refused = (reason: string, previous = "-") =>
+    `result outcome=refused version=2.30.1 previous=${previous} path=none downtime=- commands=skipped backup=- restore_point=- reason=${reason}`;
+  /** A worker that exits at once without writing a step. */
+  const quietWorker = (box: Sandbox) => {
+    const path = join(box.bin, "quiet-worker");
+    writeFileSync(path, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(path, 0o755);
+    return path;
+  };
+
+  test("a run refused before its approval was confirmed starts over, even for a new request", () => {
+    const box = sandbox();
+    const dir = runDir(box, {
+      request: `${request}\n`,
+      step: "preflight\n",
+      "public.log": `step preflight\n${refused("not-approved", "2.30.0")}\n`,
+      result: "refused\n",
+    });
+    // The same request launches a new worker (this one never writes a step), and the old refusal
+    // isn't replayed.
+    const again = entry(box, request, quietWorker(box));
+    expect(again.code).toBe(1);
+    expect(again.stdout).toBe(`${refused("worker-not-started")}\n`);
+    // A different request for that run id is taken too: nothing happened under the old one.
+    const other = `deploy 2.30.1 ${commit} sha256:${hex("another digest")} ${RUN_ID}`;
+    const taken = entry(box, other, quietWorker(box));
+    expect(taken.code).toBe(1);
+    expect(readFileSync(join(dir, "request"), "utf8")).toBe(`${other}\n`);
+    // run-entry.sh leaves the entry's log on stderr (main points it at entry.log).
+    expect(taken.stderr).toContain(
+      `run ${RUN_ID}: starting over after a refusal before the approval was confirmed`,
+    );
+    // Any other finished run still keeps its request.
+    const kept = sandbox();
+    runDir(kept, {
+      request: `${request}\n`,
+      "public.log": `${result("deployed")}\n`,
+      result: "deployed\n",
+    });
+    const conflicting = entry(kept, other);
+    expect(conflicting.code).toBe(64);
+    expect(conflicting.stdout).toBe(`${USAGE}\n`);
+    const busy = sandbox();
+    runDir(busy, {
+      request: `${request}\n`,
+      "public.log": `${refused("busy")}\n`,
+      result: "refused\n",
+    });
+    expect(entry(busy, request).stdout).toBe(`${refused("busy")}\n`);
+  }, 20_000);
+
+  test("with four workers running, a new run is refused before it gets a directory", () => {
+    const box = sandbox();
+    const holders = [1, 2, 3, 4].map((n) =>
+      holdLock(join(box.state, "runs", `3630000010${n}`, "lock")),
+    );
+    const attempt = entry(box);
+    for (const holder of holders) holder.kill();
+    expect(attempt.code).toBe(1);
+    expect(attempt.stdout).toBe(`${refused("too-many-runs")}\n`);
+    expect(refused("too-many-runs")).toMatch(RESULT_FORM);
+    expect(existsSync(join(box.state, "runs", RUN_ID))).toBe(false);
+  }, 20_000);
+
+  test("prune drops retryable runs after 10 minutes and keeps other finished runs", () => {
+    const box = sandbox();
+    const make = (id: string, line: string, outcome: string, minutes: number) => {
+      const dir = join(box.state, "runs", id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "request"), `deploy 2.30.1 ${commit} ${digest} ${id}\n`);
+      writeFileSync(join(dir, "public.log"), `${line}\n`);
+      writeFileSync(join(dir, "result"), `${outcome}\n`);
+      const when = new Date(Date.now() - minutes * 60_000);
+      utimesSync(dir, when, when);
+      return dir;
+    };
+    const stale = make("36300000201", refused("not-approved"), "refused", 20);
+    const fresh = make("36300000202", refused("approval-unverified"), "refused", 1);
+    const deployed = make("36300000203", result("deployed"), "deployed", 20);
+    const busy = make("36300000204", refused("busy"), "refused", 20);
+    entry(box, request, quietWorker(box));
+    expect({
+      stale: existsSync(stale),
+      fresh: existsSync(fresh),
+      deployed: existsSync(deployed),
+      busy: existsSync(busy),
+    }).toEqual({ stale: false, fresh: true, deployed: true, busy: true });
+  }, 20_000);
+
+  test.skipIf(!endToEnd)(
+    "a request runs through main into the real, detached worker",
+    () => {
+      const box = sandbox();
+      const ops = join(box.dir, "root", "ops");
+      mkdirSync(ops, { recursive: true });
+      cpSync(SCRIPT, join(ops, "deploy.sh"));
+      chmodSync(join(ops, "deploy.sh"), 0o755);
+      // The worker runs on the fixed PATH, where no stub is, but its curl reads HOME's .curlrc: a
+      // closed local proxy makes GitHub's API unreachable without leaving this machine.
+      writeFileSync(join(box.home, ".curlrc"), 'proxy = "http://127.0.0.1:9"\n');
+      const direct = (env: Record<string, string>, ...args: string[]) =>
+        run(["bash", join(ops, "deploy.sh"), ...args], {
+          HOME: box.home,
+          PATH: "/usr/bin:/bin",
+          ...env,
+        });
+      const first = direct({ SSH_ORIGINAL_COMMAND: request });
+      expect(first.code).toBe(1);
+      expect(first.stdout).toBe(`step preflight\n${refused("approval-unverified")}\n`);
+      const dir = join(box.state, "runs", RUN_ID);
+      expect(readFileSync(join(dir, "worker.log"), "utf8")).toContain("step preflight");
+      expect(readFileSync(join(box.state, "entry.log"), "utf8")).toContain(
+        `run ${RUN_ID}: deploy 2.30.1 started`,
+      );
+      // main hands exactly seven arguments to the worker. With the run directory there but its
+      // lock free, the worker itself refuses to start (70); any other count stops in main (64).
+      const worker = (...extra: string[]) =>
+        direct({}, "__worker", "deploy", "2.30.1", commit, digest, RUN_ID, ...extra).code;
+      expect(worker("-")).toBe(70);
+      expect(readFileSync(join(dir, "worker.log"), "utf8")).toContain("the run lock is not held");
+      expect(worker()).toBe(64);
+      expect(worker("-", "x")).toBe(64);
+    },
+    30_000,
+  );
 
   test("the worker survives the SSH session's hangup, with a clean environment and the run lock", async () => {
     const box = sandbox();

@@ -3,8 +3,10 @@
 # SSH-deploy amendments (2026-09-26)" records the owner's decisions; docs/HOSTING.md "Automated
 # deploys" has the flow, what each outcome means and what to do by hand.
 #
-# This is the forced command of the deploy key in the tarubot user's authorized_keys
-# (restrict,command="/home/tarubot/tarubot/ops/deploy.sh"). The "Deploy production" workflow
+# This is the forced command of the deploy key in the tarubot user's ~/.ssh/authorized_keys:
+# restrict,command="<home>/tarubot/ops/deploy.sh", where <home> is what `getent passwd tarubot`
+# names (/opt/tarubot on the current host, /home/tarubot on one rebuilt from the runbook in
+# docs/HOSTING.md). The "Deploy production" workflow
 # (.github/workflows/deploy.yml) connects only after the owner approves its run in GitHub, and
 # sshd hands the client's command over in SSH_ORIGINAL_COMMAND. Exactly two forms are accepted,
 # the v1 command contract:
@@ -15,10 +17,11 @@
 # Anything else prints the usage line and exits 64 without touching git, Docker or a lock.
 #
 #   1. The entry starts one detached worker per run id, holding runs/<run>/lock, and follows its
-#      public log. A reconnect with the same request attaches to the same run instead.
-#   2. The worker asks GitHub's public API whether this exact run is in progress on main, names
-#      this target and was approved by the owner for `production`. The key alone authorizes
-#      nothing.
+#      public log. A reconnect with the same request attaches to the same run instead. A run
+#      refused before its approval was confirmed starts over on the next request.
+#   2. The worker asks GitHub's public API whether this exact run is in progress on main with its
+#      Deploy job running, names this target and was approved by the owner for `production`, and
+#      asks again just before the first change. The key alone authorizes nothing.
 #   3. It refuses while manual work looks in progress (the bot stopped, the pinned release not the
 #      one running, a backup running, a changed clone), then compares the live release with the
 #      target in git: no migration files added means a restart; added files mean stop, a fresh
@@ -33,15 +36,26 @@
 # layout (request, lock, step, public.log, worker.log, result) are a versioned contract: a change
 # to either raises FLOOR to the release that makes it, because after a rollback an older copy of
 # this script answers the current workflow.
+#
+# The recovery rule also reads two of the bot's own log messages, both logged at info: "Modules
+# loaded" (src/main.ts, before the bot asks for the writer lease) and "Database writer lease
+# acquired" (src/application/lifecycle.ts). They are frozen. Bash has read this script before the
+# clone moves to the target, so the live release's copy judges the new release's logs: a renamed
+# message, or one logged below info, would let an older copy put the previous release back over
+# the new one's writes. tests/unit/deploy-script.test.ts checks both sources.
 set -Eeuo pipefail
 
 # The oldest release whose ops/deploy.sh speaks this contract; older targets are refused.
 readonly FLOOR=2.30.0
 readonly REPO=deconfined/tarubot
 readonly IMAGE=ghcr.io/deconfined/tarubot
-# The one GitHub account whose approval of `production` authorizes a deploy.
+# The one GitHub account whose approval of `production` authorizes a deploy, by login and by its
+# numeric id, which a renamed or re-registered login can't take over.
 readonly REVIEWER=deconfined
+readonly REVIEWER_ID=71469756
 readonly WORKFLOW=.github/workflows/deploy.yml
+# The most workers that may run at once; a new run, or one starting over, beyond that is refused.
+readonly MAX_WORKERS=4
 readonly API=https://api.github.com
 # The only PATH the entry and the worker use, whatever sshd passed.
 readonly SAFE_PATH=/usr/local/bin:/usr/bin:/bin
@@ -55,6 +69,11 @@ readonly ROLLBACK_FORM='^rollback ((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|
 readonly RESULT_FORM='^result outcome=(deployed|already-live|superseded|refused|recovered|needs-you) version=(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3}) previous=((0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})|-) path=(plain|migration|rollback|none) downtime=([0-9]{1,5}|-) commands=(registered|failed|skipped) backup=(daily/tarubot-[0-9]{8}T[0-9]{6}Z\.dump\.age|-) restore_point=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z|-) reason=([a-z0-9-]{1,40}|-)$'
 readonly STEP_LINE='^step [a-z-]{1,20}$'
 readonly WARNING_LINE='^warning [a-z0-9-]{1,40}$'
+# Refusals that come before the approval is confirmed, and a worker that never started. Nothing
+# happened in such a run, so the same request, or a new one for that run id, starts it over: a
+# request sent before the approval, or a GitHub API failure, never blocks the approved run.
+readonly RETRYABLE=' reason=(missing-tool|approval-unverified|not-approved|worker-not-started)$'
+# The frozen log messages (see the header).
 readonly LEASE_LINE='"msg":"Database writer lease acquired"'
 readonly MODULES_LINE='"msg":"Modules loaded"'
 # ops/backup.sh's last line names the object it uploaded to daily/.
@@ -291,14 +310,15 @@ entry() {
   fi
   prune
   RUN=$STATE/runs/$R
+  if [[ ! -d $RUN ]] && too_many_workers; then refuse_unstarted; fi
   mkdir -p "$RUN"
-  if [[ -f $RUN/request && $(<"$RUN/request") != "$req" ]]; then
-    say usage
-    log "run $R already carries a different request"
-    exit 64
-  fi
   exec 8>>"$RUN/lock"
   if flock -n 8; then
+    if retryable "$RUN"; then
+      if too_many_workers; then refuse_unstarted; fi
+      start_over
+    fi
+    if [[ -f $RUN/request && $(<"$RUN/request") != "$req" ]]; then conflict; fi
     if [[ -f $RUN/result ]]; then
       exec 8>&-
       replay
@@ -310,10 +330,56 @@ entry() {
     fi
     printf '%s\n' "$req" >"$RUN/request"
     : >>"$RUN/public.log"
+    log "run $R: $ACTION $V started"
     launch
+  elif [[ -f $RUN/request && $(<"$RUN/request") != "$req" ]]; then
+    conflict
   fi
   exec 8>&-
   follow
+}
+
+# The run id already carries another request, and that run counts: it is running, or it got past
+# the approval check. Refused like a malformed request.
+conflict() {
+  say usage
+  log "run $R already carries a different request"
+  exit 64
+}
+
+# True when MAX_WORKERS workers already hold their run locks (a run with no result whose lock
+# is taken).
+too_many_workers() {
+  local dir count=0
+  for dir in "$STATE"/runs/*/; do
+    [[ -f ${dir}lock && ! -f ${dir}result ]] || continue
+    if ! flock -n "${dir}lock" true; then count=$((count + 1)); fi
+  done
+  ((count >= MAX_WORKERS))
+}
+
+# Refuse a run while too many workers run, before it gets a run directory or a worker. Nothing
+# changed, and the workflow reports the reason.
+refuse_unstarted() {
+  say line "result outcome=refused version=$V previous=- path=none downtime=- commands=skipped backup=- restore_point=- reason=too-many-runs"
+  log "run $R: refused, $MAX_WORKERS workers already run"
+  exit 1
+}
+
+# True when run directory $1 ended refused before its approval was confirmed (RETRYABLE).
+retryable() {
+  local line
+  [[ -f $1/result && -f $1/public.log && $(<"$1/result") == refused ]] || return 1
+  line=$(grep -E '^result ' "$1/public.log" | tail -n 1) || return 1
+  [[ $line =~ $RESULT_FORM && $line =~ $RETRYABLE ]]
+}
+
+# Called while holding the run lock: clear a retryable run so it starts from the beginning, for
+# the same request or a new one. worker.log keeps the earlier attempt.
+start_over() {
+  log "run $R: starting over after a refusal before the approval was confirmed"
+  rm -f -- "$RUN/result" "$RUN/step" "$RUN/request"
+  : >"$RUN/public.log"
 }
 
 # Start the worker in its own session, so it outlives this SSH session, with a clean environment:
@@ -326,8 +392,11 @@ launch() {
 
 # Print public.log's complete lines after byte OFFSET, and move OFFSET past them.
 emit_new() {
-  local line
+  local line size
   [[ -f $RUN/public.log ]] || return 0
+  # A run that started over has a new, shorter log: read it from its beginning.
+  size=$(stat -c %s "$RUN/public.log") || return 0
+  if ((size < OFFSET)); then OFFSET=0; fi
   while IFS= read -r line; do
     say line "$line"
     OFFSET=$((OFFSET + ${#line} + 1))
@@ -386,12 +455,14 @@ worker_died() {
   fi
 }
 
-# Remove finished runs older than 90 days.
+# Remove finished runs after 90 days, and retryable ones (nothing happened in them) after 10
+# minutes; entry.log keeps a line for each run's start.
 prune() {
   local dir
   while IFS= read -r -d '' dir; do
-    if [[ -f $dir/result ]]; then rm -rf -- "$dir"; fi
-  done < <(find "$STATE/runs" -mindepth 1 -maxdepth 1 -type d -mtime +90 -print0)
+    [[ -f $dir/result ]] || continue
+    if retryable "$dir" || [[ -n $(find "$dir" -maxdepth 0 -mtime +90) ]]; then rm -rf -- "$dir"; fi
+  done < <(find "$STATE/runs" -mindepth 1 -maxdepth 1 -type d -mmin +10 -print0)
 }
 
 # Keep entry.log to its last megabyte.
@@ -428,14 +499,21 @@ worker() {
   step preflight
   preflight
   classify
+  # The run is checked again just before the first change: a cancel, or a Deploy job that ended,
+  # during the waits, the fetch and the pull stops the worker while nothing has changed.
   case $PATH_KIND in
-    none) already_live ;;
+    none)
+      check_run_active
+      already_live
+      ;;
     plain | rollback)
       stage
+      check_run_active
       restart_path
       ;;
     migration)
       stage
+      check_run_active
       migration_path
       ;;
   esac
@@ -445,7 +523,7 @@ worker() {
 preflight() {
   check_approval
   exec 9>>"$STATE/lock"
-  flock -w 600 9 || refuse busy
+  flock -w 300 9 || refuse busy
   check_clone
   check_env
   check_host
@@ -455,14 +533,14 @@ preflight() {
 }
 
 # The run must be this repository's deploy.yml, in progress on main, first attempt, titled with
-# exactly this target, and approved by the owner for production. Unreadable answers fail closed.
-check_approval() {
-  local run approvals title
-  if ! command -v jq >/dev/null || ! command -v curl >/dev/null; then refuse missing-tool; fi
+# exactly this target, and its Deploy job must be running (after that job fails, the run stays in
+# progress while notify runs). Unreadable answers fail closed.
+check_run_active() {
+  local run jobs title
   run=$(api "actions/runs/$R") || refuse approval-unverified
-  approvals=$(api "actions/runs/$R/approvals") || refuse approval-unverified
+  jobs=$(api "actions/runs/$R/jobs") || refuse approval-unverified
   jq -e 'type == "object"' <<<"$run" >/dev/null 2>&1 || refuse approval-unverified
-  jq -e 'type == "array"' <<<"$approvals" >/dev/null 2>&1 || refuse approval-unverified
+  jq -e '.jobs | type == "array"' <<<"$jobs" >/dev/null 2>&1 || refuse approval-unverified
   if [[ $ACTION == rollback ]]; then title="Deploy $V rollback from $F"; else title="Deploy $V"; fi
   jq -e --arg wf "$WORKFLOW" --arg repo "$REPO" --arg action "$ACTION" --arg commit "$C" \
     --arg title "$title" '
@@ -471,8 +549,20 @@ check_approval() {
       and ((.event == "workflow_run" and $action == "deploy" and .display_title == ("Deploy " + $commit))
         or (.event == "workflow_dispatch" and .display_title == $title))' \
     <<<"$run" >/dev/null 2>&1 || refuse not-approved
-  jq -e --arg who "$REVIEWER" '
-      any(.[]; .state == "approved" and .user.login == $who
+  jq -e 'any(.jobs[]; .name == "Deploy" and .status == "in_progress")' \
+    <<<"$jobs" >/dev/null 2>&1 || refuse not-approved
+}
+
+# The run is active (above) and the owner approved it for production, matched by login and
+# numeric id.
+check_approval() {
+  local approvals
+  if ! command -v jq >/dev/null || ! command -v curl >/dev/null; then refuse missing-tool; fi
+  check_run_active
+  approvals=$(api "actions/runs/$R/approvals") || refuse approval-unverified
+  jq -e 'type == "array"' <<<"$approvals" >/dev/null 2>&1 || refuse approval-unverified
+  jq -e --arg who "$REVIEWER" --argjson id "$REVIEWER_ID" '
+      any(.[]; .state == "approved" and .user.login == $who and .user.id == $id
         and any(.environments[]?; .name == "production"))' \
     <<<"$approvals" >/dev/null 2>&1 || refuse not-approved
   log "run $R: approved by $REVIEWER for production"
@@ -500,9 +590,11 @@ check_env() {
   log_level_ok "$level" || refuse log-level
 }
 
+# Docker answers (every bare docker call is bounded by timeout(1), as compose() is, so a hung
+# daemon takes the caller's failure branch) and / has 2 GB free.
 check_host() {
   local avail
-  docker info >/dev/null 2>&1 || refuse host
+  timeout 60 docker info >/dev/null 2>&1 || refuse host
   avail=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ') || refuse host
   if ! [[ $avail =~ ^[0-9]+$ ]] || ((avail < 2147483648)); then refuse host; fi
 }
@@ -513,7 +605,7 @@ read_live() {
   ids=$(compose 60 ps -a -q tarubot) || refuse host
   [[ $ids =~ ^[0-9a-f]{12,64}$ ]] || refuse bot-not-running
   CID=$ids
-  json=$(docker inspect "$CID") || refuse bot-not-running
+  json=$(timeout 60 docker inspect "$CID") || refuse bot-not-running
   status=$(field "$json" '.[0].State.Status')
   [[ $status == running || $status == restarting ]] || refuse bot-not-running
   LIVE_V=$(field "$json" '.[0].Config.Labels["org.opencontainers.image.version"]')
@@ -528,14 +620,16 @@ read_live() {
   [[ $PIN == "$LIVE_V" ]] || refuse manual-change-in-progress
 }
 
-# Wait up to 600 s for a running `backup` container (the nightly dump, or one run by hand).
+# Wait up to 300 s for a running `backup` container (the nightly dump, about 6 s, or one run by
+# hand). The waits here and on the host lock stay short so that a slow run still reports to the
+# workflow before its reconnect deadline.
 wait_for_backup() {
   local i running
-  for ((i = 0; i <= 60; i++)); do
-    running=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+  for ((i = 0; i <= 30; i++)); do
+    running=$(timeout 60 docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
       --filter label=com.docker.compose.service=backup) || refuse host
     [[ -z $running ]] && return 0
-    ((i < 60)) && sleep 10
+    ((i < 30)) && sleep 10
   done
   refuse busy
 }
@@ -580,7 +674,7 @@ stage() {
   local json
   step pull
   TARUBOT_IMAGE_TAG=$V compose 600 pull --quiet tarubot || refuse pull-failed
-  json=$(docker image inspect "$IMAGE:$V") || refuse digest-mismatch
+  json=$(timeout 60 docker image inspect "$IMAGE:$V") || refuse digest-mismatch
   jq -e --arg digest "$IMAGE@$D" '.[0].RepoDigests | any(.[]; . == $digest)' \
     <<<"$json" >/dev/null 2>&1 || refuse digest-mismatch
   [[ $(field "$json" '.[0].Config.Labels["org.opencontainers.image.version"]') == "$V" &&
@@ -597,7 +691,7 @@ stage() {
 # The running release is the target: check its health and register its commands.
 already_live() {
   local json
-  json=$(docker inspect "$CID") || needs_you live-unhealthy
+  json=$(timeout 60 docker inspect "$CID") || needs_you live-unhealthy
   [[ $(field "$json" '.[0].State.Health.Status') == healthy ]] || needs_you live-unhealthy
   commands_then already-live
 }
@@ -664,7 +758,7 @@ migration_path() {
 stop_one_offs() {
   local ids
   local -a list
-  ids=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+  ids=$(timeout 60 docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
     --filter label=com.docker.compose.oneoff=True \
     --filter label=com.docker.compose.service=tarubot) || ids=
   if [[ -n $ids ]]; then
@@ -678,7 +772,7 @@ stop_one_offs() {
 verify_started() {
   local json restarts
   CID=$(compose 60 ps -a -q tarubot) || CID=
-  json=$(docker inspect "$CID" 2>/dev/null) || json='[]'
+  json=$(timeout 60 docker inspect "$CID" 2>/dev/null) || json='[]'
   if [[ $(field "$json" '.[0].Image') != "$TARGET_ID" ||
     $(field "$json" '.[0].Config.Labels["org.opencontainers.image.version"]') != "$V" ||
     $(field "$json" '.[0].Config.Labels["org.opencontainers.image.revision"]') != "$C" ]]; then
@@ -687,7 +781,7 @@ verify_started() {
   fi
   restarts=$(field "$json" '.[0].RestartCount')
   sleep 60
-  json=$(docker inspect "$CID" 2>/dev/null) || json='[]'
+  json=$(timeout 60 docker inspect "$CID" 2>/dev/null) || json='[]'
   if [[ $(field "$json" '.[0].RestartCount') != "$restarts" ||
     $(field "$json" '.[0].State.Status') != running ||
     $(field "$json" '.[0].State.Health.Status') != healthy ]]; then
@@ -715,37 +809,57 @@ commands_then() {
   needs_you commands-failed
 }
 
-# The target's container, if the target ever got one; empty otherwise.
+# What Compose shows for the tarubot service after a failed start. TC_STATE is "none" (ps lists
+# no container), "previous" (exactly one, on the live release's image), "target" (exactly one, on
+# the target's image) or "unknown": ps or inspect failed, several containers (Compose stopped in
+# the middle of a recreate), or another image. TC_ID names the container for previous and target.
 target_container() {
-  local id json
-  id=$(compose 60 ps -a -q tarubot) || id=
-  [[ -n $id ]] || return 0
-  json=$(docker inspect "$id" 2>/dev/null) || json='[]'
-  if [[ $(field "$json" '.[0].Image') == "$TARGET_ID" ]]; then printf '%s' "$id"; fi
-}
-
-# The writer-lease evidence for container $1: EV_LEASE counts "Database writer lease acquired"
-# lines, and EV_COMPLETE says the logs were readable and reached "Modules loaded", which main.ts
-# logs before it can ask for the lease. No container means the target never ran.
-evidence() {
-  local logs
-  EV_LEASE=0 EV_COMPLETE=1
-  [[ -n $1 ]] || return 0
-  if ! logs=$(docker logs "$1" 2>&1); then
-    EV_COMPLETE=0
+  local ids json image
+  TC_STATE=unknown TC_ID=''
+  ids=$(compose 60 ps -a -q tarubot) || return 0
+  if [[ -z $ids ]]; then
+    TC_STATE=none
     return 0
   fi
+  [[ $ids =~ ^[0-9a-f]{12,64}$ ]] || return 0
+  json=$(timeout 60 docker inspect "$ids" 2>/dev/null) || return 0
+  image=$(field "$json" '.[0].Image')
+  if [[ -n $image && $image == "$TARGET_ID" ]]; then
+    TC_STATE=target TC_ID=$ids
+  elif [[ -n $image && $image == "$LIVE_IMAGE" ]]; then
+    TC_STATE=previous TC_ID=$ids
+  fi
+}
+
+# The writer-lease evidence for the target's container $1: EV_LEASE counts "Database writer lease
+# acquired" lines, and EV_COMPLETE says the logs were readable and reached "Modules loaded", which
+# main.ts logs before it can ask for the lease. No container id is incomplete evidence.
+evidence() {
+  local logs
+  EV_LEASE=0 EV_COMPLETE=0
+  [[ -n $1 ]] || return 0
+  logs=$(timeout 60 docker logs "$1" 2>&1) || return 0
+  EV_COMPLETE=1
   EV_LEASE=$(grep -c -F "$LEASE_LINE" <<<"$logs") || EV_LEASE=0
   grep -q -F "$MODULES_LINE" <<<"$logs" || EV_COMPLETE=0
   log "evidence for $1: $EV_LEASE lease lines, complete=$EV_COMPLETE"
 }
 
 # The restart or rollback did not come up. The previous release returns only when the target
-# provably never held the writer lease; otherwise the target stays, pinned, for the owner.
+# never got a container, or its container provably never held the writer lease. Otherwise the
+# target stays for the owner, with .env pinned to it when Compose showed its container; when
+# Compose showed no single container of either release, nothing is guessed and nothing is pinned.
 recover_restart() {
-  local id
-  id=$(target_container)
-  evidence "$id"
+  target_container
+  case $TC_STATE in
+    none | previous) restore_previous did-not-start previous-failed ;;
+    target) ;;
+    *)
+      log "Compose showed no single container of either release; nothing restored or pinned"
+      needs_you lease-evidence-incomplete
+      ;;
+  esac
+  evidence "$TC_ID"
   if ((!EV_COMPLETE)); then
     pin_env "$V" || log "could not pin .env to $V"
     needs_you lease-evidence-incomplete
@@ -754,33 +868,32 @@ recover_restart() {
     pin_env "$V" || log "could not pin .env to $V"
     needs_you new-release-took-lease
   fi
-  if [[ -n $id ]]; then
-    if ! compose 90 stop tarubot; then
-      pin_env "$V" || log "could not pin .env to $V"
-      needs_you lease-evidence-incomplete
-    fi
-    # Count again: the lease may have come between the first count and the stop.
-    evidence "$id"
-    if ((!EV_COMPLETE || EV_LEASE > 0)); then
-      TARUBOT_IMAGE_TAG=$V compose 300 up -d || log "could not start $V again"
-      pin_env "$V" || log "could not pin .env to $V"
-      if ((EV_LEASE > 0)); then needs_you new-release-took-lease; fi
-      needs_you lease-evidence-incomplete
-    fi
+  if ! compose 90 stop tarubot; then
+    pin_env "$V" || log "could not pin .env to $V"
+    needs_you lease-evidence-incomplete
+  fi
+  # Count again: the lease may have come between the first count and the stop.
+  evidence "$TC_ID"
+  if ((!EV_COMPLETE || EV_LEASE > 0)); then
+    TARUBOT_IMAGE_TAG=$V compose 300 up -d || log "could not start $V again"
+    pin_env "$V" || log "could not pin .env to $V"
+    if ((EV_LEASE > 0)); then needs_you new-release-took-lease; fi
+    needs_you lease-evidence-incomplete
   fi
   restore_previous did-not-start previous-failed
 }
 
 # Put the previous release back: the clone at its commit, the unchanged .env, `up --wait`, and
-# the previous image healthy. $1 is the reason when it is back, $2 when it isn't.
+# the previous image healthy. Its own Compose file decides what runs (--remove-orphans drops a
+# service only the target's file had). $1 is the reason when it is back, $2 when it isn't.
 restore_previous() {
   local json
   git reset --quiet --keep "$LIVE_C" || log "could not put the clone back at $LIVE_C"
   STAGED=0
-  if compose 300 up -d --wait --wait-timeout 180; then
+  if compose 300 up -d --wait --wait-timeout 180 --remove-orphans; then
     DOWNTIME=$((SECONDS - CLOCK))
     CID=$(compose 60 ps -a -q tarubot) || CID=
-    json=$(docker inspect "$CID" 2>/dev/null) || json='[]'
+    json=$(timeout 60 docker inspect "$CID" 2>/dev/null) || json='[]'
     if [[ $(field "$json" '.[0].Image') == "$LIVE_IMAGE" &&
       $(field "$json" '.[0].Config.Labels["org.opencontainers.image.version"]') == "$LIVE_V" &&
       $(field "$json" '.[0].State.Health.Status') == healthy ]]; then
