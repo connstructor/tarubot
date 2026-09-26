@@ -1,6 +1,15 @@
 # Version history
 
-The current application version is **2.29.1**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+The current application version is **2.29.2**, with `package.json` as the source of truth. This codebase is a complete rewrite of the original TaruBot and therefore belongs to major version **2**. `/version` reads the manifest included in its compiled build and obtains commit history independently from GitHub's `main` branch.
+
+## 2.29.2 — Generic production host references
+
+The docs and the settings-copy tool no longer name the production host; `host-env-backup` now requires `--host`. Tooling, tests and documentation only: no bot change, no migration (it requires `010_status_notices.sql`, as 2.29.0 does), no command change, and nothing to deploy.
+
+- **Settings copy.** `scripts/host-env-backup.ts` has no default host: run it as `bun run host:env-backup -- --host tarubot@<production host> --identity …`. Without `--host` it stops with a message naming the flag, before any SSH read or file write. Everything else it does is unchanged.
+- **Docs.** HOSTING.md, CLAUDE.md, SESSION_HANDOFF.md and VERIFICATION.md write `tarubot@<production host>` in commands and "the production host" in prose, and the rebuild runbook's DNS steps name no domain.
+- **Tests.** `host-env-backup.test.ts` covers the missing host. The site's guard against hosts under the operator's domain keeps every case (a sentence-final period, a DNS record, a hyphen suffix, a URL), written with the bare domain.
+- No member note: members notice nothing.
 
 ## 2.29.1 — Claude reviews the agent's pull requests
 
